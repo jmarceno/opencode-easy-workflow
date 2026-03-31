@@ -70,7 +70,6 @@ const RUNS_DIR = join(WORKFLOW_ROOT, "runs");
 const TEMPLATE_PATH = join(WORKFLOW_ROOT, "workflow.md");
 const AGENTS_DIR = join(__dirname, "..", "agents");
 const DEBUG_LOG_PATH = join(WORKFLOW_ROOT, "debug.log");
-const TOAST_LOG_PATH = join(WORKFLOW_ROOT, "toast.log");
 const WORKFLOW_MARKER = "#workflow";
 const GOALS_PLACEHOLDER = "[REPLACE THIS WITH THE TASK GOALS]";
 const REVIEW_SECTION_MARKER = "## Persisted Review Result";
@@ -195,11 +194,6 @@ function appendDebugLog(kind: string, message: string, extra?: Record<string, un
   ensureWorkflowDirectories();
   const payload = extra ? ` ${JSON.stringify(extra)}` : "";
   appendFileSync(DEBUG_LOG_PATH, `[${new Date().toISOString()}] ${kind}: ${message}${payload}\n`, "utf-8");
-}
-
-function appendToastLog(variant: string | undefined, message: string): void {
-  ensureWorkflowDirectories();
-  appendFileSync(TOAST_LOG_PATH, `[${new Date().toISOString()}] ${variant ?? "info"}: ${message}\n`, "utf-8");
 }
 
 function loadTemplate(): string {
@@ -674,7 +668,6 @@ async function log(client: any, level: string, message: string, extra?: Record<s
 }
 
 async function showToast(client: any, message: string, variant?: string): Promise<void> {
-  appendToastLog(variant, message);
   await client.tui.showToast({
     body: {
       message,
@@ -764,16 +757,61 @@ async function extractGoals(client: any, cleanedPrompt: string, context?: Sessio
     "Keep the goals concrete and testable.",
     "Do not add requirements that are not implied by the request.",
     "",
+    "Respond in this exact format:",
+    "SUMMARY: <one sentence summary of the task>",
+    "GOALS:",
+    "- <first specific goal>",
+    "- <second specific goal>",
+    "- <additional goals as needed>",
+    "",
     `Task request: ${cleanedPrompt}`,
   ].join("\n");
 
-  return runScratchStructuredPrompt<ExtractedGoals>(
-    client,
-    promptText,
-    goalExtractionSchema as unknown as Record<string, unknown>,
-    "Workflow Goal Extraction",
-    context,
-  );
+  const session = unwrapResponseData<any>(await client.session.create({
+    body: { title: "Workflow Goal Extraction" },
+  }));
+
+  const scratchSessionId = session?.id;
+  if (typeof scratchSessionId !== "string" || scratchSessionId.length === 0) {
+    throw new Error("Unable to create scratch session for goal extraction");
+  }
+
+  try {
+    const response = await client.session.prompt({
+      path: { id: scratchSessionId },
+      body: {
+        agent: context?.agent,
+        model: context?.model,
+        parts: [{ type: "text", text: promptText }],
+      },
+    });
+
+    const result = unwrapResponseData<any>(response);
+    const textPart = result?.parts?.find((part: any) => part?.type === "text" && typeof part.text === "string");
+    const responseText = textPart?.text ?? "";
+
+    // Parse the response
+    const summaryMatch = responseText.match(/SUMMARY:\s*(.+?)(?:\nGOALS:|\n\n|$)/is);
+    const goalsMatch = responseText.match(/GOALS:\s*([\s\S]+?)(?:\n\n|$)/is);
+
+    const summary = summaryMatch?.[1]?.trim() || "Extract goals from the user request";
+    const goalsText = goalsMatch?.[1] || "";
+    const goals = goalsText
+      .split("\n")
+      .map(line => line.trim())
+      .filter(line => line.startsWith("- ") || line.startsWith("* "))
+      .map(line => line.replace(/^[-*]\s+/, "").trim())
+      .filter(goal => goal.length > 0);
+
+    if (goals.length === 0) {
+      // Fallback: if no bulleted goals found, use the whole response as a single goal
+      goals.push("Review and implement the requested changes");
+    }
+
+    return { summary, goals };
+  } finally {
+    await client.session.delete({ path: { id: scratchSessionId } }).catch(() => undefined);
+  }
 }
 
 async function runReview(client: any, sessionId: string, runPath: string, runFile: RunFile): Promise<ReviewResult> {
@@ -795,26 +833,43 @@ async function runReview(client: any, sessionId: string, runPath: string, runFil
   });
 
   const promptText = buildReviewAgentPrompt(reviewAgentName, runPath);
-  const result = unwrapResponseData<any>(await client.session.prompt({
+  const response = await client.session.prompt({
     path: { id: sessionId },
     body: {
       agent: reviewAgentName,
       parts: [{ type: "text", text: promptText }],
-      format: reviewSchema,
     },
-  }));
+  });
 
-  const structuredOutput = result?.info?.structured;
-  if (structuredOutput) {
-    return structuredOutput as ReviewResult;
-  }
+  const result = unwrapResponseData<any>(response);
+  const textPart = result?.parts?.find((part: any) => part?.type === "text" && typeof part.text === "string");
+  const responseText = textPart?.text ?? "";
 
-  const error = result?.info?.error;
-  if (error) {
-    throw new Error(getAssistantErrorMessage(error));
-  }
+  // Parse the response
+  const statusMatch = responseText.match(/STATUS:\s*(\w+)/i);
+  const summaryMatch = responseText.match(/SUMMARY:\s*([\s\S]+?)(?=\nGAPS:|$)/i);
+  const gapsMatch = responseText.match(/GAPS:\s*([\s\S]+?)(?=\nRECOMMENDED_PROMPT:|$)/i);
+  const recommendedMatch = responseText.match(/RECOMMENDED_PROMPT:\s*([\s\S]+?)$/i);
 
-  throw new Error("Structured review output was not returned by the workflow review agent");
+  const status = (statusMatch?.[1]?.toLowerCase().trim() || "blocked") as ReviewStatus;
+  const summary = summaryMatch?.[1]?.trim() || "Review could not be completed";
+  
+  const gapsText = gapsMatch?.[1] || "";
+  const gaps = gapsText
+    .split("\n")
+    .map(line => line.trim())
+    .filter(line => line.startsWith("- ") || line.startsWith("* "))
+    .map(line => line.replace(/^[-*]\s+/, "").trim())
+    .filter(gap => gap.length > 0 && gap.toLowerCase() !== "none");
+
+  const recommendedPrompt = recommendedMatch?.[1]?.trim() || "";
+
+  return {
+    status: ["pass", "gaps_found", "blocked"].includes(status) ? status : "blocked",
+    summary,
+    gaps,
+    recommendedPrompt: recommendedPrompt.toLowerCase() === "none" ? "" : recommendedPrompt,
+  };
 }
 
 function finalizeReviewResult(runPath: string, result: ReviewResult, fingerprint: string): { duplicate: boolean; state: WorkflowRunState } {
