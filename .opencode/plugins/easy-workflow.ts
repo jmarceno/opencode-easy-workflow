@@ -3,6 +3,13 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, write
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 
+// Kanban modules
+import { KanbanDB } from "../easy-workflow/db";
+import { KanbanServer } from "../easy-workflow/server";
+import { Orchestrator } from "../easy-workflow/orchestrator";
+
+// ---- Existing workflow types ----
+
 type WorkflowStatus = "pending" | "running" | "completed" | "blocked";
 type ReviewStatus = "pass" | "gaps_found" | "blocked";
 
@@ -64,6 +71,8 @@ interface SessionPromptContext {
   model?: { providerID: string; modelID: string };
 }
 
+// ---- Constants ----
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WORKFLOW_ROOT = join(__dirname, "..", "easy-workflow");
 const RUNS_DIR = join(WORKFLOW_ROOT, "runs");
@@ -74,6 +83,14 @@ const WORKFLOW_MARKER = "#workflow";
 const GOALS_PLACEHOLDER = "[REPLACE THIS WITH THE TASK GOALS]";
 const REVIEW_SECTION_MARKER = "## Persisted Review Result";
 const REVIEW_COOLDOWN_MS = 30_000;
+
+// ---- Kanban globals ----
+
+let kanbanDb: KanbanDB | null = null;
+let kanbanServer: KanbanServer | null = null;
+let orchestrator: Orchestrator | null = null;
+
+// ---- Utility functions ----
 
 function formatErrorToast(message: string): string {
   const singleLine = message.replace(/\s+/g, " ").trim();
@@ -101,41 +118,6 @@ const FRONTMATTER_KEYS: Array<keyof WorkflowRunState> = [
   "lastGapCount",
   "version",
 ];
-
-const goalExtractionSchema = {
-  type: "json_schema",
-  schema: {
-    type: "object",
-    properties: {
-      summary: { type: "string" },
-      goals: {
-        type: "array",
-        items: { type: "string" },
-      },
-    },
-    required: ["summary", "goals"],
-  },
-} as const;
-
-const reviewSchema = {
-  type: "json_schema",
-  schema: {
-    type: "object",
-    properties: {
-      status: {
-        type: "string",
-        enum: ["pass", "gaps_found", "blocked"],
-      },
-      summary: { type: "string" },
-      gaps: {
-        type: "array",
-        items: { type: "string" },
-      },
-      recommendedPrompt: { type: "string" },
-    },
-    required: ["status", "summary", "gaps", "recommendedPrompt"],
-  },
-} as const;
 
 function parseWorkflowPrompt(input: string): PromptParseResult {
   const trimmed = input.trim();
@@ -334,22 +316,6 @@ function getAssistantErrorDetails(error: any): Record<string, unknown> | undefin
   }
 
   return Object.keys(details).length > 0 ? details : undefined;
-}
-
-async function buildStructuredOnlyToolOverrides(client: any): Promise<Record<string, boolean> | undefined> {
-  const idsResponse = unwrapResponseData<any>(await client.tool.ids());
-  if (!Array.isArray(idsResponse) || idsResponse.length === 0) {
-    return undefined;
-  }
-
-  const tools: Record<string, boolean> = {};
-  for (const id of idsResponse) {
-    if (typeof id === "string" && id.trim().length > 0) {
-      tools[id] = false;
-    }
-  }
-
-  return Object.keys(tools).length > 0 ? tools : undefined;
 }
 
 function parseModelSelection(value: string): { providerID: string; modelID: string } | null {
@@ -698,59 +664,6 @@ async function ensureReviewAgentAvailable(client: any, agent: AgentConfig): Prom
   }
 }
 
-async function runScratchStructuredPrompt<T>(
-  client: any,
-  promptText: string,
-  schema: Record<string, unknown>,
-  title: string,
-  context?: SessionPromptContext,
-): Promise<T> {
-  const session = unwrapResponseData<any>(await client.session.create({
-    body: { title },
-  }));
-
-  const scratchSessionId = session?.id;
-  if (typeof scratchSessionId !== "string" || scratchSessionId.length === 0) {
-    throw new Error("Unable to create scratch session for workflow processing");
-  }
-
-  try {
-    let response: any;
-    try {
-      response = await client.session.prompt({
-        path: { id: scratchSessionId },
-        body: {
-          agent: context?.agent,
-          model: context?.model,
-          parts: [{ type: "text", text: promptText }],
-          format: schema,
-        },
-      });
-    } catch (sdkError) {
-      const errorDetails = getAssistantErrorDetails(sdkError);
-      throw new Error(
-        `SDK request failed: ${errorDetails ? JSON.stringify(errorDetails) : String(sdkError)}`,
-      );
-    }
-
-    const result = unwrapResponseData<any>(response);
-
-    const structuredOutput = result?.info?.structured;
-    if (structuredOutput) {
-      return structuredOutput as T;
-    }
-
-    const error = result?.info?.error;
-    if (error) {
-      throw new Error(getAssistantErrorMessage(error));
-    }
-
-    throw new Error("Structured output was not returned");
-  } finally {
-    await client.session.delete({ path: { id: scratchSessionId } }).catch(() => undefined);
-  }
-}
-
 async function extractGoals(client: any, cleanedPrompt: string, context?: SessionPromptContext): Promise<ExtractedGoals> {
   const promptText = [
     "Convert the user request into explicit implementation-reviewable goals.",
@@ -768,7 +681,7 @@ async function extractGoals(client: any, cleanedPrompt: string, context?: Sessio
   ].join("\n");
 
   const session = unwrapResponseData<any>(await client.session.create({
-    body: { title: "Workflow Goal Extraction" },
+    title: "Workflow Goal Extraction",
   }));
 
   const scratchSessionId = session?.id;
@@ -778,19 +691,16 @@ async function extractGoals(client: any, cleanedPrompt: string, context?: Sessio
 
   try {
     const response = await client.session.prompt({
-      path: { id: scratchSessionId },
-      body: {
-        agent: context?.agent,
-        model: context?.model,
-        parts: [{ type: "text", text: promptText }],
-      },
+      sessionID: scratchSessionId,
+      agent: context?.agent,
+      model: context?.model,
+      parts: [{ type: "text", text: promptText }],
     });
 
     const result = unwrapResponseData<any>(response);
     const textPart = result?.parts?.find((part: any) => part?.type === "text" && typeof part.text === "string");
     const responseText = textPart?.text ?? "";
 
-    // Parse the response
     const summaryMatch = responseText.match(/SUMMARY:\s*(.+?)(?:\nGOALS:|\n\n|$)/is);
     const goalsMatch = responseText.match(/GOALS:\s*([\s\S]+?)(?:\n\n|$)/is);
 
@@ -804,13 +714,12 @@ async function extractGoals(client: any, cleanedPrompt: string, context?: Sessio
       .filter(goal => goal.length > 0);
 
     if (goals.length === 0) {
-      // Fallback: if no bulleted goals found, use the whole response as a single goal
       goals.push("Review and implement the requested changes");
     }
 
     return { summary, goals };
   } finally {
-    await client.session.delete({ path: { id: scratchSessionId } }).catch(() => undefined);
+    await client.session.delete({ sessionID: scratchSessionId }).catch(() => undefined);
   }
 }
 
@@ -834,18 +743,15 @@ async function runReview(client: any, sessionId: string, runPath: string, runFil
 
   const promptText = buildReviewAgentPrompt(reviewAgentName, runPath);
   const response = await client.session.prompt({
-    path: { id: sessionId },
-    body: {
-      agent: reviewAgentName,
-      parts: [{ type: "text", text: promptText }],
-    },
+    sessionID: sessionId,
+    agent: reviewAgentName,
+    parts: [{ type: "text", text: promptText }],
   });
 
   const result = unwrapResponseData<any>(response);
   const textPart = result?.parts?.find((part: any) => part?.type === "text" && typeof part.text === "string");
   const responseText = textPart?.text ?? "";
 
-  // Parse the response
   const statusMatch = responseText.match(/STATUS:\s*(\w+)/i);
   const summaryMatch = responseText.match(/SUMMARY:\s*([\s\S]+?)(?=\nGAPS:|$)/i);
   const gapsMatch = responseText.match(/GAPS:\s*([\s\S]+?)(?=\nRECOMMENDED_PROMPT:|$)/i);
@@ -940,12 +846,41 @@ async function withRunningLock<T>(runPath: string, fn: () => Promise<T>): Promis
   }
 }
 
-export const EasyWorkflowPlugin = async ({ client }: any) => {
+// ---- Plugin export ----
+
+export const EasyWorkflowPlugin = async ({ client, directory, serverUrl }: any) => {
   await log(client, "info", "workflow plugin initialized", {
     templatePath: TEMPLATE_PATH,
     runsDir: RUNS_DIR,
     agentsDir: AGENTS_DIR,
   });
+
+  // Initialize kanban system (non-blocking)
+  (async () => {
+    try {
+      const dbPath = join(directory || WORKFLOW_ROOT, ".opencode", "easy-workflow", "tasks.db");
+      kanbanDb = new KanbanDB(dbPath);
+
+      kanbanServer = new KanbanServer(kanbanDb, {
+        onStart: async () => {
+          if (orchestrator) await orchestrator.start();
+        },
+        onStop: () => {
+          if (orchestrator) orchestrator.stop();
+        },
+        getExecuting: () => orchestrator?.isExecuting() ?? false,
+      });
+
+      orchestrator = new Orchestrator(kanbanDb, kanbanServer, client, serverUrl);
+
+      const port = kanbanServer.start();
+      await log(client, "info", "kanban server started", { port });
+      await showToast(client, `Kanban board: http://localhost:${port}`, "success");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await log(client, "error", "kanban initialization failed", { error: msg });
+    }
+  })();
 
   return {
     "chat.message": async (input: any, output: any) => {

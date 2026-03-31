@@ -2,6 +2,8 @@ temp
 .cachebro
 .claude
 .opencode/easy-workflow/runs
+.opencode/easy-workflow/tasks.db*
+
 
 # Logs
 logs
