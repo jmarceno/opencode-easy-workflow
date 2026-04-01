@@ -990,6 +990,7 @@ export const EasyWorkflowPlugin = async (input: any) => {
         },
         getExecuting: () => nextOrchestrator?.isExecuting() ?? false,
         getStartError: () => (nextOrchestrator ? nextOrchestrator.preflightStartError() : "Kanban orchestrator is not ready"),
+        getServerUrl: getOpencodeServerUrl,
       });
 
       nextOrchestrator = new Orchestrator(

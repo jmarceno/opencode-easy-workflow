@@ -3,8 +3,9 @@ import { join } from "path"
 import { fileURLToPath } from "url"
 import { dirname } from "path"
 import { execFileSync } from "child_process"
-import type { WSMessage } from "./types"
+import type { WSMessage, ThinkingLevel } from "./types"
 import { KanbanDB } from "./db"
+import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const KANBAN_HTML = readFileSync(join(__dirname, "kanban", "index.html"), "utf-8")
@@ -12,6 +13,35 @@ const KANBAN_HTML = readFileSync(join(__dirname, "kanban", "index.html"), "utf-8
 type StartFn = () => Promise<void>
 type StopFn = () => void
 type StartPreflightFn = () => string | null
+type ServerUrlFn = () => string | null
+
+function createV2Client(baseUrl: string, directory?: string) {
+  return createOpencodeClient({
+    baseUrl,
+    directory,
+    throwOnError: true,
+  })
+}
+
+const THINKING_LEVELS: ThinkingLevel[] = ["default", "low", "medium", "high"]
+
+function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return typeof value === "string" && THINKING_LEVELS.includes(value as ThinkingLevel)
+}
+
+function normalizeDefaultModelMap(catalog: any): Record<string, string> {
+  const defaults: Record<string, string> = {}
+  const source = catalog?.defaultModel ?? catalog?.defaults ?? catalog?.defaultModels ?? null
+  if (!source || typeof source !== "object") return defaults
+
+  for (const [providerID, modelID] of Object.entries(source)) {
+    if (typeof providerID !== "string") continue
+    if (typeof modelID !== "string" || !modelID.trim()) continue
+    defaults[providerID] = `${providerID}/${modelID}`
+  }
+
+  return defaults
+}
 
 export class KanbanServer {
   private db: KanbanDB
@@ -21,16 +51,18 @@ export class KanbanServer {
   private onStop: StopFn
   private getExecuting: () => boolean
   private getStartError: StartPreflightFn
+  private getServerUrl: ServerUrlFn
 
   constructor(
     db: KanbanDB,
-    opts: { onStart: StartFn; onStop: StopFn; getExecuting: () => boolean; getStartError?: StartPreflightFn }
+    opts: { onStart: StartFn; onStop: StopFn; getExecuting: () => boolean; getStartError?: StartPreflightFn; getServerUrl?: ServerUrlFn }
   ) {
     this.db = db
     this.onStart = opts.onStart
     this.onStop = opts.onStop
     this.getExecuting = opts.getExecuting
     this.getStartError = opts.getStartError || (() => null)
+    this.getServerUrl = opts.getServerUrl || (() => null)
   }
 
   broadcast(msg: WSMessage) {
@@ -127,6 +159,9 @@ export class KanbanServer {
 
       if (method === "POST" && url.pathname === "/api/tasks") {
         const body = await req.json()
+        if (body?.thinkingLevel !== undefined && !isThinkingLevel(body.thinkingLevel)) {
+          return this.json({ error: "Invalid thinkingLevel. Allowed values: default, low, medium, high" }, 400)
+        }
         const task = this.db.createTask(body)
         this.broadcast({ type: "task_created", payload: task })
         return this.json(task, 201)
@@ -138,6 +173,9 @@ export class KanbanServer {
 
         if (method === "PATCH") {
           const body = await req.json()
+          if (body?.thinkingLevel !== undefined && !isThinkingLevel(body.thinkingLevel)) {
+            return this.json({ error: "Invalid thinkingLevel. Allowed values: default, low, medium, high" }, 400)
+          }
           const task = this.db.updateTask(taskId, body)
           if (!task) return this.json({ error: "Task not found" }, 404)
           this.broadcast({ type: "task_updated", payload: task })
@@ -172,9 +210,39 @@ export class KanbanServer {
 
       if (method === "PUT" && url.pathname === "/api/options") {
         const body = await req.json()
+        if (body?.thinkingLevel !== undefined && !isThinkingLevel(body.thinkingLevel)) {
+          return this.json({ error: "Invalid thinkingLevel. Allowed values: default, low, medium, high" }, 400)
+        }
         const options = this.db.updateOptions(body)
         this.broadcast({ type: "options_updated", payload: options })
         return this.json(options)
+      }
+
+      // Models catalog
+      if (method === "GET" && url.pathname === "/api/models") {
+        const serverUrl = this.getServerUrl()
+        if (!serverUrl) {
+          return this.json({ error: "OpenCode server URL is not configured" }, 500)
+        }
+        try {
+          const client = createV2Client(serverUrl)
+          const response = await client.config.providers()
+          const catalog = response?.data ?? response
+          const providers = Array.isArray(catalog?.providers) ? catalog.providers : []
+          const normalized = providers.map((p: any) => ({
+            id: p.id,
+            name: p.name || p.id,
+            models: Object.entries(p.models || {}).map(([id, model]: [string, any]) => ({
+              id,
+              label: typeof model === "object" && model?.label ? model.label : id,
+              value: `${p.id}/${id}`,
+            })),
+          }))
+          return this.json({ providers: normalized, defaults: normalizeDefaultModelMap(catalog) })
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          return this.json({ error: `Failed to fetch model catalog: ${msg}` }, 500)
+        }
       }
 
       // Execution

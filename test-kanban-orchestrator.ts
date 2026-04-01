@@ -242,6 +242,7 @@ async function main() {
       },
       getExecuting: () => isExecuting,
       getStartError: () => (orchestrator ? orchestrator.preflightStartError() : "Kanban orchestrator is not ready"),
+      getServerUrl: () => server?.url || null,
     });
     
     orchestrator = new Orchestrator(kanbanDb, kanbanServer, server.url, TEST_DIR);

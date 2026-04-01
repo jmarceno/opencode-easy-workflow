@@ -1,5 +1,7 @@
 export type TaskStatus = "template" | "backlog" | "executing" | "review" | "done" | "failed" | "stuck"
 
+export type ThinkingLevel = "default" | "low" | "medium" | "high"
+
 export interface Task {
   id: string
   name: string
@@ -23,6 +25,7 @@ export interface Task {
   createdAt: number
   updatedAt: number
   completedAt: number | null
+  thinkingLevel: ThinkingLevel
 }
 
 export interface Options {
@@ -33,6 +36,7 @@ export interface Options {
   command: string
   parallelTasks: number
   port: number
+  thinkingLevel: ThinkingLevel
 }
 
 export const DEFAULT_COMMIT_PROMPT = `You are in a worktree on a detached HEAD. When you are finished with the task, commit the working changes onto {{base_ref}}.

@@ -191,12 +191,21 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
       <div class="form-row">
         <div class="form-group">
           <label>Plan Model</label>
-          <input type="text" id="taskPlanModel" placeholder="default">
+          <select id="taskPlanModel"></select>
         </div>
         <div class="form-group">
           <label>Execution Model</label>
-          <input type="text" id="taskExecModel" placeholder="default">
+          <select id="taskExecModel"></select>
         </div>
+      </div>
+      <div class="form-group">
+        <label>Thinking Level</label>
+        <select id="taskThinkingLevel">
+          <option value="default">Default</option>
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+        </select>
       </div>
       <div class="form-group">
         <label>Branch</label>
@@ -241,12 +250,21 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
       <div class="form-row">
         <div class="form-group">
           <label>Plan Model (global)</label>
-          <input type="text" id="optPlanModel" placeholder="default">
+          <select id="optPlanModel"></select>
         </div>
         <div class="form-group">
           <label>Execution Model (global)</label>
-          <input type="text" id="optExecModel" placeholder="default">
+          <select id="optExecModel"></select>
         </div>
+      </div>
+      <div class="form-group">
+        <label>Thinking Level (global default)</label>
+        <select id="optThinkingLevel">
+          <option value="default">Default</option>
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+        </select>
       </div>
       <div class="form-group">
         <label>Pre-execution Command</label>
@@ -288,6 +306,7 @@ let eventLogs = []
 const MAX_LOG_ENTRIES = 500
 let taskModalMode = 'create'
 let taskModalCreateStatus = 'backlog'
+let modelCatalog = { providers: [] }
 
 // ---- API helpers ----
 async function api(path, method = 'GET', body) {
@@ -324,6 +343,69 @@ async function loadBranches() {
   } catch (e) {
     availableBranches = []
     showToast('Failed to load branches: ' + e.message, 'error')
+  }
+}
+
+async function loadModels() {
+  try {
+    const data = await api('/api/models')
+    if (data.error) {
+      showToast('Failed to load models: ' + data.error, 'error')
+      modelCatalog = { providers: [] }
+      return
+    }
+    modelCatalog = data
+  } catch (e) {
+    modelCatalog = { providers: [] }
+    showToast('Failed to load models: ' + e.message, 'error')
+  }
+}
+
+function populateModelSelect(selectId, selectedValue) {
+  const select = document.getElementById(selectId)
+  if (!select) return
+  select.innerHTML = ''
+
+  const optDefault = document.createElement('option')
+  optDefault.value = 'default'
+  optDefault.textContent = 'default'
+  select.appendChild(optDefault)
+
+  const providers = modelCatalog?.providers || []
+  for (const provider of providers) {
+    if (!provider.models || provider.models.length === 0) continue
+    const group = document.createElement('optgroup')
+    group.label = provider.name || provider.id
+    for (const model of provider.models) {
+      const opt = document.createElement('option')
+      opt.value = model.value
+      opt.textContent = model.label
+      group.appendChild(opt)
+    }
+    select.appendChild(group)
+  }
+
+  if (selectedValue && selectedValue !== 'default') {
+    let found = false
+    for (const provider of providers) {
+      for (const model of provider.models || []) {
+        if (model.value === selectedValue) {
+          select.value = selectedValue
+          found = true
+          break
+        }
+      }
+      if (found) break
+    }
+    if (!found) {
+      const optUnknown = document.createElement('option')
+      optUnknown.value = selectedValue
+      optUnknown.textContent = selectedValue + ' (unknown)'
+      optUnknown.selected = true
+      select.insertBefore(optUnknown, select.firstChild)
+    }
+  } else {
+    select.value = 'default'
   }
 }
 
@@ -617,6 +699,12 @@ function renderCard(task, colStatus) {
     b.textContent = `branch: ${task.branch}`
     meta.appendChild(b)
   }
+  if (task.thinkingLevel && task.thinkingLevel !== 'default') {
+    const b = document.createElement('span')
+    b.className = 'badge'
+    b.textContent = `thinking: ${task.thinkingLevel}`
+    meta.appendChild(b)
+  }
   if (task.deleteWorktree === false) {
     const b = document.createElement('span')
     b.className = 'badge'
@@ -729,12 +817,13 @@ function openTaskModal(taskId, options = {}) {
     document.getElementById('taskPrompt').value = task.prompt
     populateBranchSelect('taskBranch', task.branch || getFallbackBranch())
     document.getElementById('taskBranch').value = task.branch || getFallbackBranch()
-    document.getElementById('taskPlanModel').value = task.planModel
-    document.getElementById('taskExecModel').value = task.executionModel
+    populateModelSelect('taskPlanModel', task.planModel)
+    populateModelSelect('taskExecModel', task.executionModel)
     document.getElementById('taskPlanmode').checked = task.planmode
     document.getElementById('taskReview').checked = task.review
     document.getElementById('taskAutoCommit').checked = task.autoCommit
     document.getElementById('taskDeleteWorktree').checked = task.deleteWorktree !== false
+    document.getElementById('taskThinkingLevel').value = task.thinkingLevel || 'default'
     currentReqs = task.requirements || []
     reqExcludeId = task.id
   } else if (seedTask) {
@@ -746,12 +835,13 @@ function openTaskModal(taskId, options = {}) {
     document.getElementById('taskPrompt').value = seedTask.prompt
     populateBranchSelect('taskBranch', seedTask.branch || getFallbackBranch())
     document.getElementById('taskBranch').value = seedTask.branch || getFallbackBranch()
-    document.getElementById('taskPlanModel').value = seedTask.planModel || 'default'
-    document.getElementById('taskExecModel').value = seedTask.executionModel || 'default'
+    populateModelSelect('taskPlanModel', seedTask.planModel || 'default')
+    populateModelSelect('taskExecModel', seedTask.executionModel || 'default')
     document.getElementById('taskPlanmode').checked = seedTask.planmode
     document.getElementById('taskReview').checked = seedTask.review
     document.getElementById('taskAutoCommit').checked = seedTask.autoCommit
     document.getElementById('taskDeleteWorktree').checked = seedTask.deleteWorktree !== false
+    document.getElementById('taskThinkingLevel').value = seedTask.thinkingLevel || 'default'
     currentReqs = seedTask.requirements || []
     reqExcludeId = seedTask.id
   } else {
@@ -763,12 +853,13 @@ function openTaskModal(taskId, options = {}) {
     document.getElementById('taskPrompt').value = ''
     populateBranchSelect('taskBranch', getFallbackBranch())
     document.getElementById('taskBranch').value = getFallbackBranch()
-    document.getElementById('taskPlanModel').value = 'default'
-    document.getElementById('taskExecModel').value = 'default'
+    populateModelSelect('taskPlanModel', 'default')
+    populateModelSelect('taskExecModel', 'default')
     document.getElementById('taskPlanmode').checked = false
     document.getElementById('taskReview').checked = true
     document.getElementById('taskAutoCommit').checked = true
     document.getElementById('taskDeleteWorktree').checked = true
+    document.getElementById('taskThinkingLevel').value = 'default'
   }
 
   saveBtn.style.display = viewOnly ? 'none' : ''
@@ -847,13 +938,14 @@ async function saveTask() {
     name,
     prompt,
     branch,
-    planModel: document.getElementById('taskPlanModel').value.trim() || 'default',
-    executionModel: document.getElementById('taskExecModel').value.trim() || 'default',
+    planModel: document.getElementById('taskPlanModel').value || 'default',
+    executionModel: document.getElementById('taskExecModel').value || 'default',
     planmode: document.getElementById('taskPlanmode').checked,
     review: document.getElementById('taskReview').checked,
     autoCommit: document.getElementById('taskAutoCommit').checked,
     deleteWorktree: document.getElementById('taskDeleteWorktree').checked,
     requirements: reqs,
+    thinkingLevel: document.getElementById('taskThinkingLevel').value || 'default',
   }
 
   try {
@@ -914,10 +1006,11 @@ function openOptionsModal() {
   populateBranchSelect('optBranch', allOptions.branch || getFallbackBranch())
   document.getElementById('optCommitPrompt').value = allOptions.commitPrompt || ''
   document.getElementById('optBranch').value = allOptions.branch || getFallbackBranch()
-  document.getElementById('optPlanModel').value = allOptions.planModel || 'default'
-  document.getElementById('optExecModel').value = allOptions.executionModel || 'default'
+  populateModelSelect('optPlanModel', allOptions.planModel || 'default')
+  populateModelSelect('optExecModel', allOptions.executionModel || 'default')
   document.getElementById('optCommand').value = allOptions.command || ''
   document.getElementById('optParallel').value = allOptions.parallelTasks || 1
+  document.getElementById('optThinkingLevel').value = allOptions.thinkingLevel || 'default'
   document.getElementById('optionsModal').classList.remove('hidden')
 }
 
@@ -940,6 +1033,7 @@ async function saveOptions() {
       executionModel: document.getElementById('optExecModel').value,
       command: document.getElementById('optCommand').value,
       parallelTasks: parseInt(document.getElementById('optParallel').value, 10) || 1,
+      thinkingLevel: document.getElementById('optThinkingLevel').value || 'default',
     })
     closeOptionsModal()
     await loadOptions()
@@ -972,6 +1066,7 @@ function showToast(msg, variant = 'info') {
 async function init() {
   await loadOptions()
   await loadBranches()
+  await loadModels()
   await loadTasks()
   addLogEntry('Kanban UI ready')
   connectWS()

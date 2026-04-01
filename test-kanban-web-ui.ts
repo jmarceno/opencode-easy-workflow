@@ -51,6 +51,11 @@ type TestReport = {
   sessionMessageCount: number;
   sessionExistsImmediately: boolean;
   sessionExistsAfterDelay: boolean;
+  modelCatalogProviderCount: number;
+  modelCatalogHasDefaultOption: boolean;
+  selectedExecutionModel: string | null;
+  persistedExecutionModel: string | null;
+  persistedThinkingLevel: string | null;
   passed: boolean;
   error: string | null;
 };
@@ -162,6 +167,11 @@ async function main() {
     sessionMessageCount: 0,
     sessionExistsImmediately: false,
     sessionExistsAfterDelay: false,
+    modelCatalogProviderCount: 0,
+    modelCatalogHasDefaultOption: false,
+    selectedExecutionModel: null,
+    persistedExecutionModel: null,
+    persistedThinkingLevel: null,
     passed: false,
     error: null,
   };
@@ -204,6 +214,7 @@ async function main() {
       },
       getExecuting: () => orchestrator?.isExecuting() ?? false,
       getStartError: () => (orchestrator ? orchestrator.preflightStartError() : "Kanban orchestrator is not ready"),
+      getServerUrl: () => resolveServerUrlFromClient(opencode?.client),
     });
 
     orchestrator = new Orchestrator(
@@ -222,9 +233,53 @@ async function main() {
     await page.goto(report.kanbanUrl, { waitUntil: "networkidle" });
     await page.waitForSelector(".conn-status.connected", { timeout: 10000 });
 
+    const modelCatalogResponse = await page.request.get(`${report.kanbanUrl}/api/models`);
+    if (!modelCatalogResponse.ok()) {
+      throw new Error(`Failed to load model catalog: HTTP ${modelCatalogResponse.status()} ${await modelCatalogResponse.text()}`);
+    }
+    const modelCatalog = await modelCatalogResponse.json();
+    if (!Array.isArray(modelCatalog?.providers)) {
+      throw new Error("/api/models returned invalid shape: providers must be an array");
+    }
+    report.modelCatalogProviderCount = modelCatalog.providers.length;
+
+    await page.click(".topbar button:has-text('Options')");
+    await page.waitForFunction(
+      () => document.getElementById("optionsModal")?.classList.contains("hidden") === false,
+      undefined,
+      { timeout: 5000 },
+    );
+    const optionPlanCount = await page.locator("#optPlanModel option").count();
+    const optionExecCount = await page.locator("#optExecModel option").count();
+    if (optionPlanCount < 1 || optionExecCount < 1) {
+      throw new Error("Model dropdowns in options modal did not populate");
+    }
+    report.modelCatalogHasDefaultOption = await page.locator("#optExecModel option[value='default']").count() > 0;
+    if (!report.modelCatalogHasDefaultOption) {
+      throw new Error("Model dropdown is missing required default option");
+    }
+    await page.selectOption("#optThinkingLevel", "medium");
+    await page.click("#optionsModal .btn.btn-primary");
+    await page.waitForFunction(
+      () => document.getElementById("optionsModal")?.classList.contains("hidden") === true,
+      undefined,
+      { timeout: 5000 },
+    );
+
     await page.click("#col-backlog .add-task-btn");
     await page.fill("#taskName", taskName);
     await page.fill("#taskPrompt", taskPrompt);
+
+    const firstNonDefaultModel = modelCatalog.providers
+      .flatMap((provider: any) => Array.isArray(provider?.models) ? provider.models : [])
+      .map((model: any) => model?.value)
+      .find((value: unknown) => typeof value === "string" && value !== "default") as string | undefined;
+    if (!firstNonDefaultModel) {
+      throw new Error("No non-default execution model available in /api/models catalog");
+    }
+    report.selectedExecutionModel = firstNonDefaultModel;
+    await page.selectOption("#taskExecModel", firstNonDefaultModel);
+    await page.selectOption("#taskThinkingLevel", "high");
 
     if (await page.isChecked("#taskReview")) {
       await page.click("#taskReview");
@@ -240,6 +295,48 @@ async function main() {
       { timeout: 5000 },
     );
     await page.locator(".card-title", { hasText: taskName }).first().waitFor({ timeout: 10000 });
+
+    const persistedTasksResponse = await page.request.get(`${report.kanbanUrl}/api/tasks`);
+    if (!persistedTasksResponse.ok()) {
+      throw new Error(`Failed to load persisted tasks: HTTP ${persistedTasksResponse.status()} ${await persistedTasksResponse.text()}`);
+    }
+    const persistedTasks = await persistedTasksResponse.json();
+    const createdTask = Array.isArray(persistedTasks)
+      ? persistedTasks.find((task: any) => task?.name === taskName)
+      : null;
+    if (!createdTask) {
+      throw new Error("Created task not found in persisted task list");
+    }
+    report.persistedExecutionModel = createdTask.executionModel ?? null;
+    report.persistedThinkingLevel = createdTask.thinkingLevel ?? null;
+
+    if (report.persistedExecutionModel !== report.selectedExecutionModel) {
+      throw new Error(`Execution model persistence mismatch: expected ${report.selectedExecutionModel}, got ${report.persistedExecutionModel}`);
+    }
+    if (report.persistedThinkingLevel !== "high") {
+      throw new Error(`Thinking level persistence mismatch: expected high, got ${report.persistedThinkingLevel}`);
+    }
+
+    await page.locator(`.card-title:has-text("${taskName}")`).first().click({ button: "right" });
+    await page.waitForFunction(
+      () => document.getElementById("taskModal")?.classList.contains("hidden") === false,
+      undefined,
+      { timeout: 5000 },
+    );
+    const modalExecModel = await page.inputValue("#taskExecModel");
+    const modalThinking = await page.inputValue("#taskThinkingLevel");
+    if (modalExecModel !== report.selectedExecutionModel) {
+      throw new Error(`Task modal did not hydrate execution model. Expected ${report.selectedExecutionModel}, got ${modalExecModel}`);
+    }
+    if (modalThinking !== "high") {
+      throw new Error(`Task modal did not hydrate thinking level. Expected high, got ${modalThinking}`);
+    }
+    await page.click("#taskModal .btn");
+    await page.waitForFunction(
+      () => document.getElementById("taskModal")?.classList.contains("hidden") === true,
+      undefined,
+      { timeout: 5000 },
+    );
 
     const startResponsePromise = page.waitForResponse(
       (response) => response.url().endsWith("/api/start") && response.request().method() === "POST",

@@ -2,7 +2,7 @@ import { readFileSync, existsSync, appendFileSync, mkdirSync, writeFileSync, unl
 import { join } from "path"
 import { fileURLToPath } from "url"
 import { dirname } from "path"
-import type { Task, TaskStatus, Options, ReviewResult } from "./types"
+import type { Task, TaskStatus, Options, ReviewResult, ThinkingLevel } from "./types"
 import { KanbanDB } from "./db"
 import { KanbanServer } from "./server"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
@@ -12,6 +12,14 @@ const WORKFLOW_ROOT = join(__dirname, "..")
 const TEMPLATE_PATH = join(WORKFLOW_ROOT, "easy-workflow", "workflow.md")
 const AGENTS_DIR = join(WORKFLOW_ROOT, "agents")
 const DEBUG_LOG_PATH = join(WORKFLOW_ROOT, "easy-workflow", "debug.log")
+
+const THINKING_LEVEL_AGENT_MAP: Record<Exclude<ThinkingLevel, "default">, string> = {
+  low: "build-fast",
+  medium: "build",
+  high: "deep-thinker",
+}
+
+const EXPECTED_THINKING_AGENTS = Object.values(THINKING_LEVEL_AGENT_MAP)
 
 // ---- SDK v2 client wrapper ----
 
@@ -100,6 +108,41 @@ function getAssistantErrorMessage(error: any): string {
   }
   if (typeof error.message === "string") return error.message
   return JSON.stringify(error)
+}
+
+function resolveThinkingLevel(task: Task, options: Options): ThinkingLevel {
+  if (task.thinkingLevel && task.thinkingLevel !== "default") {
+    return task.thinkingLevel
+  }
+  if (options.thinkingLevel && options.thinkingLevel !== "default") {
+    return options.thinkingLevel
+  }
+  return "default"
+}
+
+function mapThinkingLevelToAgent(level: ThinkingLevel): string | null {
+  if (level === "default") return null
+  return THINKING_LEVEL_AGENT_MAP[level] || null
+}
+
+function remapThinkingAgentError(error: unknown, agent: string | null): Error {
+  if (!agent) {
+    return error instanceof Error ? error : new Error(String(error))
+  }
+
+  const rawMessage = error instanceof Error ? error.message : String(error)
+  const message = rawMessage.toLowerCase()
+  const looksLikeMissingAgent =
+    message.includes("agent")
+    && (message.includes("not found") || message.includes("unknown") || message.includes("invalid") || message.includes("does not exist"))
+
+  if (!looksLikeMissingAgent) {
+    return error instanceof Error ? error : new Error(rawMessage)
+  }
+
+  return new Error(
+    `Thinking-level agent \"${agent}\" is unavailable. Configure one of: ${EXPECTED_THINKING_AGENTS.join(", ")}. Original error: ${rawMessage}`,
+  )
 }
 
 function unwrapResponseDataOrThrow<T>(response: any, operation: string): T {
@@ -511,6 +554,13 @@ export class Orchestrator {
 
       const model = await this.resolveModelSelection(executionModel, client, "Execution")
 
+      // 4b. Determine effective thinking level and agent
+      const effectiveThinkingLevel = resolveThinkingLevel(task, options)
+      const executionAgent = mapThinkingLevelToAgent(effectiveThinkingLevel)
+      if (effectiveThinkingLevel !== "default") {
+        appendDebugLog("info", "using thinking level", { taskId: task.id, level: effectiveThinkingLevel, agent: executionAgent })
+      }
+
       // 5. Execute: plan mode or direct
       if (task.planmode) {
         const planModel = task.planModel !== "default"
@@ -540,14 +590,21 @@ export class Orchestrator {
 
         // Execution phase (continue in same session)
         appendDebugLog("info", "plan mode: sending execution prompt", { taskId: task.id })
-        const execResponse = await client.session.prompt({
+        const execPromptOpts: any = {
           sessionID: sessionId,
           model,
           parts: [{ type: "text", text: "Now implement the plan. Execute all changes." }],
-        })
-        const execResult = unwrapResponseDataOrThrow<any>(execResponse, "Execution prompt")
+        }
+        if (executionAgent) execPromptOpts.agent = executionAgent
+        let execResult: any
+        try {
+          const execResponse = await client.session.prompt(execPromptOpts)
+          execResult = unwrapResponseDataOrThrow<any>(execResponse, "Execution prompt")
+        } catch (promptErr) {
+          throw remapThinkingAgentError(promptErr, executionAgent)
+        }
         const execFailure = this.extractExecutionFailure(execResult)
-        if (execFailure) throw new Error(`Execution prompt failed: ${execFailure}`)
+        if (execFailure) throw remapThinkingAgentError(new Error(`Execution prompt failed: ${execFailure}`), executionAgent)
         const execOutput = this.extractTextOutput(execResult)
         if (execOutput) {
           this.db.appendAgentOutput(task.id, `[exec] ${execOutput}\n`)
@@ -556,14 +613,21 @@ export class Orchestrator {
       } else {
         // Direct execution
         appendDebugLog("info", "sending task prompt", { taskId: task.id })
-        const response = await client.session.prompt({
+        const promptOpts: any = {
           sessionID: sessionId,
           model,
           parts: [{ type: "text", text: task.prompt }],
-        })
-        const result = unwrapResponseDataOrThrow<any>(response, "Task prompt")
+        }
+        if (executionAgent) promptOpts.agent = executionAgent
+        let result: any
+        try {
+          const response = await client.session.prompt(promptOpts)
+          result = unwrapResponseDataOrThrow<any>(response, "Task prompt")
+        } catch (promptErr) {
+          throw remapThinkingAgentError(promptErr, executionAgent)
+        }
         const taskFailure = this.extractExecutionFailure(result)
-        if (taskFailure) throw new Error(`Task prompt failed: ${taskFailure}`)
+        if (taskFailure) throw remapThinkingAgentError(new Error(`Task prompt failed: ${taskFailure}`), executionAgent)
         const output = this.extractTextOutput(result)
         if (output) {
           this.db.appendAgentOutput(task.id, output)

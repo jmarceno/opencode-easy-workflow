@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite"
 import { mkdirSync } from "fs"
 import { dirname } from "path"
-import type { Task, TaskStatus, Options } from "./types"
+import type { Task, TaskStatus, Options, ThinkingLevel } from "./types"
 import { DEFAULT_COMMIT_PROMPT } from "./types"
 
 const DEFAULT_OPTIONS: Options = {
@@ -12,6 +12,13 @@ const DEFAULT_OPTIONS: Options = {
   command: "",
   parallelTasks: 1,
   port: 3789,
+  thinkingLevel: "default",
+}
+
+function normalizeThinkingLevel(value: unknown): ThinkingLevel {
+  return value === "low" || value === "medium" || value === "high" || value === "default"
+    ? value
+    : "default"
 }
 
 function rowToTask(row: any): Task {
@@ -38,6 +45,7 @@ function rowToTask(row: any): Task {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at,
+    thinkingLevel: normalizeThinkingLevel(row.thinking_level),
   }
 }
 
@@ -107,6 +115,11 @@ export class KanbanDB {
       this.db.exec("ALTER TABLE tasks ADD COLUMN delete_worktree INTEGER NOT NULL DEFAULT 1")
     }
 
+    const hasThinkingLevel = tableInfo.some((col: any) => col.name === "thinking_level")
+    if (!hasThinkingLevel) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN thinking_level TEXT NOT NULL DEFAULT 'default'")
+    }
+
     const optCount = this.db.query("SELECT COUNT(*) as cnt FROM options").get() as any
     if (optCount.cnt === 0) {
       const insert = this.db.prepare(
@@ -119,6 +132,12 @@ export class KanbanDB {
       insert.run("command", DEFAULT_OPTIONS.command)
       insert.run("parallel_tasks", String(DEFAULT_OPTIONS.parallelTasks))
       insert.run("port", String(DEFAULT_OPTIONS.port))
+      insert.run("thinking_level", DEFAULT_OPTIONS.thinkingLevel)
+    }
+
+    const hasThinkingLevelKey = this.db.prepare("SELECT COUNT(*) as cnt FROM options WHERE key = 'thinking_level'").get() as any
+    if (hasThinkingLevelKey.cnt === 0) {
+      this.db.prepare("INSERT OR IGNORE INTO options (key, value) VALUES ('thinking_level', 'default')").run()
     }
   }
 
@@ -149,6 +168,7 @@ export class KanbanDB {
     autoCommit?: boolean
     deleteWorktree?: boolean
     requirements?: string[]
+    thinkingLevel?: ThinkingLevel
   }): Task {
     const id = Math.random().toString(36).substring(2, 10)
     const maxIdx = this.db.query("SELECT COALESCE(MAX(idx), -1) as max_idx FROM tasks").get() as any
@@ -156,8 +176,8 @@ export class KanbanDB {
     const now = Math.floor(Date.now() / 1000)
 
     this.db.prepare(`
-      INSERT INTO tasks (id, name, idx, prompt, branch, plan_model, execution_model, planmode, review, auto_commit, delete_worktree, status, requirements, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tasks (id, name, idx, prompt, branch, plan_model, execution_model, planmode, review, auto_commit, delete_worktree, status, requirements, created_at, updated_at, thinking_level)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       data.name,
@@ -174,6 +194,7 @@ export class KanbanDB {
       JSON.stringify(data.requirements ?? []),
       now,
       now,
+      data.thinkingLevel ?? "default",
     )
 
     return this.getTask(id)!
@@ -199,6 +220,7 @@ export class KanbanDB {
     worktreeDir: string | null
     errorMessage: string | null
     completedAt: number | null
+    thinkingLevel: ThinkingLevel
   }>): Task | null {
     const sets: string[] = []
     const values: any[] = []
@@ -222,6 +244,7 @@ export class KanbanDB {
     if (updates.worktreeDir !== undefined) { sets.push("worktree_dir = ?"); values.push(updates.worktreeDir) }
     if (updates.errorMessage !== undefined) { sets.push("error_message = ?"); values.push(updates.errorMessage) }
     if (updates.completedAt !== undefined) { sets.push("completed_at = ?"); values.push(updates.completedAt) }
+    if (updates.thinkingLevel !== undefined) { sets.push("thinking_level = ?"); values.push(updates.thinkingLevel) }
 
     if (sets.length === 0) return this.getTask(id)
 
@@ -282,6 +305,7 @@ export class KanbanDB {
       command: opts.command ?? DEFAULT_OPTIONS.command,
       parallelTasks: parseInt(opts.parallel_tasks ?? "1", 10) || 1,
       port: parseInt(opts.port ?? "3789", 10) || 3789,
+      thinkingLevel: normalizeThinkingLevel(opts.thinking_level) ?? DEFAULT_OPTIONS.thinkingLevel,
     }
   }
 
@@ -297,6 +321,7 @@ export class KanbanDB {
     if (partial.command !== undefined) upsert.run("command", partial.command)
     if (partial.parallelTasks !== undefined) upsert.run("parallel_tasks", String(partial.parallelTasks))
     if (partial.port !== undefined) upsert.run("port", String(partial.port))
+    if (partial.thinkingLevel !== undefined) upsert.run("thinking_level", partial.thinkingLevel)
 
     return this.getOptions()
   }
