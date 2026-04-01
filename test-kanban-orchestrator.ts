@@ -40,10 +40,35 @@ const TASK_B = {
   autoCommit: false,
 };
 
+// Plan-mode test task
+const PLAN_TASK = {
+  name: "Plan Task: Create readme.txt",
+  prompt: "Create a file named readme.txt in the root directory with the content 'Hello from Plan Task!'",
+  planModel: "default",
+  executionModel: "minimax/minimax-m2.7",
+  planmode: true,
+  review: false,
+  autoCommit: false,
+  requirements: [],
+};
+
+// Plan-mode task with dependency
+const PLAN_TASK_WITH_DEPS = {
+  name: "Plan Task with Deps: Create deps.txt",
+  prompt: "Create a file named deps.txt in the root directory with the content 'Depends on Plan Task!'",
+  planModel: "default",
+  executionModel: "minimax/minimax-m2.7",
+  planmode: true,
+  review: false,
+  autoCommit: false,
+};
+
 // Test artifacts to cleanup
 const TEST_FILES = [
   join(TEST_DIR, "hello.txt"),
   join(TEST_DIR, "goodbye.txt"),
+  join(TEST_DIR, "readme.txt"),
+  join(TEST_DIR, "deps.txt"),
 ];
 
 async function listGitWorktrees(): Promise<Set<string>> {
@@ -368,4 +393,405 @@ async function main() {
   }
 }
 
-main();
+async function testPlanModeApprovalWorkflow() {
+  console.log("\n\n=== Plan-Mode Approval Workflow Test ===\n");
+  console.log("Test: Plan-mode task stops in review awaiting approval, then resumes after approval\n");
+  
+  let server: { url: string; close(): void } | null = null;
+  let kanbanServer: KanbanServer | null = null;
+  let kanbanDb: KanbanDB | null = null;
+  let orchestrator: Orchestrator | null = null;
+  let baselineWorktrees: Set<string> = new Set();
+  
+  try {
+    await cleanup();
+    
+    if (existsSync(DEBUG_LOG_PATH)) {
+      unlinkSync(DEBUG_LOG_PATH);
+    }
+    
+    console.log("Starting OpenCode server...");
+    const opencode = await createOpencode({ port: 0 });
+    server = opencode.server;
+    baselineWorktrees = await listGitWorktrees();
+    console.log(`Server started at ${server.url}`);
+    
+    console.log("\nInitializing Kanban components...");
+    kanbanDb = new KanbanDB(DB_PATH);
+    const kanbanPort = getFreePort();
+    kanbanDb.updateOptions({ port: kanbanPort });
+    
+    let isExecuting = false;
+    kanbanServer = new KanbanServer(kanbanDb, {
+      onStart: async () => {
+        isExecuting = true;
+        if (orchestrator) await orchestrator.start();
+        isExecuting = false;
+      },
+      onStop: () => {
+        isExecuting = false;
+        if (orchestrator) orchestrator.stop();
+      },
+      getExecuting: () => isExecuting,
+      getStartError: () => (orchestrator ? orchestrator.preflightStartError() : "Kanban orchestrator is not ready"),
+      getServerUrl: () => server?.url || null,
+    });
+    
+    orchestrator = new Orchestrator(kanbanDb, kanbanServer, server.url, TEST_DIR);
+    
+    const startedKanbanPort = kanbanServer.start();
+    console.log(`Kanban server started on port: ${startedKanbanPort}`);
+    
+    await waitFor(1000);
+    
+    // Create plan-mode task
+    console.log("\nCreating Plan Task...");
+    const planTaskResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(PLAN_TASK),
+    });
+    
+    if (!planTaskResponse.ok) {
+      throw new Error(`Failed to create Plan Task: ${planTaskResponse.statusText}`);
+    }
+    
+    const planTask = await planTaskResponse.json();
+    console.log(`Created Plan Task: ${planTask.id} - ${planTask.name}`);
+    console.log(`  planmode: ${planTask.planmode}`);
+    console.log(`  executionPhase: ${planTask.executionPhase}`);
+    
+    // Start execution - should stop after planning phase
+    console.log("\nStarting task execution (should stop after planning)...");
+    const startResponse = await fetch(`http://localhost:${startedKanbanPort}/api/start`, {
+      method: "POST",
+    });
+    
+    if (!startResponse.ok) {
+      const error = await startResponse.text();
+      throw new Error(`Failed to start execution: ${error}`);
+    }
+    
+    isExecuting = true;
+    
+    // Poll for plan task to be in review with awaiting approval
+    const planAwaitingApproval = await pollForCondition(() => {
+      const tasksResp = fetch(`http://localhost:${startedKanbanPort}/api/tasks`).then(r => r.json()).catch(() => []);
+      return tasksResp.then((tasks: any[]) => {
+        const pt = tasks.find((t: any) => t.id === planTask.id);
+        return pt?.status === "review" && pt?.awaitingPlanApproval === true;
+      });
+    }, 60000, 2000);
+    
+    await waitFor(2000);
+    
+    // Check that plan task is in review awaiting approval
+    let tasksResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks`);
+    let tasks = await tasksResponse.json();
+    let foundPlanTask = tasks.find((t: any) => t.id === planTask.id);
+    
+    console.log("\n=== Phase 1: Plan Completion ===");
+    console.log(`Plan Task Status: ${foundPlanTask?.status}`);
+    console.log(`Awaiting Plan Approval: ${foundPlanTask?.awaitingPlanApproval}`);
+    console.log(`Execution Phase: ${foundPlanTask?.executionPhase}`);
+    
+    if (!planAwaitingApproval || foundPlanTask?.status !== "review" || !foundPlanTask?.awaitingPlanApproval) {
+      throw new Error(`Plan task did not enter awaiting approval state. Status: ${foundPlanTask?.status}, awaitingApproval: ${foundPlanTask?.awaitingPlanApproval}`);
+    }
+    console.log("✓ Plan task is in review awaiting approval");
+    
+    // Approve the plan
+    console.log("\n=== Phase 2: Approving Plan ===");
+    const approveResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks/${planTask.id}/approve-plan`, {
+      method: "POST",
+    });
+    
+    if (!approveResponse.ok) {
+      const error = await approveResponse.text();
+      throw new Error(`Failed to approve plan: ${error}`);
+    }
+    console.log("Plan approved via API");
+    
+    await waitFor(1000);
+    
+    // Check task is now eligible for implementation
+    tasksResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks`);
+    tasks = await tasksResponse.json();
+    foundPlanTask = tasks.find((t: any) => t.id === planTask.id);
+    
+    console.log(`Plan Task Status: ${foundPlanTask?.status}`);
+    console.log(`Execution Phase: ${foundPlanTask?.executionPhase}`);
+    console.log(`Awaiting Plan Approval: ${foundPlanTask?.awaitingPlanApproval}`);
+    
+    const approvedForImplementation = foundPlanTask?.executionPhase === "implementation_pending"
+      || foundPlanTask?.executionPhase === "implementation_done";
+    const implementationResumed = ["backlog", "executing", "done"].includes(foundPlanTask?.status);
+    if (!approvedForImplementation || !implementationResumed || foundPlanTask?.awaitingPlanApproval) {
+      throw new Error(`Plan approval did not transition correctly. Status: ${foundPlanTask?.status}, phase: ${foundPlanTask?.executionPhase}`);
+    }
+    console.log("✓ Plan transitioned to implementation_pending");
+    
+    // Wait for task to complete (it should resume execution)
+    console.log("\n=== Phase 3: Implementation ===");
+    console.log("Waiting for implementation to complete...");
+    
+    const implementationComplete = await pollForCondition(() => {
+      const tasksResp = fetch(`http://localhost:${startedKanbanPort}/api/tasks`).then(r => r.json()).catch(() => []);
+      return tasksResp.then((tasks: any[]) => {
+        const pt = tasks.find((t: any) => t.id === planTask.id);
+        return pt?.status === "done";
+      });
+    }, 120000, 2000);
+    
+    await waitFor(2000);
+    
+    // Final check
+    tasksResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks`);
+    tasks = await tasksResponse.json();
+    foundPlanTask = tasks.find((t: any) => t.id === planTask.id);
+    
+    console.log("\n=== Final Results ===");
+    console.log(`Plan Task Status: ${foundPlanTask?.status}`);
+    console.log(`Execution Phase: ${foundPlanTask?.executionPhase}`);
+    
+    // Cleanup
+    await cleanup();
+    await cleanupNewWorktrees(baselineWorktrees);
+    kanbanServer.stop();
+    kanbanDb.close();
+    server.close();
+    
+    if (!implementationComplete || foundPlanTask?.status !== "done" || foundPlanTask?.executionPhase !== "implementation_done") {
+      console.log("\n✗ TEST FAILED: Plan task did not complete");
+      process.exit(1);
+    }
+    
+    // Verify file was created
+    const readmePath = join(TEST_DIR, "readme.txt");
+    if (!existsSync(readmePath)) {
+      console.log("\n✗ TEST FAILED: readme.txt was not created");
+      process.exit(1);
+    }
+    
+    const readmeContent = readFileSync(readmePath, "utf-8");
+    console.log(`readme.txt content: ${readmeContent}`);
+    
+    console.log("\n✓ TEST PASSED");
+    process.exit(0);
+    
+  } catch (error) {
+    console.error("\nTest failed with error:", error);
+    await cleanup();
+    await cleanupNewWorktrees(baselineWorktrees);
+    if (kanbanServer) kanbanServer.stop();
+    if (kanbanDb) kanbanDb.close();
+    if (server) server.close();
+    process.exit(1);
+  }
+}
+
+async function testPlanModeWithDependencies() {
+  console.log("\n\n=== Plan-Mode with Dependencies Test ===\n");
+  console.log("Test: Dependencies stay blocked until plan approval and implementation completion\n");
+  
+  let server: { url: string; close(): void } | null = null;
+  let kanbanServer: KanbanServer | null = null;
+  let kanbanDb: KanbanDB | null = null;
+  let orchestrator: Orchestrator | null = null;
+  let baselineWorktrees: Set<string> = new Set();
+  
+  try {
+    await cleanup();
+    
+    if (existsSync(DEBUG_LOG_PATH)) {
+      unlinkSync(DEBUG_LOG_PATH);
+    }
+    
+    console.log("Starting OpenCode server...");
+    const opencode = await createOpencode({ port: 0 });
+    server = opencode.server;
+    baselineWorktrees = await listGitWorktrees();
+    console.log(`Server started at ${server.url}`);
+    
+    console.log("\nInitializing Kanban components...");
+    kanbanDb = new KanbanDB(DB_PATH);
+    const kanbanPort = getFreePort();
+    kanbanDb.updateOptions({ port: kanbanPort });
+    
+    let isExecuting = false;
+    kanbanServer = new KanbanServer(kanbanDb, {
+      onStart: async () => {
+        isExecuting = true;
+        if (orchestrator) await orchestrator.start();
+        isExecuting = false;
+      },
+      onStop: () => {
+        isExecuting = false;
+        if (orchestrator) orchestrator.stop();
+      },
+      getExecuting: () => isExecuting,
+      getStartError: () => (orchestrator ? orchestrator.preflightStartError() : "Kanban orchestrator is not ready"),
+      getServerUrl: () => server?.url || null,
+    });
+    
+    orchestrator = new Orchestrator(kanbanDb, kanbanServer, server.url, TEST_DIR);
+    
+    const startedKanbanPort = kanbanServer.start();
+    console.log(`Kanban server started on port: ${startedKanbanPort}`);
+    
+    await waitFor(1000);
+    
+    // Create plan-mode task (dependency)
+    console.log("\nCreating Plan Task (dependency)...");
+    const planTaskResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(PLAN_TASK),
+    });
+    
+    if (!planTaskResponse.ok) {
+      throw new Error(`Failed to create Plan Task: ${planTaskResponse.statusText}`);
+    }
+    
+    const planTask = await planTaskResponse.json();
+    console.log(`Created Plan Task: ${planTask.id} - ${planTask.name}`);
+    
+    // Create plan-mode task with dependency on first plan task
+    console.log("\nCreating Dependent Plan Task...");
+    const depTaskWithDep = {
+      ...PLAN_TASK_WITH_DEPS,
+      requirements: [planTask.id],
+    };
+    
+    const depTaskResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(depTaskWithDep),
+    });
+    
+    if (!depTaskResponse.ok) {
+      throw new Error(`Failed to create Dependent Plan Task: ${depTaskResponse.statusText}`);
+    }
+    
+    const depTask = await depTaskResponse.json();
+    console.log(`Created Dependent Plan Task: ${depTask.id} - ${depTask.name}`);
+    console.log(`Dependencies: ${depTask.requirements.join(", ")}`);
+    
+    // Start execution - should stop first plan task in review
+    console.log("\nStarting task execution...");
+    const startResponse = await fetch(`http://localhost:${startedKanbanPort}/api/start`, {
+      method: "POST",
+    });
+    
+    if (!startResponse.ok) {
+      const error = await startResponse.text();
+      throw new Error(`Failed to start execution: ${error}`);
+    }
+    
+    isExecuting = true;
+    
+    // Wait for first plan task to be in review awaiting approval
+    const planAwaitingApproval = await pollForCondition(() => {
+      const tasksResp = fetch(`http://localhost:${startedKanbanPort}/api/tasks`).then(r => r.json()).catch(() => []);
+      return tasksResp.then((tasks: any[]) => {
+        const pt = tasks.find((t: any) => t.id === planTask.id);
+        return pt?.status === "review" && pt?.awaitingPlanApproval === true;
+      });
+    }, 60000, 2000);
+    
+    await waitFor(2000);
+    
+    // Check statuses - dependent task should still be in backlog (blocked)
+    let tasksResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks`);
+    let tasks = await tasksResponse.json();
+    let foundPlanTask = tasks.find((t: any) => t.id === planTask.id);
+    let foundDepTask = tasks.find((t: any) => t.id === depTask.id);
+    
+    console.log("\n=== Phase 1: First Task Awaiting Approval ===");
+    console.log(`Plan Task Status: ${foundPlanTask?.status}`);
+    console.log(`Dependent Task Status: ${foundDepTask?.status}`);
+    
+    if (foundDepTask?.status !== "backlog") {
+      throw new Error(`Dependent task should be in backlog, but is: ${foundDepTask?.status}`);
+    }
+    console.log("✓ Dependent task stays in backlog (blocked)");
+    
+    // Approve the first plan
+    console.log("\n=== Phase 2: Approving First Plan ===");
+    const approveResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks/${planTask.id}/approve-plan`, {
+      method: "POST",
+    });
+    
+    if (!approveResponse.ok) {
+      throw new Error(`Failed to approve plan`);
+    }
+    
+    // Wait for first task to complete
+    console.log("Waiting for first task to complete...");
+    const firstComplete = await pollForCondition(() => {
+      const tasksResp = fetch(`http://localhost:${startedKanbanPort}/api/tasks`).then(r => r.json()).catch(() => []);
+      return tasksResp.then((tasks: any[]) => {
+        const pt = tasks.find((t: any) => t.id === planTask.id);
+        return pt?.status === "done";
+      });
+    }, 120000, 2000);
+    
+    await waitFor(2000);
+    
+    // Check that dependent task now enters its own approval state
+    tasksResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks`);
+    tasks = await tasksResponse.json();
+    foundPlanTask = tasks.find((t: any) => t.id === planTask.id);
+    foundDepTask = tasks.find((t: any) => t.id === depTask.id);
+    
+    console.log("\n=== Phase 3: First Task Complete ===");
+    console.log(`Plan Task Status: ${foundPlanTask?.status}`);
+    console.log(`Dependent Task Status: ${foundDepTask?.status}`);
+    
+    if (foundPlanTask?.status !== "done") {
+      throw new Error(`First task should be done, but is: ${foundPlanTask?.status}`);
+    }
+
+    const dependentAwaitingApproval = await pollForCondition(() => {
+      const tasksResp = fetch(`http://localhost:${startedKanbanPort}/api/tasks`).then(r => r.json()).catch(() => []);
+      return tasksResp.then((taskList: any[]) => {
+        const dependent = taskList.find((t: any) => t.id === depTask.id);
+        return dependent?.status === "review" && dependent?.awaitingPlanApproval === true;
+      });
+    }, 60000, 2000);
+
+    if (!dependentAwaitingApproval) {
+      throw new Error(`Dependent task did not enter plan approval state. Status: ${foundDepTask?.status}, awaitingApproval: ${foundDepTask?.awaitingPlanApproval}`);
+    }
+
+    console.log("✓ First task completed, dependent task is now awaiting plan approval");
+    
+    // Cleanup
+    await cleanup();
+    await cleanupNewWorktrees(baselineWorktrees);
+    kanbanServer.stop();
+    kanbanDb.close();
+    server.close();
+    
+    console.log("\n✓ TEST PASSED");
+    process.exit(0);
+    
+  } catch (error) {
+    console.error("\nTest failed with error:", error);
+    await cleanup();
+    await cleanupNewWorktrees(baselineWorktrees);
+    if (kanbanServer) kanbanServer.stop();
+    if (kanbanDb) kanbanDb.close();
+    if (server) server.close();
+    process.exit(1);
+  }
+}
+
+// Run plan-mode tests if PLAN_MODE_TEST env is set
+if (process.env.PLAN_MODE_TEST === "1") {
+  testPlanModeApprovalWorkflow();
+} else if (process.env.PLAN_MODE_TEST === "2") {
+  testPlanModeWithDependencies();
+} else {
+  main();
+}

@@ -43,6 +43,14 @@ function normalizeDefaultModelMap(catalog: any): Record<string, string> {
   return defaults
 }
 
+function hasExecutableTasks(db: KanbanDB): boolean {
+  return db.getTasks().some((task) => {
+    const isBacklogTask = task.status === "backlog" && task.executionPhase !== "plan_complete_waiting_approval"
+    const isApprovedPlanTask = task.executionPhase === "implementation_pending"
+    return isBacklogTask || isApprovedPlanTask
+  })
+}
+
 export class KanbanServer {
   private db: KanbanDB
   private clients: Set<any> = new Set()
@@ -176,6 +184,10 @@ export class KanbanServer {
           if (body?.thinkingLevel !== undefined && !isThinkingLevel(body.thinkingLevel)) {
             return this.json({ error: "Invalid thinkingLevel. Allowed values: default, low, medium, high" }, 400)
           }
+          if (body?.status === "backlog" && body?.executionPhase === undefined) {
+            body.executionPhase = "not_started"
+            body.awaitingPlanApproval = false
+          }
           const task = this.db.updateTask(taskId, body)
           if (!task) return this.json({ error: "Task not found" }, 404)
           this.broadcast({ type: "task_updated", payload: task })
@@ -250,8 +262,7 @@ export class KanbanServer {
         if (this.getExecuting()) {
           return this.json({ error: "Already executing" }, 409)
         }
-        const tasks = this.db.getTasksByStatus("backlog")
-        if (tasks.length === 0) {
+        if (!hasExecutableTasks(this.db)) {
           return this.json({ error: "No tasks in backlog" }, 400)
         }
         const preflightError = this.getStartError()
@@ -269,6 +280,43 @@ export class KanbanServer {
 
       if (method === "POST" && url.pathname === "/api/stop") {
         this.onStop()
+        return this.json({ ok: true })
+      }
+
+      // Approve plan for planmode task
+      const approveMatch = method === "POST"
+        ? url.pathname.match(/^\/api\/tasks\/([a-z0-9]+)\/approve-plan$/)
+        : null
+      if (approveMatch) {
+        const taskId = approveMatch[1]
+        const task = this.db.getTask(taskId)
+        if (!task) {
+          return this.json({ error: "Task not found" }, 404)
+        }
+        if (task.planmode && (task.executionPhase === "implementation_pending" || task.executionPhase === "implementation_done")) {
+          return this.json({ ok: true, message: "Plan already approved" })
+        }
+        if (task.status !== "review" || !task.awaitingPlanApproval) {
+          return this.json({ error: "Task is not awaiting plan approval" }, 400)
+        }
+        this.db.updateTask(taskId, {
+          awaitingPlanApproval: false,
+          executionPhase: "implementation_pending",
+          status: "backlog",
+        })
+        const updated = this.db.getTask(taskId)!
+        this.broadcast({ type: "task_updated", payload: updated })
+        if (!this.getExecuting()) {
+          const preflightError = this.getStartError()
+          if (!preflightError) {
+            this.onStart().catch((err) => {
+              const msg = err instanceof Error ? err.message : String(err)
+              console.error("[kanban] orchestrator start failed:", msg)
+              this.broadcast({ type: "error", payload: { message: `Execution failed: ${msg}` } })
+              this.broadcast({ type: "execution_stopped", payload: {} })
+            })
+          }
+        }
         return this.json({ ok: true })
       }
 

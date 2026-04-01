@@ -417,4 +417,239 @@ async function main() {
   }
 }
 
-await main();
+type PlanModeReport = {
+  runId: string;
+  timestamp: string;
+  opencodeServerUrl: string;
+  kanbanUrl: string;
+  taskName: string;
+  taskId: string | null;
+  taskStatusBeforeApproval: string | null;
+  awaitingPlanApprovalBeforeApproval: boolean;
+  executionPhaseBeforeApproval: string | null;
+  approveButtonVisible: boolean;
+  approveApiCallSuccess: boolean;
+  taskStatusAfterApproval: string | null;
+  executionPhaseAfterApproval: string | null;
+  passed: boolean;
+  error: string | null;
+};
+
+async function testPlanModeApprovalUI() {
+  const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const taskName = `Plan Mode UI Test ${runId}`;
+  const taskPrompt = [
+    `Create a file named .plan-ui-proof-${runId}.txt in the repository root.`,
+    `Write exactly this content in the file: PLAN_UI_PROBE_${runId}`,
+  ].join(" ");
+
+  const reportDir = join(process.cwd(), ".opencode", "easy-workflow", "test-artifacts");
+  mkdirSync(reportDir, { recursive: true });
+  const reportPath = join(reportDir, `kanban-plan-ui-${runId}.json`);
+
+  const report: PlanModeReport = {
+    runId,
+    timestamp: new Date().toISOString(),
+    opencodeServerUrl: "",
+    kanbanUrl: "",
+    taskName,
+    taskId: null,
+    taskStatusBeforeApproval: null,
+    awaitingPlanApprovalBeforeApproval: false,
+    executionPhaseBeforeApproval: null,
+    approveButtonVisible: false,
+    approveApiCallSuccess: false,
+    taskStatusAfterApproval: null,
+    executionPhaseAfterApproval: null,
+    passed: false,
+    error: null,
+  };
+
+  const tempDir = mkdtempSync(join(tmpdir(), "easy-workflow-plan-ui-"));
+  const dbPath = join(tempDir, "tasks.db");
+
+  let opencode: Awaited<ReturnType<typeof createOpencode>> | null = null;
+  let kanbanDb: KanbanDB | null = null;
+  let kanbanServer: KanbanServer | null = null;
+  let orchestrator: Orchestrator | null = null;
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let baselineWorktrees: Set<string> = new Set();
+
+  try {
+    console.log("=== Plan-Mode Approval UI Test ===");
+
+    opencode = await createOpencode({ port: 0 });
+    const client = opencode.client;
+    report.opencodeServerUrl = opencode.server.url;
+    console.log(`OpenCode server: ${report.opencodeServerUrl}`);
+
+    baselineWorktrees = await listGitWorktrees();
+
+    const kanbanPort = getFreePort();
+    report.kanbanUrl = `http://127.0.0.1:${kanbanPort}`;
+
+    kanbanDb = new KanbanDB(dbPath);
+    kanbanDb.updateOptions({ port: kanbanPort, parallelTasks: 1, command: "" });
+
+    kanbanServer = new KanbanServer(kanbanDb, {
+      onStart: async () => {
+        if (orchestrator) await orchestrator.start();
+      },
+      onStop: () => {
+        if (orchestrator) orchestrator.stop();
+      },
+      getExecuting: () => orchestrator?.isExecuting() ?? false,
+      getStartError: () => (orchestrator ? orchestrator.preflightStartError() : "Kanban orchestrator is not ready"),
+      getServerUrl: () => resolveServerUrlFromClient(opencode?.client),
+    });
+
+    orchestrator = new Orchestrator(
+      kanbanDb,
+      kanbanServer,
+      () => resolveServerUrlFromClient(opencode?.client),
+      process.cwd(),
+    );
+
+    kanbanServer.start();
+    console.log(`Kanban UI: ${report.kanbanUrl}`);
+
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+
+    await page.goto(report.kanbanUrl, { waitUntil: "networkidle" });
+    await page.waitForSelector(".conn-status.connected", { timeout: 10000 });
+
+    // Create plan-mode task via API
+    console.log("\nCreating plan-mode task...");
+    const createResponse = await page.request.post(`${report.kanbanUrl}/api/tasks`, {
+      headers: { "Content-Type": "application/json" },
+      data: {
+        name: taskName,
+        prompt: taskPrompt,
+        planmode: true,
+        review: false,
+        autoCommit: false,
+      },
+    });
+
+    if (!createResponse.ok()) {
+      throw new Error(`Failed to create task: HTTP ${createResponse.status()} ${await createResponse.text()}`);
+    }
+
+    const createdTask = await createResponse.json();
+    report.taskId = createdTask.id;
+    console.log(`Created task: ${createdTask.id}`);
+
+    // Wait for card to appear
+    await page.waitForSelector(`.card-title:has-text("${taskName}")`, { timeout: 10000 });
+
+    // Start execution
+    console.log("Starting task execution...");
+    await page.click("#startBtn");
+
+    // Wait for task to be in review awaiting approval
+    const taskInApprovalState = await pollFor(async () => {
+      const resp = await page.request.get(`${report.kanbanUrl}/api/tasks`);
+      if (!resp.ok()) return false;
+      const tasks = await resp.json();
+      const task = tasks.find((t: any) => t.id === createdTask.id);
+      return task?.status === "review" && task?.awaitingPlanApproval === true;
+    }, 60000, 2000);
+
+    if (!taskInApprovalState) {
+      const resp = await page.request.get(`${report.kanbanUrl}/api/tasks`);
+      const tasks = await resp.json();
+      const task = tasks.find((t: any) => t.id === createdTask.id);
+      throw new Error(`Task did not enter approval state. Status: ${task?.status}, awaitingApproval: ${task?.awaitingPlanApproval}`);
+    }
+
+    console.log("Task is in review awaiting approval");
+
+    // Check API state
+    const tasksRespBefore = await page.request.get(`${report.kanbanUrl}/api/tasks`);
+    const tasksBefore = await tasksRespBefore.json();
+    const taskBefore = tasksBefore.find((t: any) => t.id === createdTask.id);
+    report.taskStatusBeforeApproval = taskBefore.status;
+    report.awaitingPlanApprovalBeforeApproval = taskBefore.awaitingPlanApproval;
+    report.executionPhaseBeforeApproval = taskBefore.executionPhase;
+
+    // Check that "plan approval pending" badge is visible
+    const badgeVisible = await page.locator(`.card:has-text("${taskName}") .badge-approval`).isVisible();
+    console.log(`Badge visible: ${badgeVisible}`);
+    if (!badgeVisible) {
+      throw new Error("Plan approval badge is not visible");
+    }
+
+    // Check that "Approve Plan" button is visible
+    const approveBtnVisible = await page.locator(`.card:has-text("${taskName}") button:has-text("Approve Plan")`).isVisible();
+    report.approveButtonVisible = approveBtnVisible;
+    console.log(`Approve Plan button visible: ${approveBtnVisible}`);
+
+    if (!approveBtnVisible) {
+      throw new Error("Approve Plan button is not visible");
+    }
+
+    // Click the Approve Plan button
+    console.log("Clicking Approve Plan button...");
+    await page.locator(`.card:has-text("${taskName}") button:has-text("Approve Plan")`).click();
+
+    // Wait for state transition
+    const resumedTask = await pollFor(async () => {
+      const resp = await page.request.get(`${report.kanbanUrl}/api/tasks`);
+      if (!resp.ok()) return null;
+      const tasks = await resp.json();
+      const task = tasks.find((t: any) => t.id === createdTask.id);
+      if (!task) return null;
+      const resumed = ["backlog", "executing", "done"].includes(task.status)
+        && ["implementation_pending", "implementation_done"].includes(task.executionPhase)
+        && task.awaitingPlanApproval === false;
+      return resumed ? task : null;
+    }, 10000, 1000);
+
+    if (!resumedTask) {
+      throw new Error("Task did not resume implementation after plan approval");
+    }
+
+    // Check API state after approval
+    const tasksRespAfter = await page.request.get(`${report.kanbanUrl}/api/tasks`);
+    const tasksAfter = await tasksRespAfter.json();
+    const taskAfter = tasksAfter.find((t: any) => t.id === createdTask.id);
+    report.taskStatusAfterApproval = taskAfter.status;
+    report.executionPhaseAfterApproval = taskAfter.executionPhase;
+
+    console.log(`Task status after approval: ${taskAfter.status}`);
+    console.log(`Execution phase after approval: ${taskAfter.executionPhase}`);
+
+    if (taskAfter.awaitingPlanApproval !== false) {
+      throw new Error(`Task is still awaiting approval after approve action. Status: ${taskAfter.status}, phase: ${taskAfter.executionPhase}`);
+    }
+
+    if (!["implementation_pending", "implementation_done"].includes(taskAfter.executionPhase) || !["backlog", "executing", "done"].includes(taskAfter.status)) {
+      throw new Error(`Unexpected state after approval. Status: ${taskAfter.status}, phase: ${taskAfter.executionPhase}`);
+    }
+
+    report.approveApiCallSuccess = true;
+    report.passed = true;
+    console.log("\n✓ TEST PASSED");
+
+  } catch (err) {
+    report.error = err instanceof Error ? err.message : String(err);
+    console.error("\n✗ TEST FAILED");
+    console.error(report.error);
+    process.exitCode = 1;
+  } finally {
+    writeFileSync(reportPath, JSON.stringify(report, null, 2), "utf-8");
+    if (browser) await browser.close().catch(() => undefined);
+    if (kanbanServer) kanbanServer.stop();
+    if (kanbanDb) kanbanDb.close();
+    if (opencode) opencode.server.close();
+    await cleanupNewWorktrees(baselineWorktrees);
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+if (process.env.PLAN_UI_TEST === "1") {
+  testPlanModeApprovalUI();
+} else {
+  await main();
+}

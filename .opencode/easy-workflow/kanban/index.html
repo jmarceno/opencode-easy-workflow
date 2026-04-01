@@ -55,6 +55,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 .badge-review { background: rgba(210,153,34,.15); color: var(--yellow); }
 .badge-stuck { background: rgba(218,54,51,.15); color: var(--red); }
 .badge-plan { background: rgba(136,98,246,.15); color: #8b5cf6; }
+.badge-approval { background: rgba(210,153,34,.15); color: var(--yellow); }
 .badge-template { background: rgba(47,125,247,.15); color: var(--accent); }
 
 /* Collapsible output */
@@ -707,6 +708,18 @@ function renderCard(task, colStatus) {
     doneBtn.onclick = () => markStuckDone(task.id)
     actions.appendChild(doneBtn)
   }
+
+  // Approve Plan button for tasks awaiting approval
+  if (task.status === 'review' && task.awaitingPlanApproval) {
+    const approveBtn = document.createElement('button')
+    approveBtn.className = 'action-text'
+    approveBtn.textContent = 'Approve Plan'
+    approveBtn.title = 'Approve Plan'
+    approveBtn.style.borderColor = 'var(--green)'
+    approveBtn.style.color = 'var(--green)'
+    approveBtn.onclick = () => approvePlan(task.id)
+    actions.appendChild(approveBtn)
+  }
   header.appendChild(actions)
   card.appendChild(header)
 
@@ -717,6 +730,12 @@ function renderCard(task, colStatus) {
     const b = document.createElement('span')
     b.className = 'badge badge-plan'
     b.textContent = 'plan'
+    meta.appendChild(b)
+  }
+  if (task.status === 'review' && task.awaitingPlanApproval) {
+    const b = document.createElement('span')
+    b.className = 'badge badge-approval'
+    b.textContent = 'plan approval pending'
     meta.appendChild(b)
   }
   if (task.status === 'template') {
@@ -1047,11 +1066,22 @@ async function resetTask(id) {
       completedAt: null,
       sessionId: null,
       sessionUrl: null,
-      worktreeDir: null
+      worktreeDir: null,
+      executionPhase: 'not_started',
+      awaitingPlanApproval: false,
     })
     await loadTasks()
     showToast('Task reset to backlog', 'success')
   } catch (e) { showToast('Reset failed: ' + e.message, 'error') }
+}
+
+async function approvePlan(id) {
+  try {
+    await api(`/api/tasks/${id}/approve-plan`, 'POST')
+    addLogEntry(`Plan approved for task: ${allTasks.find(t => t.id === id)?.name || id}`)
+    await loadTasks()
+    showToast('Plan approved', 'success')
+  } catch (e) { showToast('Approve plan failed: ' + e.message, 'error') }
 }
 
 // ---- Options ----

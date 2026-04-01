@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite"
 import { mkdirSync } from "fs"
 import { dirname } from "path"
-import type { Task, TaskStatus, Options, ThinkingLevel } from "./types"
+import type { Task, TaskStatus, Options, ThinkingLevel, ExecutionPhase } from "./types"
 import { DEFAULT_COMMIT_PROMPT } from "./types"
 
 const DEFAULT_OPTIONS: Options = {
@@ -46,7 +46,17 @@ function rowToTask(row: any): Task {
     updatedAt: row.updated_at,
     completedAt: row.completed_at,
     thinkingLevel: normalizeThinkingLevel(row.thinking_level),
+    executionPhase: normalizeExecutionPhase(row.execution_phase),
+    awaitingPlanApproval: row.awaiting_plan_approval === 1,
   }
+}
+
+function normalizeExecutionPhase(value: unknown): ExecutionPhase {
+  const validPhases: ExecutionPhase[] = ["not_started", "plan_complete_waiting_approval", "implementation_pending", "implementation_done"]
+  if (validPhases.includes(value as ExecutionPhase)) {
+    return value as ExecutionPhase
+  }
+  return "not_started"
 }
 
 export class KanbanDB {
@@ -120,6 +130,16 @@ export class KanbanDB {
       this.db.exec("ALTER TABLE tasks ADD COLUMN thinking_level TEXT NOT NULL DEFAULT 'default'")
     }
 
+    const hasExecutionPhase = tableInfo.some((col: any) => col.name === "execution_phase")
+    if (!hasExecutionPhase) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN execution_phase TEXT NOT NULL DEFAULT 'not_started'")
+    }
+
+    const hasAwaitingPlanApproval = tableInfo.some((col: any) => col.name === "awaiting_plan_approval")
+    if (!hasAwaitingPlanApproval) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN awaiting_plan_approval INTEGER NOT NULL DEFAULT 0")
+    }
+
     const optCount = this.db.query("SELECT COUNT(*) as cnt FROM options").get() as any
     if (optCount.cnt === 0) {
       const insert = this.db.prepare(
@@ -169,6 +189,8 @@ export class KanbanDB {
     deleteWorktree?: boolean
     requirements?: string[]
     thinkingLevel?: ThinkingLevel
+    executionPhase?: ExecutionPhase
+    awaitingPlanApproval?: boolean
   }): Task {
     const id = Math.random().toString(36).substring(2, 10)
     const maxIdx = this.db.query("SELECT COALESCE(MAX(idx), -1) as max_idx FROM tasks").get() as any
@@ -176,8 +198,8 @@ export class KanbanDB {
     const now = Math.floor(Date.now() / 1000)
 
     this.db.prepare(`
-      INSERT INTO tasks (id, name, idx, prompt, branch, plan_model, execution_model, planmode, review, auto_commit, delete_worktree, status, requirements, created_at, updated_at, thinking_level)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tasks (id, name, idx, prompt, branch, plan_model, execution_model, planmode, review, auto_commit, delete_worktree, status, requirements, created_at, updated_at, thinking_level, execution_phase, awaiting_plan_approval)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       data.name,
@@ -195,6 +217,8 @@ export class KanbanDB {
       now,
       now,
       data.thinkingLevel ?? "default",
+      data.executionPhase ?? "not_started",
+      data.awaitingPlanApproval ? 1 : 0,
     )
 
     return this.getTask(id)!
@@ -221,6 +245,8 @@ export class KanbanDB {
     errorMessage: string | null
     completedAt: number | null
     thinkingLevel: ThinkingLevel
+    executionPhase: ExecutionPhase
+    awaitingPlanApproval: boolean
   }>): Task | null {
     const sets: string[] = []
     const values: any[] = []
@@ -245,6 +271,8 @@ export class KanbanDB {
     if (updates.errorMessage !== undefined) { sets.push("error_message = ?"); values.push(updates.errorMessage) }
     if (updates.completedAt !== undefined) { sets.push("completed_at = ?"); values.push(updates.completedAt) }
     if (updates.thinkingLevel !== undefined) { sets.push("thinking_level = ?"); values.push(updates.thinkingLevel) }
+    if (updates.executionPhase !== undefined) { sets.push("execution_phase = ?"); values.push(updates.executionPhase) }
+    if (updates.awaitingPlanApproval !== undefined) { sets.push("awaiting_plan_approval = ?"); values.push(updates.awaitingPlanApproval ? 1 : 0) }
 
     if (sets.length === 0) return this.getTask(id)
 
@@ -328,7 +356,7 @@ export class KanbanDB {
 
   resetTasksForBacklog(): void {
     this.db.prepare(
-      "UPDATE tasks SET status = 'backlog', session_id = NULL, session_url = NULL, worktree_dir = NULL, agent_output = '', review_count = 0, error_message = NULL, completed_at = NULL, updated_at = unixepoch() WHERE status IN ('executing', 'review', 'failed', 'stuck')"
+      "UPDATE tasks SET status = 'backlog', session_id = NULL, session_url = NULL, worktree_dir = NULL, agent_output = '', review_count = 0, error_message = NULL, completed_at = NULL, updated_at = unixepoch(), execution_phase = 'not_started', awaiting_plan_approval = 0 WHERE status IN ('executing', 'review', 'failed', 'stuck')"
     ).run()
   }
 

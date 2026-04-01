@@ -2,6 +2,8 @@ export type TaskStatus = "template" | "backlog" | "executing" | "review" | "done
 
 export type ThinkingLevel = "default" | "low" | "medium" | "high"
 
+export type ExecutionPhase = "not_started" | "plan_complete_waiting_approval" | "implementation_pending" | "implementation_done"
+
 export interface Task {
   id: string
   name: string
@@ -26,6 +28,8 @@ export interface Task {
   updatedAt: number
   completedAt: number | null
   thinkingLevel: ThinkingLevel
+  executionPhase: ExecutionPhase
+  awaitingPlanApproval: boolean
 }
 
 export interface Options {

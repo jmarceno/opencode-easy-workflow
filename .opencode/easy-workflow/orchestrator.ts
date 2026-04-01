@@ -2,7 +2,7 @@ import { readFileSync, existsSync, appendFileSync, mkdirSync, writeFileSync, unl
 import { join } from "path"
 import { fileURLToPath } from "url"
 import { dirname } from "path"
-import type { Task, TaskStatus, Options, ReviewResult, ThinkingLevel } from "./types"
+import type { Task, Options, ReviewResult, ThinkingLevel } from "./types"
 import { KanbanDB } from "./db"
 import { KanbanServer } from "./server"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
@@ -237,6 +237,22 @@ function resolveBatches(tasks: Task[], parallelLimit: number): Task[][] {
   return finalBatches
 }
 
+function getExecutableTasks(tasks: Task[]): Task[] {
+  const seen = new Set<string>()
+  const executable: Task[] = []
+
+  for (const task of tasks) {
+    const isBacklogTask = task.status === "backlog" && task.executionPhase !== "plan_complete_waiting_approval"
+    const isApprovedPlanTask = task.executionPhase === "implementation_pending"
+    if (!isBacklogTask && !isApprovedPlanTask) continue
+    if (seen.has(task.id)) continue
+    seen.add(task.id)
+    executable.push(task)
+  }
+
+  return executable
+}
+
 // ---- Orchestrator ----
 
 export class Orchestrator {
@@ -287,7 +303,7 @@ export class Orchestrator {
       return "Already executing"
     }
 
-    if (this.db.getTasksByStatus("backlog").length === 0) {
+    if (getExecutableTasks(this.db.getTasks()).length === 0) {
       return "No tasks in backlog"
     }
 
@@ -412,8 +428,9 @@ export class Orchestrator {
       throw new Error(preflightError)
     }
 
-    const tasks = this.db.getTasksByStatus("backlog")
-    if (tasks.length === 0) {
+    const allTasks = getExecutableTasks(this.db.getTasks())
+
+    if (allTasks.length === 0) {
       throw new Error("No tasks in backlog")
     }
 
@@ -426,12 +443,12 @@ export class Orchestrator {
     } catch {
       // Keep unresolved marker; execution will fail with explicit error later.
     }
-    appendDebugLog("info", "orchestrator starting", { taskCount: tasks.length, serverUrl: resolvedServerUrl })
+    appendDebugLog("info", "orchestrator starting", { taskCount: allTasks.length, serverUrl: resolvedServerUrl })
     this.server.broadcast({ type: "execution_started", payload: {} })
 
     try {
       const options = this.db.getOptions()
-      const batches = resolveBatches(tasks, options.parallelTasks)
+      const batches = resolveBatches(allTasks, options.parallelTasks)
 
       for (const batch of batches) {
         if (this.shouldStop) break
@@ -466,6 +483,8 @@ export class Orchestrator {
   private async executeTask(task: Task, options: Options) {
     if (this.shouldStop) return
 
+    const isPlanImplementationResume = task.planmode && task.executionPhase === "implementation_pending"
+
     // Validate deps are done
     for (const depId of task.requirements) {
       const dep = this.db.getTask(depId)
@@ -479,7 +498,11 @@ export class Orchestrator {
     }
 
     // Mark executing
-    this.db.updateTask(task.id, { status: "executing", agentOutput: "", errorMessage: null })
+    this.db.updateTask(task.id, {
+      status: "executing",
+      errorMessage: null,
+      ...(isPlanImplementationResume ? {} : { agentOutput: "" }),
+    })
     let currentTask = this.db.getTask(task.id)!
     this.server.broadcast({ type: "task_updated", payload: currentTask })
 
@@ -571,29 +594,57 @@ export class Orchestrator {
 
         const planModelParsed = await this.resolveModelSelection(planModel, client, "Plan")
 
-        // Planning phase
-        appendDebugLog("info", "plan mode: sending planning prompt", { taskId: task.id })
-        const planResponse = await client.session.prompt({
-          sessionID: sessionId,
-          agent: "plan",
-          model: planModelParsed,
-          parts: [{ type: "text", text: task.prompt }],
-        })
-        const planResult = unwrapResponseDataOrThrow<any>(planResponse, "Planning prompt")
-        const planFailure = this.extractExecutionFailure(planResult)
-        if (planFailure) throw new Error(`Planning prompt failed: ${planFailure}`)
-        const planOutput = this.extractTextOutput(planResult)
-        if (planOutput) {
-          this.db.appendAgentOutput(task.id, `[plan] ${planOutput}\n`)
-          this.server.broadcast({ type: "agent_output", payload: { taskId: task.id, output: `[plan] ${planOutput}\n` } })
+        if (!isPlanImplementationResume) {
+          appendDebugLog("info", "plan mode: sending planning prompt", { taskId: task.id })
+          const planResponse = await client.session.prompt({
+            sessionID: sessionId,
+            agent: "plan",
+            model: planModelParsed,
+            parts: [{ type: "text", text: task.prompt }],
+          })
+          const planResult = unwrapResponseDataOrThrow<any>(planResponse, "Planning prompt")
+          const planFailure = this.extractExecutionFailure(planResult)
+          if (planFailure) throw new Error(`Planning prompt failed: ${planFailure}`)
+          const planOutput = this.extractTextOutput(planResult)
+          if (planOutput) {
+            this.db.appendAgentOutput(task.id, `[plan] ${planOutput}\n`)
+            this.server.broadcast({ type: "agent_output", payload: { taskId: task.id, output: `[plan] ${planOutput}\n` } })
+          }
+
+          const shouldDeletePausedWorktree = currentTask.deleteWorktree !== false
+          if (worktreeInfo?.directory && shouldDeletePausedWorktree) {
+            try {
+              await this.removeWorktree(worktreeInfo.directory)
+            } catch (cleanupErr) {
+              appendDebugLog("warn", "plan mode worktree cleanup failed", { taskId: task.id, error: String(cleanupErr) })
+            }
+          }
+
+          this.db.updateTask(task.id, {
+            status: "review",
+            awaitingPlanApproval: true,
+            executionPhase: "plan_complete_waiting_approval",
+            worktreeDir: shouldDeletePausedWorktree ? null : currentTask.worktreeDir,
+          })
+          currentTask = this.db.getTask(task.id)!
+          this.server.broadcast({ type: "task_updated", payload: currentTask })
+          appendDebugLog("info", "plan mode: plan complete, awaiting approval", { taskId: task.id })
+          return
         }
 
-        // Execution phase (continue in same session)
         appendDebugLog("info", "plan mode: sending execution prompt", { taskId: task.id })
+        const approvedPlanContext = task.agentOutput.trim()
         const execPromptOpts: any = {
           sessionID: sessionId,
           model,
-          parts: [{ type: "text", text: "Now implement the plan. Execute all changes." }],
+          parts: [{
+            type: "text",
+            text: [
+              "The user has approved the plan below. Implement it now.",
+              `Original task:\n${task.prompt}`,
+              approvedPlanContext ? `Approved plan:\n${approvedPlanContext}` : "",
+            ].filter(Boolean).join("\n\n"),
+          }],
         }
         if (executionAgent) execPromptOpts.agent = executionAgent
         let execResult: any
@@ -610,6 +661,9 @@ export class Orchestrator {
           this.db.appendAgentOutput(task.id, `[exec] ${execOutput}\n`)
           this.server.broadcast({ type: "agent_output", payload: { taskId: task.id, output: `[exec] ${execOutput}\n` } })
         }
+
+        // Mark implementation as done
+        this.db.updateTask(task.id, { executionPhase: "implementation_done" })
       } else {
         // Direct execution
         appendDebugLog("info", "sending task prompt", { taskId: task.id })
