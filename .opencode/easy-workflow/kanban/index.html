@@ -28,7 +28,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 .btn-sm { padding: 3px 10px; font-size: 12px; }
 
 /* Board */
-.board { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 16px; flex: 1; min-height: 0; overflow: hidden; }
+.board { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; padding: 16px; flex: 1; min-height: 0; overflow: hidden; }
 .column { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); display: flex; flex-direction: column; min-height: 200px; }
 .column-header { padding: 12px 16px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--text-dim); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
 .column-header .count { background: var(--surface2); border-radius: 12px; padding: 2px 8px; font-size: 11px; }
@@ -47,12 +47,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 .card-actions { display: flex; gap: 4px; margin-left: 8px; }
 .card-actions button { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 16px; padding: 4px 6px; border-radius: 4px; }
 .card-actions button:hover { color: var(--text); background: var(--surface); }
+.card-actions button.action-text { font-size: 11px; border: 1px solid var(--border); background: var(--surface); padding: 2px 8px; }
+.card-actions button.action-text:hover { border-color: var(--accent); color: var(--accent); }
 .card-meta { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
 .badge { font-size: 11px; padding: 2px 6px; border-radius: 4px; background: var(--surface); color: var(--text-dim); }
 .badge-dep { background: rgba(47,125,247,.15); color: var(--accent); }
 .badge-review { background: rgba(210,153,34,.15); color: var(--yellow); }
 .badge-stuck { background: rgba(218,54,51,.15); color: var(--red); }
 .badge-plan { background: rgba(136,98,246,.15); color: #8b5cf6; }
+.badge-template { background: rgba(47,125,247,.15); color: var(--accent); }
 
 /* Collapsible output */
 .output-toggle { font-size: 12px; color: var(--accent); cursor: pointer; background: none; border: none; padding: 4px 0; }
@@ -142,6 +145,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 </div>
 
 <div class="board">
+  <div class="column" data-status="template">
+    <div class="column-header">Templates <span class="count" id="count-template">0</span></div>
+    <div class="column-body" id="col-template">
+      <button class="add-task-btn" onclick="openTemplateTaskModal()">+ Add Template</button>
+    </div>
+  </div>
   <div class="column" data-status="backlog">
     <div class="column-header">Backlog <span class="count" id="count-backlog">0</span></div>
     <div class="column-body" id="col-backlog" ondrop="handleDrop(event,'backlog')" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)">
@@ -277,6 +286,8 @@ let reconnectTimer = null
 let dragTaskId = null
 let eventLogs = []
 const MAX_LOG_ENTRIES = 500
+let taskModalMode = 'create'
+let taskModalCreateStatus = 'backlog'
 
 // ---- API helpers ----
 async function api(path, method = 'GET', body) {
@@ -438,9 +449,10 @@ function updateStartBtn() {
 
 // ---- Rendering ----
 function renderBoard() {
-  const groups = { backlog: [], executing: [], review: [], done: [] }
+  const groups = { template: [], backlog: [], executing: [], review: [], done: [] }
   for (const t of allTasks) {
-    if (t.status === 'backlog') groups.backlog.push(t)
+    if (t.status === 'template') groups.template.push(t)
+    else if (t.status === 'backlog') groups.backlog.push(t)
     else if (t.status === 'executing') groups.executing.push(t)
     else if (t.status === 'review') groups.review.push(t)
     else if (t.status === 'done') groups.done.push(t)
@@ -449,18 +461,18 @@ function renderBoard() {
   for (const [status, tasks] of Object.entries(groups)) {
     tasks.sort((a, b) => a.idx - b.idx)
   }
-  for (const status of ['backlog', 'executing', 'review', 'done']) {
+  for (const status of ['template', 'backlog', 'executing', 'review', 'done']) {
     document.getElementById(`count-${status}`).textContent = groups[status].length
     const col = document.getElementById(`col-${status}`)
     col.innerHTML = ''
     for (const task of groups[status]) {
       col.appendChild(renderCard(task, status))
     }
-    if (status === 'backlog') {
+    if (status === 'template' || status === 'backlog') {
       const btn = document.createElement('button')
       btn.className = 'add-task-btn'
-      btn.textContent = '+ Add Task'
-      btn.onclick = () => openTaskModal()
+      btn.textContent = status === 'template' ? '+ Add Template' : '+ Add Task'
+      btn.onclick = () => status === 'template' ? openTemplateTaskModal() : openTaskModal()
       col.appendChild(btn)
     }
   }
@@ -481,12 +493,12 @@ function renderCard(task, colStatus) {
   const header = document.createElement('div')
   header.className = 'card-header'
 
-  const title = task.sessionUrl && colStatus !== 'backlog'
+  const title = task.sessionUrl && colStatus !== 'backlog' && colStatus !== 'template'
     ? document.createElement('a')
     : document.createElement('span')
   title.className = 'card-title'
   title.textContent = task.name
-  if (task.sessionUrl && colStatus !== 'backlog') {
+  if (task.sessionUrl && colStatus !== 'backlog' && colStatus !== 'template') {
     title.href = task.sessionUrl
     title.target = '_blank'
     title.rel = 'noopener noreferrer'
@@ -518,9 +530,20 @@ function renderCard(task, colStatus) {
 
   const editBtn = document.createElement('button')
   editBtn.textContent = '\u270F'
-  editBtn.title = task.status === 'backlog' ? 'Edit Task' : 'View Task'
+  editBtn.title = task.status === 'template'
+    ? 'Edit Template'
+    : (task.status === 'backlog' ? 'Edit Task' : 'View Task')
   editBtn.onclick = () => openTaskModal(task.id)
   actions.appendChild(editBtn)
+
+  if (task.status === 'template') {
+    const deployBtn = document.createElement('button')
+    deployBtn.className = 'action-text'
+    deployBtn.textContent = 'Deploy'
+    deployBtn.title = 'Deploy to Backlog'
+    deployBtn.onclick = () => openTemplateDeployModal(task.id)
+    actions.appendChild(deployBtn)
+  }
   
   // Reset to backlog (stuck, failed, done, review)
   if (task.status === 'stuck' || task.status === 'failed' || task.status === 'done' || task.status === 'review') {
@@ -559,6 +582,12 @@ function renderCard(task, colStatus) {
     const b = document.createElement('span')
     b.className = 'badge badge-plan'
     b.textContent = 'plan'
+    meta.appendChild(b)
+  }
+  if (task.status === 'template') {
+    const b = document.createElement('span')
+    b.className = 'badge badge-template'
+    b.textContent = 'template'
     meta.appendChild(b)
   }
   if (task.review) {
@@ -667,17 +696,34 @@ async function handleDrop(e, targetStatus) {
 }
 
 // ---- Task CRUD ----
-function openTaskModal(taskId) {
+function openTemplateTaskModal() {
+  openTaskModal(null, { createStatus: 'template' })
+}
+
+function openTemplateDeployModal(taskId) {
+  const templateTask = allTasks.find(t => t.id === taskId)
+  if (!templateTask || templateTask.status !== 'template') return
+  openTaskModal(null, { createStatus: 'backlog', mode: 'deploy', seedTask: templateTask })
+}
+
+function openTaskModal(taskId, options = {}) {
   const modal = document.getElementById('taskModal')
   const title = document.getElementById('taskModalTitle')
   const saveBtn = document.getElementById('taskSaveBtn')
+  const createStatus = options.createStatus === 'template' ? 'template' : 'backlog'
+  const seedTask = options.seedTask || null
+  const explicitMode = options.mode || null
   let viewOnly = false
+  let currentReqs = []
+  let reqExcludeId = null
 
   if (taskId) {
     const task = allTasks.find(t => t.id === taskId)
     if (!task) return
-    viewOnly = task.status !== 'backlog'
-    title.textContent = viewOnly ? 'View Task' : 'Edit Task'
+    viewOnly = !(task.status === 'backlog' || task.status === 'template')
+    taskModalMode = viewOnly ? 'view' : 'edit'
+    taskModalCreateStatus = task.status === 'template' ? 'template' : 'backlog'
+    title.textContent = viewOnly ? 'View Task' : (task.status === 'template' ? 'Edit Template' : 'Edit Task')
     document.getElementById('taskId').value = task.id
     document.getElementById('taskName').value = task.name
     document.getElementById('taskPrompt').value = task.prompt
@@ -689,8 +735,29 @@ function openTaskModal(taskId) {
     document.getElementById('taskReview').checked = task.review
     document.getElementById('taskAutoCommit').checked = task.autoCommit
     document.getElementById('taskDeleteWorktree').checked = task.deleteWorktree !== false
+    currentReqs = task.requirements || []
+    reqExcludeId = task.id
+  } else if (seedTask) {
+    taskModalMode = explicitMode || 'deploy'
+    taskModalCreateStatus = createStatus
+    title.textContent = 'Deploy Template'
+    document.getElementById('taskId').value = ''
+    document.getElementById('taskName').value = seedTask.name
+    document.getElementById('taskPrompt').value = seedTask.prompt
+    populateBranchSelect('taskBranch', seedTask.branch || getFallbackBranch())
+    document.getElementById('taskBranch').value = seedTask.branch || getFallbackBranch()
+    document.getElementById('taskPlanModel').value = seedTask.planModel || 'default'
+    document.getElementById('taskExecModel').value = seedTask.executionModel || 'default'
+    document.getElementById('taskPlanmode').checked = seedTask.planmode
+    document.getElementById('taskReview').checked = seedTask.review
+    document.getElementById('taskAutoCommit').checked = seedTask.autoCommit
+    document.getElementById('taskDeleteWorktree').checked = seedTask.deleteWorktree !== false
+    currentReqs = seedTask.requirements || []
+    reqExcludeId = seedTask.id
   } else {
-    title.textContent = 'Add Task'
+    taskModalMode = explicitMode || 'create'
+    taskModalCreateStatus = createStatus
+    title.textContent = createStatus === 'template' ? 'Add Template' : 'Add Task'
     document.getElementById('taskId').value = ''
     document.getElementById('taskName').value = ''
     document.getElementById('taskPrompt').value = ''
@@ -703,13 +770,22 @@ function openTaskModal(taskId) {
     document.getElementById('taskAutoCommit').checked = true
     document.getElementById('taskDeleteWorktree').checked = true
   }
+
   saveBtn.style.display = viewOnly ? 'none' : ''
+  if (!viewOnly) {
+    saveBtn.textContent = taskModalMode === 'deploy'
+      ? 'Send to Backlog'
+      : (!taskId && taskModalCreateStatus === 'template' ? 'Save Template' : 'Save')
+  }
+
   setTaskModalReadOnly(viewOnly)
-  renderReqs(taskId, viewOnly)
+  renderReqs(reqExcludeId, { readOnly: viewOnly, currentReqs })
   modal.classList.remove('hidden')
 }
 
 function closeTaskModal() {
+  taskModalMode = 'create'
+  taskModalCreateStatus = 'backlog'
   document.getElementById('taskModal').classList.add('hidden')
 }
 
@@ -721,13 +797,16 @@ function setTaskModalReadOnly(readOnly) {
   }
 }
 
-function renderReqs(excludeId, readOnly = false) {
+function renderReqs(excludeId, options = {}) {
+  const readOnly = options.readOnly === true
+  const currentReqs = Array.isArray(options.currentReqs)
+    ? options.currentReqs
+    : (excludeId ? (allTasks.find(t => t.id === excludeId)?.requirements || []) : [])
   const container = document.getElementById('taskReqs')
   container.innerHTML = ''
   const sourceTasks = readOnly
     ? allTasks.filter(t => t.id !== excludeId)
     : allTasks.filter(t => t.status === 'backlog' && t.id !== excludeId)
-  const currentReqs = excludeId ? (allTasks.find(t => t.id === excludeId)?.requirements || []) : []
   if (sourceTasks.length === 0) {
     container.innerHTML = '<div style="font-size:12px;color:var(--text-dim);padding:4px;">No other tasks</div>'
     return
@@ -750,8 +829,8 @@ async function saveTask() {
   const id = document.getElementById('taskId').value
   if (id) {
     const task = allTasks.find(t => t.id === id)
-    if (task && task.status !== 'backlog') {
-      showToast('Only backlog tasks can be edited', 'error')
+    if (task && task.status !== 'backlog' && task.status !== 'template') {
+      showToast('Only backlog and template tasks can be edited', 'error')
       return
     }
   }
@@ -763,6 +842,7 @@ async function saveTask() {
   if (!branch) { showToast('Select a valid branch', 'error'); return }
 
   const reqs = Array.from(document.querySelectorAll('#taskReqs input:checked')).map(cb => cb.value)
+  const createStatus = taskModalCreateStatus === 'template' ? 'template' : 'backlog'
   const data = {
     name,
     prompt,
@@ -777,12 +857,16 @@ async function saveTask() {
   }
 
   try {
+    const wasDeploy = !id && taskModalMode === 'deploy'
     if (id) {
       await api(`/api/tasks/${id}`, 'PATCH', data)
     } else {
-      await api('/api/tasks', 'POST', data)
+      await api('/api/tasks', 'POST', { ...data, status: createStatus })
     }
     closeTaskModal()
+    if (wasDeploy) {
+      showToast('Task sent to Backlog', 'success')
+    }
     await loadTasks()
   } catch (e) { showToast('Save failed: ' + e.message, 'error') }
 }

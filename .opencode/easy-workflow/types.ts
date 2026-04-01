@@ -1,4 +1,4 @@
-export type TaskStatus = "backlog" | "executing" | "review" | "done" | "failed" | "stuck"
+export type TaskStatus = "template" | "backlog" | "executing" | "review" | "done" | "failed" | "stuck"
 
 export interface Task {
   id: string

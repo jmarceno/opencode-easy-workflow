@@ -140,6 +140,7 @@ export class KanbanDB {
   createTask(data: {
     name: string
     prompt: string
+    status?: TaskStatus
     branch?: string
     planModel?: string
     executionModel?: string
@@ -155,8 +156,8 @@ export class KanbanDB {
     const now = Math.floor(Date.now() / 1000)
 
     this.db.prepare(`
-      INSERT INTO tasks (id, name, idx, prompt, branch, plan_model, execution_model, planmode, review, auto_commit, delete_worktree, requirements, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tasks (id, name, idx, prompt, branch, plan_model, execution_model, planmode, review, auto_commit, delete_worktree, status, requirements, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       data.name,
@@ -169,6 +170,7 @@ export class KanbanDB {
       data.review !== false ? 1 : 0,
       data.autoCommit !== false ? 1 : 0,
       data.deleteWorktree !== false ? 1 : 0,
+      data.status ?? "backlog",
       JSON.stringify(data.requirements ?? []),
       now,
       now,

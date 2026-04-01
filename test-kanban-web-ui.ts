@@ -222,7 +222,7 @@ async function main() {
     await page.goto(report.kanbanUrl, { waitUntil: "networkidle" });
     await page.waitForSelector(".conn-status.connected", { timeout: 10000 });
 
-    await page.click(".add-task-btn");
+    await page.click("#col-backlog .add-task-btn");
     await page.fill("#taskName", taskName);
     await page.fill("#taskPrompt", taskPrompt);
 

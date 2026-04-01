@@ -388,22 +388,13 @@ export class Orchestrator {
 
     try {
       const options = this.db.getOptions()
-      const allTasks = this.db.getTasks()
-      const batches = resolveBatches(allTasks, options.parallelTasks)
-
-      // Filter: only process tasks that are still in backlog
-      // (reorder might have changed things, but we validate deps at execution time)
-      const backlogIds = new Set(tasks.map(t => t.id))
+      const batches = resolveBatches(tasks, options.parallelTasks)
 
       for (const batch of batches) {
         if (this.shouldStop) break
 
-        // Filter batch to only backlog tasks
-        const readyBatch = batch.filter(t => backlogIds.has(t.id))
-        if (readyBatch.length === 0) continue
-
         // Execute tasks in this batch (respecting parallel limit already applied)
-        await Promise.all(readyBatch.map(t => this.executeTask(t, options)))
+        await Promise.all(batch.map(t => this.executeTask(t, options)))
 
         if (this.shouldStop) break
       }
