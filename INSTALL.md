@@ -1,12 +1,50 @@
 # Easy Workflow Plugin - Installation Guide
 
-The Easy Workflow plugin provides kanban-style task orchestration with dependency-aware execution for OpenCode.
+The Easy Workflow plugin provides two modes of operation:
+1. **Workflow Review Mode** - Review-driven workflow with `#workflow` trigger
+2. **Kanban Orchestrator Mode** - Task orchestration with dependency management
 
 ## Prerequisites
 
 - **OpenCode** (https://opencode.ai) installed and configured
-- **Bun** runtime (https://bun.sh) - the plugin requires Bun for `bun:sqlite` support
+- **Bun** runtime (https://bun.sh) - required for `bun:sqlite` support
 - **Git** repository initialized in your project
+
+### Starting the OpenCode Server
+
+Instead of running `opencode` directly, you must start the server:
+
+```bash
+opencode serve
+```
+
+The server runs on `http://127.0.0.1:4096` by default.
+
+### For Development
+
+For development with auto-reload, use `bun` to run directly:
+
+```bash
+cd /path/to/your/project
+opencode serve
+```
+
+### Programmatic Usage
+
+If your project uses the SDK programmatically:
+
+```typescript
+import { createOpencode } from "@opencode-ai/sdk";
+
+const opencode = await createOpencode({ port: 0 }); // port 0 = random available port
+const { server, client } = opencode;
+
+// Use client for API calls
+const session = await client.session.create({ body: { title: "My Session" } });
+
+// When done
+server.close();
+```
 
 ## Installation Steps
 
@@ -32,18 +70,10 @@ Copy the following files to your project's `.opencode/` directory:
 
 ### 2. Install Dependencies
 
-The plugin requires the OpenCode SDK. If not already installed:
+The plugin requires the OpenCode SDK v2:
 
 ```bash
 bun add @opencode-ai/sdk
-```
-
-Or if using npm/yarn in your project:
-
-```bash
-npm install @opencode-ai/sdk
-# or
-yarn add @opencode-ai/sdk
 ```
 
 ### 3. Configure the Review Agent
@@ -53,15 +83,14 @@ Edit `.opencode/agents/workflow-review.md` to set your preferred review model:
 ```yaml
 ---
 mode: subagent
-model: opencode-go/kimi-k2.5  # Change to your preferred model
+model: minimax/minimax-m2.7
 ---
 ```
 
 Available models depend on your OpenCode configuration. Common options:
+- `minimax/minimax-m2.7`
 - `opencode-go/kimi-k2.5`
-- `opencode-go/kimi-k2-thinking`
-- `openai/gpt-4`
-- `anthropic/claude-3`
+- `openai/chatgpt-5.3-codex`
 
 ### 4. Configure Workflow Settings
 
@@ -77,12 +106,12 @@ maxReviewRuns: 2
 - `reviewAgent`: Name of the agent to use for code review
 - `maxReviewRuns`: Maximum number of review iterations before marking a task as "stuck"
 
-### 5. Start OpenCode
+### 5. Start OpenCode Server
 
-Launch OpenCode in your project directory:
+Launch the OpenCode server in your project directory:
 
 ```bash
-opencode
+opencode serve
 ```
 
 The plugin will automatically:
@@ -105,19 +134,19 @@ After installation, your `.opencode/` directory should look like this:
 ```
 .opencode/
 ├── plugins/
-│   └── easy-workflow.ts          # Main plugin (1098 lines)
+│   └── easy-workflow.ts          # Main plugin
 ├── agents/
 │   └── workflow-review.md        # Review agent definition
 ├── easy-workflow/
 │   ├── workflow.md               # Workflow template & config
 │   ├── tasks.db                  # SQLite database (auto-created)
 │   ├── debug.log                 # Debug logs (auto-created)
-│   ├── db.ts                     # Database layer (273 lines)
-│   ├── server.ts                 # HTTP/WebSocket server (165 lines)
-│   ├── orchestrator.ts           # Task execution engine (642 lines)
-│   ├── types.ts                  # Type definitions (56 lines)
+│   ├── db.ts                     # Database layer
+│   ├── server.ts                 # HTTP/WebSocket server
+│   ├── orchestrator.ts           # Task execution engine
+│   ├── types.ts                  # Type definitions
 │   └── kanban/
-│       └── index.html            # Kanban UI (642 lines)
+│       └── index.html            # Kanban UI
 ```
 
 ## Configuration Options
@@ -145,60 +174,19 @@ Each task can override global settings:
 - **Review**: Enable/disable automated review
 - **Auto-commit**: Enable/disable automatic git commits
 
-## Usage
-
-### Creating Tasks
-
-1. Open the kanban board at `http://localhost:3789`
-2. Click "+ Add Task" in the Backlog column
-3. Fill in:
-   - **Name**: Task identifier
-   - **Prompt**: Instructions for the AI agent
-   - **Requirements**: Dependencies on other tasks
-   - **Models**: Override global defaults if needed
-   - **Options**: Enable/disable review and auto-commit
-
-### Task Execution Flow
-
-```
-Backlog → Executing → Review (optional) → Done
-                    ↓
-                 Failed/Stuck
-```
-
-1. Tasks start in **Backlog**
-2. Click **Start** to begin execution
-3. Tasks move through columns based on status
-4. Dependencies are resolved automatically (topological sort)
-
-### Dependencies
-
-- Tasks specify dependencies via `requirements` (array of task IDs)
-- The orchestrator builds a dependency graph and executes in order
-- Circular dependencies are detected and will halt execution
-
-### Review Process
-
-When review is enabled:
-1. After task execution, a review agent evaluates the work
-2. If gaps are found, a fix prompt is sent automatically
-3. This repeats up to `maxReviewRuns` times
-4. If max reviews reached with gaps, task is marked "stuck"
-
 ## Testing
 
-Run the end-to-end test:
+Run the kanban orchestrator test:
 
 ```bash
 bun test-kanban-orchestrator.ts
 ```
 
-This test:
-1. Creates two tasks (B depends on A)
-2. Disables review and auto-commit
-3. Executes both tasks
-4. Verifies file outputs
-5. Reports success/failure
+Run the workflow test:
+
+```bash
+bun test-workflow.ts
+```
 
 ## Troubleshooting
 
@@ -225,24 +213,27 @@ Reset the database (WARNING: deletes all tasks):
 rm .opencode/easy-workflow/tasks.db
 ```
 
-The database will be recreated on next OpenCode startup.
+The database will be recreated on next server startup.
 
 ### Model errors
 
 Ensure the model is available in your OpenCode instance:
 ```bash
-opencode agents list
+opencode providers list
 ```
 
-## Legacy Workflow Support
+## Uninstallation
 
-The original `#workflow` prompt trigger is still supported:
+To remove the plugin:
 
-```
-Your task description here #workflow
-```
-
-This creates a workflow run file in `.opencode/easy-workflow/runs/` and triggers the review process on session idle.
+1. Stop the OpenCode server
+2. Remove plugin files:
+   ```bash
+   rm -rf .opencode/plugins/easy-workflow.ts
+   rm -rf .opencode/easy-workflow/
+   rm .opencode/agents/workflow-review.md
+   ```
+3. Restart the server
 
 ## API Reference
 
@@ -265,23 +256,3 @@ The kanban server exposes a REST API:
 
 ### WebSocket
 - `WS /ws` - Real-time updates
-
-## Uninstallation
-
-To remove the plugin:
-
-1. Stop OpenCode
-2. Remove plugin files:
-   ```bash
-   rm -rf .opencode/plugins/easy-workflow.ts
-   rm -rf .opencode/easy-workflow/
-   rm .opencode/agents/workflow-review.md
-   ```
-3. Restart OpenCode
-
-## Support
-
-For issues or questions:
-- Check debug logs: `.opencode/easy-workflow/debug.log`
-- Review OpenCode documentation: https://opencode.ai
-- Report issues: https://github.com/anomalyco/opencode/issues
