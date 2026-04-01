@@ -5,11 +5,13 @@ export interface Task {
   name: string
   idx: number
   prompt: string
+  branch: string
   planModel: string
   executionModel: string
   planmode: boolean
   review: boolean
   autoCommit: boolean
+  deleteWorktree: boolean
   status: TaskStatus
   requirements: string[]
   agentOutput: string
@@ -25,6 +27,7 @@ export interface Task {
 
 export interface Options {
   commitPrompt: string
+  branch: string
   planModel: string
   executionModel: string
   command: string

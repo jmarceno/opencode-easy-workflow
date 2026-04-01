@@ -2,6 +2,7 @@ import { readFileSync } from "fs"
 import { join } from "path"
 import { fileURLToPath } from "url"
 import { dirname } from "path"
+import { execFileSync } from "child_process"
 import type { WSMessage } from "./types"
 import { KanbanDB } from "./db"
 
@@ -77,6 +78,35 @@ export class KanbanServer {
     })
   }
 
+  private getGitBranches(): { branches: string[]; current: string | null } {
+    try {
+      const branchOutput = execFileSync("git", ["branch", "--format=%(refname:short)"], {
+        cwd: process.cwd(),
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "pipe"],
+      })
+      const currentOutput = execFileSync("git", ["branch", "--show-current"], {
+        cwd: process.cwd(),
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "pipe"],
+      })
+
+      const branches = branchOutput
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+      const current = currentOutput.trim() || null
+
+      if (current && !branches.includes(current)) {
+        branches.unshift(current)
+      }
+
+      return { branches, current }
+    } catch {
+      return { branches: [], current: null }
+    }
+  }
+
   private async handleHTTP(req: Request): Promise<Response> {
     const url = new URL(req.url)
     const method = req.method
@@ -134,6 +164,10 @@ export class KanbanServer {
       // Options
       if (method === "GET" && url.pathname === "/api/options") {
         return this.json(this.db.getOptions())
+      }
+
+      if (method === "GET" && url.pathname === "/api/branches") {
+        return this.json(this.getGitBranches())
       }
 
       if (method === "PUT" && url.pathname === "/api/options") {

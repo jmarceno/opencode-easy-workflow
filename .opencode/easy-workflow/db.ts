@@ -6,6 +6,7 @@ import { DEFAULT_COMMIT_PROMPT } from "./types"
 
 const DEFAULT_OPTIONS: Options = {
   commitPrompt: DEFAULT_COMMIT_PROMPT,
+  branch: "main",
   planModel: "default",
   executionModel: "default",
   command: "",
@@ -19,11 +20,13 @@ function rowToTask(row: any): Task {
     name: row.name,
     idx: row.idx,
     prompt: row.prompt,
+    branch: row.branch || "main",
     planModel: row.plan_model,
     executionModel: row.execution_model,
     planmode: row.planmode === 1,
     review: row.review === 1,
     autoCommit: row.auto_commit === 1,
+    deleteWorktree: row.delete_worktree !== 0,
     status: row.status as TaskStatus,
     requirements: JSON.parse(row.requirements || "[]"),
     agentOutput: row.agent_output || "",
@@ -58,11 +61,13 @@ export class KanbanDB {
         name TEXT NOT NULL,
         idx INTEGER NOT NULL DEFAULT 0,
         prompt TEXT NOT NULL,
+        branch TEXT NOT NULL DEFAULT 'main',
         plan_model TEXT NOT NULL DEFAULT 'default',
         execution_model TEXT NOT NULL DEFAULT 'default',
         planmode INTEGER NOT NULL DEFAULT 0,
         review INTEGER NOT NULL DEFAULT 1,
         auto_commit INTEGER NOT NULL DEFAULT 1,
+        delete_worktree INTEGER NOT NULL DEFAULT 1,
         status TEXT NOT NULL DEFAULT 'backlog',
         requirements TEXT NOT NULL DEFAULT '[]',
         agent_output TEXT DEFAULT '',
@@ -92,12 +97,23 @@ export class KanbanDB {
       this.db.exec("ALTER TABLE tasks ADD COLUMN session_url TEXT")
     }
 
+    const hasBranch = tableInfo.some((col: any) => col.name === "branch")
+    if (!hasBranch) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN branch TEXT NOT NULL DEFAULT 'main'")
+    }
+
+    const hasDeleteWorktree = tableInfo.some((col: any) => col.name === "delete_worktree")
+    if (!hasDeleteWorktree) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN delete_worktree INTEGER NOT NULL DEFAULT 1")
+    }
+
     const optCount = this.db.query("SELECT COUNT(*) as cnt FROM options").get() as any
     if (optCount.cnt === 0) {
       const insert = this.db.prepare(
         "INSERT OR IGNORE INTO options (key, value) VALUES (?, ?)"
       )
       insert.run("commit_prompt", DEFAULT_OPTIONS.commitPrompt)
+      insert.run("branch", DEFAULT_OPTIONS.branch)
       insert.run("plan_model", DEFAULT_OPTIONS.planModel)
       insert.run("execution_model", DEFAULT_OPTIONS.executionModel)
       insert.run("command", DEFAULT_OPTIONS.command)
@@ -124,11 +140,13 @@ export class KanbanDB {
   createTask(data: {
     name: string
     prompt: string
+    branch?: string
     planModel?: string
     executionModel?: string
     planmode?: boolean
     review?: boolean
     autoCommit?: boolean
+    deleteWorktree?: boolean
     requirements?: string[]
   }): Task {
     const id = Math.random().toString(36).substring(2, 10)
@@ -137,18 +155,20 @@ export class KanbanDB {
     const now = Math.floor(Date.now() / 1000)
 
     this.db.prepare(`
-      INSERT INTO tasks (id, name, idx, prompt, plan_model, execution_model, planmode, review, auto_commit, requirements, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tasks (id, name, idx, prompt, branch, plan_model, execution_model, planmode, review, auto_commit, delete_worktree, requirements, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       data.name,
       idx,
       data.prompt,
+      data.branch ?? this.getOptions().branch,
       data.planModel ?? "default",
       data.executionModel ?? "default",
       data.planmode ? 1 : 0,
       data.review !== false ? 1 : 0,
       data.autoCommit !== false ? 1 : 0,
+      data.deleteWorktree !== false ? 1 : 0,
       JSON.stringify(data.requirements ?? []),
       now,
       now,
@@ -161,11 +181,13 @@ export class KanbanDB {
     name: string
     idx: number
     prompt: string
+    branch: string
     planModel: string
     executionModel: string
     planmode: boolean
     review: boolean
     autoCommit: boolean
+    deleteWorktree: boolean
     status: TaskStatus
     requirements: string[]
     agentOutput: string
@@ -182,11 +204,13 @@ export class KanbanDB {
     if (updates.name !== undefined) { sets.push("name = ?"); values.push(updates.name) }
     if (updates.idx !== undefined) { sets.push("idx = ?"); values.push(updates.idx) }
     if (updates.prompt !== undefined) { sets.push("prompt = ?"); values.push(updates.prompt) }
+    if (updates.branch !== undefined) { sets.push("branch = ?"); values.push(updates.branch) }
     if (updates.planModel !== undefined) { sets.push("plan_model = ?"); values.push(updates.planModel) }
     if (updates.executionModel !== undefined) { sets.push("execution_model = ?"); values.push(updates.executionModel) }
     if (updates.planmode !== undefined) { sets.push("planmode = ?"); values.push(updates.planmode ? 1 : 0) }
     if (updates.review !== undefined) { sets.push("review = ?"); values.push(updates.review ? 1 : 0) }
     if (updates.autoCommit !== undefined) { sets.push("auto_commit = ?"); values.push(updates.autoCommit ? 1 : 0) }
+    if (updates.deleteWorktree !== undefined) { sets.push("delete_worktree = ?"); values.push(updates.deleteWorktree ? 1 : 0) }
     if (updates.status !== undefined) { sets.push("status = ?"); values.push(updates.status) }
     if (updates.requirements !== undefined) { sets.push("requirements = ?"); values.push(JSON.stringify(updates.requirements)) }
     if (updates.agentOutput !== undefined) { sets.push("agent_output = ?"); values.push(updates.agentOutput) }
@@ -250,6 +274,7 @@ export class KanbanDB {
 
     return {
       commitPrompt: opts.commit_prompt ?? DEFAULT_OPTIONS.commitPrompt,
+      branch: opts.branch ?? DEFAULT_OPTIONS.branch,
       planModel: opts.plan_model ?? DEFAULT_OPTIONS.planModel,
       executionModel: opts.execution_model ?? DEFAULT_OPTIONS.executionModel,
       command: opts.command ?? DEFAULT_OPTIONS.command,
@@ -264,6 +289,7 @@ export class KanbanDB {
     )
 
     if (partial.commitPrompt !== undefined) upsert.run("commit_prompt", partial.commitPrompt)
+    if (partial.branch !== undefined) upsert.run("branch", partial.branch)
     if (partial.planModel !== undefined) upsert.run("plan_model", partial.planModel)
     if (partial.executionModel !== undefined) upsert.run("execution_model", partial.executionModel)
     if (partial.command !== undefined) upsert.run("command", partial.command)

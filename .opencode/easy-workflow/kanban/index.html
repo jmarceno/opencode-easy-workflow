@@ -10,9 +10,9 @@
   --bg: #0d1117; --surface: #161b22; --surface2: #21262d; --border: #30363d;
   --text: #e6edf3; --text-dim: #8b949e; --accent: #2f81f7; --accent-hover: #388bfd;
   --green: #238636; --green-hover: #2ea043; --yellow: #d29922; --red: #da3633;
-  --orange: #db6d28; --radius: 8px; --shadow: 0 2px 8px rgba(0,0,0,.3);
+  --orange: #db6d28; --radius: 8px; --shadow: 0 2px 8px rgba(0,0,0,.3); --log-panel-height: 180px;
 }
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 
 /* Top bar */
 .topbar { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 12px 24px; background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 100; }
@@ -28,7 +28,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 .btn-sm { padding: 3px 10px; font-size: 12px; }
 
 /* Board */
-.board { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 16px; min-height: calc(100vh - 52px); }
+.board { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 16px; flex: 1; min-height: 0; overflow: hidden; }
 .column { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); display: flex; flex-direction: column; min-height: 200px; }
 .column-header { padding: 12px 16px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--text-dim); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
 .column-header .count { background: var(--surface2); border-radius: 12px; padding: 2px 8px; font-size: 11px; }
@@ -45,7 +45,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 .card-title.has-session:hover { text-decoration: underline; }
 .card-idx { font-size: 11px; background: var(--surface); border-radius: 4px; padding: 2px 6px; margin-left: 8px; color: var(--text-dim); flex-shrink: 0; }
 .card-actions { display: flex; gap: 4px; margin-left: 8px; }
-.card-actions button { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 14px; padding: 2px 4px; border-radius: 4px; }
+.card-actions button { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 16px; padding: 4px 6px; border-radius: 4px; }
 .card-actions button:hover { color: var(--text); background: var(--surface); }
 .card-meta { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
 .badge { font-size: 11px; padding: 2px 6px; border-radius: 4px; background: var(--surface); color: var(--text-dim); }
@@ -102,8 +102,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 .req-item:hover { background: var(--surface2); }
 .req-item input { accent-color: var(--accent); }
 
+/* Log panel */
+.log-panel { height: var(--log-panel-height); border-top: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; min-height: 120px; }
+.log-header { padding: 8px 14px; font-size: 12px; font-weight: 600; color: var(--text-dim); border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: .4px; display: flex; align-items: center; justify-content: space-between; }
+.log-body { flex: 1; overflow-y: auto; padding: 8px 14px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace; font-size: 12px; line-height: 1.5; }
+.log-item { color: var(--text-dim); margin-bottom: 4px; white-space: pre-wrap; word-break: break-word; }
+.log-item.info { color: var(--text-dim); }
+.log-item.success { color: #7ee787; }
+.log-item.error { color: #ff7b72; }
+
 /* Toast */
-.toast-container { position: fixed; bottom: 16px; right: 16px; z-index: 300; display: flex; flex-direction: column; gap: 8px; }
+.toast-container { position: fixed; bottom: calc(var(--log-panel-height) + 16px); right: 16px; z-index: 300; display: flex; flex-direction: column; gap: 8px; }
 .toast { padding: 10px 16px; border-radius: var(--radius); font-size: 13px; box-shadow: var(--shadow); animation: slideIn .2s ease; }
 .toast-error { background: var(--red); color: #fff; }
 .toast-success { background: var(--green); color: #fff; }
@@ -114,6 +123,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 .conn-status { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .conn-status.connected { background: var(--green); }
 .conn-status.disconnected { background: var(--red); }
+
+@media (max-width: 980px) {
+  .board { grid-template-columns: 1fr; overflow-y: auto; }
+  .log-panel { height: 160px; }
+}
 </style>
 </head>
 <body>
@@ -176,10 +190,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
         </div>
       </div>
       <div class="form-group">
+        <label>Branch</label>
+        <select id="taskBranch"></select>
+      </div>
+      <div class="form-group">
         <div class="checkbox-group">
           <label><input type="checkbox" id="taskPlanmode"> Plan Mode</label>
           <label><input type="checkbox" id="taskReview" checked> Review</label>
           <label><input type="checkbox" id="taskAutoCommit" checked> Auto-commit</label>
+          <label><input type="checkbox" id="taskDeleteWorktree" checked> Delete Worktree</label>
         </div>
       </div>
       <div class="form-group">
@@ -189,7 +208,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
     </div>
     <div class="modal-footer">
       <button class="btn" onclick="closeTaskModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="saveTask()">Save</button>
+      <button class="btn btn-primary" id="taskSaveBtn" onclick="saveTask()">Save</button>
     </div>
   </div>
 </div>
@@ -205,6 +224,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
       <div class="form-group">
         <label>Commit Prompt <span style="font-weight:normal;color:var(--text-dim)">({{base_ref}} will be replaced at runtime)</span></label>
         <textarea id="optCommitPrompt" style="min-height:300px;font-family:monospace;font-size:12px" placeholder="Instructions for committing changes..."></textarea>
+      </div>
+      <div class="form-group">
+        <label>Default Branch</label>
+        <select id="optBranch"></select>
       </div>
       <div class="form-row">
         <div class="form-group">
@@ -232,16 +255,28 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
   </div>
 </div>
 
+<div class="log-panel">
+  <div class="log-header">
+    <span>Event Log</span>
+    <button class="btn btn-sm" onclick="clearLogs()">Clear</button>
+  </div>
+  <div class="log-body" id="eventLog"></div>
+</div>
+
 <div class="toast-container" id="toasts"></div>
 
 <script>
 const API = location.origin
 let allTasks = []
 let allOptions = {}
+let availableBranches = []
+let currentGitBranch = null
 let isExecuting = false
 let ws = null
 let reconnectTimer = null
 let dragTaskId = null
+let eventLogs = []
+const MAX_LOG_ENTRIES = 500
 
 // ---- API helpers ----
 async function api(path, method = 'GET', body) {
@@ -268,32 +303,123 @@ async function loadOptions() {
   } catch (e) { showToast('Failed to load options: ' + e.message, 'error') }
 }
 
+async function loadBranches() {
+  try {
+    const data = await api('/api/branches')
+    const branches = Array.isArray(data.branches) ? data.branches.filter(Boolean) : []
+    currentGitBranch = typeof data.current === 'string' && data.current ? data.current : null
+    if (currentGitBranch && !branches.includes(currentGitBranch)) branches.unshift(currentGitBranch)
+    availableBranches = branches
+  } catch (e) {
+    availableBranches = []
+    showToast('Failed to load branches: ' + e.message, 'error')
+  }
+}
+
+function addLogEntry(message, variant = 'info') {
+  const ts = new Date().toLocaleTimeString()
+  eventLogs.push({ ts, message, variant })
+  if (eventLogs.length > MAX_LOG_ENTRIES) eventLogs = eventLogs.slice(-MAX_LOG_ENTRIES)
+  renderLogs()
+}
+
+function renderLogs() {
+  const container = document.getElementById('eventLog')
+  container.innerHTML = ''
+  for (const entry of eventLogs) {
+    const line = document.createElement('div')
+    line.className = `log-item ${entry.variant}`
+    line.textContent = `[${entry.ts}] ${entry.message}`
+    container.appendChild(line)
+  }
+  container.scrollTop = container.scrollHeight
+}
+
+function clearLogs() {
+  eventLogs = []
+  renderLogs()
+}
+
+function getFallbackBranch() {
+  const preferred = allOptions.branch
+  if (preferred && availableBranches.includes(preferred)) return preferred
+  if (currentGitBranch && availableBranches.includes(currentGitBranch)) return currentGitBranch
+  return availableBranches[0] || ''
+}
+
+function populateBranchSelect(selectId, selectedBranch) {
+  const select = document.getElementById(selectId)
+  if (!select) return
+  const branches = availableBranches.filter(Boolean)
+  const desired = selectedBranch && branches.includes(selectedBranch)
+    ? selectedBranch
+    : getFallbackBranch()
+
+  select.innerHTML = ''
+  if (branches.length === 0) {
+    const opt = document.createElement('option')
+    opt.value = ''
+    opt.textContent = 'No branches found'
+    select.appendChild(opt)
+    select.value = ''
+    return
+  }
+
+  for (const branch of branches) {
+    const opt = document.createElement('option')
+    opt.value = branch
+    opt.textContent = branch
+    select.appendChild(opt)
+  }
+  select.value = desired || branches[0]
+}
+
+function logTaskTransition(prevTask, nextTask) {
+  if (!prevTask || prevTask.status !== nextTask.status) {
+    if (nextTask.status === 'executing') addLogEntry(`Task started: ${nextTask.name}`)
+    if (nextTask.status === 'done') addLogEntry(`Task completed: ${nextTask.name}`, 'success')
+    if (nextTask.status === 'failed' || nextTask.status === 'stuck') {
+      const suffix = nextTask.errorMessage ? ` - ${nextTask.errorMessage}` : ''
+      addLogEntry(`Task failed: ${nextTask.name}${suffix}`, 'error')
+    }
+  }
+}
+
 // ---- WebSocket ----
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
   ws = new WebSocket(`${proto}//${location.host}/ws`)
   ws.onopen = () => {
     document.getElementById('connStatus').className = 'conn-status connected'
+    addLogEntry('WebSocket connected')
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   }
   ws.onclose = () => {
     document.getElementById('connStatus').className = 'conn-status disconnected'
+    addLogEntry('WebSocket disconnected', 'error')
     reconnectTimer = setTimeout(connectWS, 2000)
   }
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data)
     switch (msg.type) {
-      case 'task_created': allTasks.push(msg.payload); renderBoard(); break
+      case 'task_created':
+        allTasks.push(msg.payload)
+        addLogEntry(`Task created: ${msg.payload.name}`)
+        renderBoard()
+        break
       case 'task_updated':
+        const previous = allTasks.find(t => t.id === msg.payload.id)
         const ui = allTasks.findIndex(t => t.id === msg.payload.id)
         if (ui >= 0) allTasks[ui] = msg.payload; else allTasks.push(msg.payload)
+        logTaskTransition(previous, msg.payload)
         renderBoard(); break
       case 'task_deleted':
+        addLogEntry(`Task deleted: ${allTasks.find(t => t.id === msg.payload.id)?.name || msg.payload.id}`)
         allTasks = allTasks.filter(t => t.id !== msg.payload.id); renderBoard(); break
-      case 'task_reordered': loadTasks(); break
-      case 'options_updated': loadOptions(); break
-      case 'execution_started': isExecuting = true; updateStartBtn(); break
-      case 'execution_stopped': isExecuting = false; updateStartBtn(); break
+      case 'task_reordered': addLogEntry('Task order updated'); loadTasks(); break
+      case 'options_updated': addLogEntry('Options updated'); loadOptions(); break
+      case 'execution_started': isExecuting = true; addLogEntry('Execution started'); updateStartBtn(); break
+      case 'execution_stopped': isExecuting = false; addLogEntry('Execution stopped'); updateStartBtn(); break
       case 'execution_complete': showToast('All tasks completed!', 'success'); break
       case 'agent_output':
         const t = allTasks.find(t2 => t2.id === msg.payload.taskId)
@@ -326,7 +452,6 @@ function renderBoard() {
   for (const status of ['backlog', 'executing', 'review', 'done']) {
     document.getElementById(`count-${status}`).textContent = groups[status].length
     const col = document.getElementById(`col-${status}`)
-    const addBtn = col.querySelector('.add-task-btn')
     col.innerHTML = ''
     for (const task of groups[status]) {
       col.appendChild(renderCard(task, status))
@@ -390,15 +515,12 @@ function renderCard(task, colStatus) {
   // Actions
   const actions = document.createElement('div')
   actions.className = 'card-actions'
-  
-  // Edit button (backlog, stuck, failed)
-  if (colStatus === 'backlog' || task.status === 'stuck' || task.status === 'failed') {
-    const editBtn = document.createElement('button')
-    editBtn.textContent = '\u270F'
-    editBtn.title = 'Edit Task'
-    editBtn.onclick = () => openTaskModal(task.id)
-    actions.appendChild(editBtn)
-  }
+
+  const editBtn = document.createElement('button')
+  editBtn.textContent = '\u270F'
+  editBtn.title = task.status === 'backlog' ? 'Edit Task' : 'View Task'
+  editBtn.onclick = () => openTaskModal(task.id)
+  actions.appendChild(editBtn)
   
   // Reset to backlog (stuck, failed, done, review)
   if (task.status === 'stuck' || task.status === 'failed' || task.status === 'done' || task.status === 'review') {
@@ -458,6 +580,18 @@ function renderCard(task, colStatus) {
     const b = document.createElement('span')
     b.className = 'badge badge-stuck'
     b.textContent = 'error'
+    meta.appendChild(b)
+  }
+  if (task.branch) {
+    const b = document.createElement('span')
+    b.className = 'badge'
+    b.textContent = `branch: ${task.branch}`
+    meta.appendChild(b)
+  }
+  if (task.deleteWorktree === false) {
+    const b = document.createElement('span')
+    b.className = 'badge'
+    b.textContent = 'keep worktree'
     meta.appendChild(b)
   }
   if (meta.children.length > 0) card.appendChild(meta)
@@ -536,30 +670,42 @@ async function handleDrop(e, targetStatus) {
 function openTaskModal(taskId) {
   const modal = document.getElementById('taskModal')
   const title = document.getElementById('taskModalTitle')
+  const saveBtn = document.getElementById('taskSaveBtn')
+  let viewOnly = false
+
   if (taskId) {
     const task = allTasks.find(t => t.id === taskId)
     if (!task) return
-    title.textContent = 'Edit Task'
+    viewOnly = task.status !== 'backlog'
+    title.textContent = viewOnly ? 'View Task' : 'Edit Task'
     document.getElementById('taskId').value = task.id
     document.getElementById('taskName').value = task.name
     document.getElementById('taskPrompt').value = task.prompt
+    populateBranchSelect('taskBranch', task.branch || getFallbackBranch())
+    document.getElementById('taskBranch').value = task.branch || getFallbackBranch()
     document.getElementById('taskPlanModel').value = task.planModel
     document.getElementById('taskExecModel').value = task.executionModel
     document.getElementById('taskPlanmode').checked = task.planmode
     document.getElementById('taskReview').checked = task.review
     document.getElementById('taskAutoCommit').checked = task.autoCommit
+    document.getElementById('taskDeleteWorktree').checked = task.deleteWorktree !== false
   } else {
     title.textContent = 'Add Task'
     document.getElementById('taskId').value = ''
     document.getElementById('taskName').value = ''
     document.getElementById('taskPrompt').value = ''
+    populateBranchSelect('taskBranch', getFallbackBranch())
+    document.getElementById('taskBranch').value = getFallbackBranch()
     document.getElementById('taskPlanModel').value = 'default'
     document.getElementById('taskExecModel').value = 'default'
     document.getElementById('taskPlanmode').checked = false
     document.getElementById('taskReview').checked = true
     document.getElementById('taskAutoCommit').checked = true
+    document.getElementById('taskDeleteWorktree').checked = true
   }
-  renderReqs(taskId)
+  saveBtn.style.display = viewOnly ? 'none' : ''
+  setTaskModalReadOnly(viewOnly)
+  renderReqs(taskId, viewOnly)
   modal.classList.remove('hidden')
 }
 
@@ -567,22 +713,33 @@ function closeTaskModal() {
   document.getElementById('taskModal').classList.add('hidden')
 }
 
-function renderReqs(excludeId) {
+function setTaskModalReadOnly(readOnly) {
+  const body = document.querySelector('#taskModal .modal-body')
+  for (const field of body.querySelectorAll('input, textarea, select')) {
+    if (field.id === 'taskId') continue
+    field.disabled = readOnly
+  }
+}
+
+function renderReqs(excludeId, readOnly = false) {
   const container = document.getElementById('taskReqs')
   container.innerHTML = ''
-  const backlogTasks = allTasks.filter(t => t.status === 'backlog' && t.id !== excludeId)
+  const sourceTasks = readOnly
+    ? allTasks.filter(t => t.id !== excludeId)
+    : allTasks.filter(t => t.status === 'backlog' && t.id !== excludeId)
   const currentReqs = excludeId ? (allTasks.find(t => t.id === excludeId)?.requirements || []) : []
-  if (backlogTasks.length === 0) {
-    container.innerHTML = '<div style="font-size:12px;color:var(--text-dim);padding:4px;">No other backlog tasks</div>'
+  if (sourceTasks.length === 0) {
+    container.innerHTML = '<div style="font-size:12px;color:var(--text-dim);padding:4px;">No other tasks</div>'
     return
   }
-  for (const t of backlogTasks) {
+  for (const t of sourceTasks) {
     const item = document.createElement('label')
     item.className = 'req-item'
     const cb = document.createElement('input')
     cb.type = 'checkbox'
     cb.value = t.id
     cb.checked = currentReqs.includes(t.id)
+    cb.disabled = readOnly
     item.appendChild(cb)
     item.appendChild(document.createTextNode(` ${t.name} (#${t.idx + 1})`))
     container.appendChild(item)
@@ -591,19 +748,31 @@ function renderReqs(excludeId) {
 
 async function saveTask() {
   const id = document.getElementById('taskId').value
+  if (id) {
+    const task = allTasks.find(t => t.id === id)
+    if (task && task.status !== 'backlog') {
+      showToast('Only backlog tasks can be edited', 'error')
+      return
+    }
+  }
+
   const name = document.getElementById('taskName').value.trim()
   const prompt = document.getElementById('taskPrompt').value.trim()
+  const branch = document.getElementById('taskBranch').value
   if (!name || !prompt) { showToast('Name and prompt are required', 'error'); return }
+  if (!branch) { showToast('Select a valid branch', 'error'); return }
 
   const reqs = Array.from(document.querySelectorAll('#taskReqs input:checked')).map(cb => cb.value)
   const data = {
     name,
     prompt,
+    branch,
     planModel: document.getElementById('taskPlanModel').value.trim() || 'default',
     executionModel: document.getElementById('taskExecModel').value.trim() || 'default',
     planmode: document.getElementById('taskPlanmode').checked,
     review: document.getElementById('taskReview').checked,
     autoCommit: document.getElementById('taskAutoCommit').checked,
+    deleteWorktree: document.getElementById('taskDeleteWorktree').checked,
     requirements: reqs,
   }
 
@@ -658,7 +827,9 @@ async function resetTask(id) {
 
 // ---- Options ----
 function openOptionsModal() {
+  populateBranchSelect('optBranch', allOptions.branch || getFallbackBranch())
   document.getElementById('optCommitPrompt').value = allOptions.commitPrompt || ''
+  document.getElementById('optBranch').value = allOptions.branch || getFallbackBranch()
   document.getElementById('optPlanModel').value = allOptions.planModel || 'default'
   document.getElementById('optExecModel').value = allOptions.executionModel || 'default'
   document.getElementById('optCommand').value = allOptions.command || ''
@@ -672,8 +843,15 @@ function closeOptionsModal() {
 
 async function saveOptions() {
   try {
+    const branch = document.getElementById('optBranch').value
+    if (!branch) {
+      showToast('Select a valid default branch', 'error')
+      return
+    }
+
     await api('/api/options', 'PUT', {
       commitPrompt: document.getElementById('optCommitPrompt').value,
+      branch,
       planModel: document.getElementById('optPlanModel').value,
       executionModel: document.getElementById('optExecModel').value,
       command: document.getElementById('optCommand').value,
@@ -697,6 +875,7 @@ async function toggleExecution() {
 
 // ---- Toasts ----
 function showToast(msg, variant = 'info') {
+  addLogEntry(msg, variant)
   const container = document.getElementById('toasts')
   const toast = document.createElement('div')
   toast.className = `toast toast-${variant}`
@@ -708,7 +887,9 @@ function showToast(msg, variant = 'info') {
 // ---- Init ----
 async function init() {
   await loadOptions()
+  await loadBranches()
   await loadTasks()
+  addLogEntry('Kanban UI ready')
   connectWS()
 }
 init()

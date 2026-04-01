@@ -317,6 +317,22 @@ export class Orchestrator {
     }
   }
 
+  private resolveTargetBranch(task: Task, options: Options, worktreeInfo?: any): string {
+    const taskBranch = typeof task.branch === "string" ? task.branch.trim() : ""
+    if (taskBranch) return taskBranch
+
+    const optionBranch = typeof options.branch === "string" ? options.branch.trim() : ""
+    if (optionBranch) return optionBranch
+
+    const worktreeBaseRef = typeof worktreeInfo?.baseRef === "string" ? worktreeInfo.baseRef.trim() : ""
+    if (worktreeBaseRef) return worktreeBaseRef
+
+    const worktreeBranch = typeof worktreeInfo?.branch === "string" ? worktreeInfo.branch.trim() : ""
+    if (worktreeBranch) return worktreeBranch
+
+    return "main"
+  }
+
   private extractExecutionFailure(result: any): string | null {
     const parts = result?.parts
     if (!Array.isArray(parts)) return null
@@ -586,8 +602,11 @@ export class Orchestrator {
       if (currentTask.autoCommit && worktreeInfo) {
         try {
           appendDebugLog("info", "sending commit prompt to agent", { taskId: task.id })
-          const baseRef = worktreeInfo.baseRef || worktreeInfo.branch || "main"
-          const commitPromptText = options.commitPrompt.replace(/\{\{base_ref\}\}/g, baseRef)
+          const baseRef = this.resolveTargetBranch(currentTask, options, worktreeInfo)
+          let commitPromptText = options.commitPrompt.replace(/\{\{base_ref\}\}/g, baseRef)
+          if (!currentTask.deleteWorktree) {
+            commitPromptText += "\n\nImportant: do NOT delete the worktree at the end; keep it for manual follow-up."
+          }
           
           const commitResponse = await client.session.prompt({
             sessionID: sessionId,
@@ -613,49 +632,71 @@ export class Orchestrator {
       if (worktreeInfo) {
         try {
           appendDebugLog("info", "merging worktree", { taskId: task.id, branch: worktreeInfo.branch })
-          const { execSync } = await import("child_process")
+          const { execSync, execFileSync } = await import("child_process")
 
-          // Resolve merge target branch from worktree metadata first, then git defaults
-          let mainBranch = typeof worktreeInfo.baseRef === "string" && worktreeInfo.baseRef.trim()
-            ? worktreeInfo.baseRef.trim()
-            : ""
-          try {
-            const defaultBranch = execSync("git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true", { encoding: "utf-8", stdio: "pipe" }).trim()
-            if (defaultBranch.startsWith("origin/")) {
-              mainBranch = mainBranch || defaultBranch.slice("origin/".length)
-            } else if (defaultBranch && !mainBranch) {
-              mainBranch = defaultBranch
-            }
-          } catch {}
-
-          if (!mainBranch) {
+          // Resolve merge target branch from task/options first, then git defaults.
+          let mainBranch = this.resolveTargetBranch(currentTask, options, worktreeInfo)
+          let hasTargetBranch = false
+          if (mainBranch) {
             try {
-              mainBranch = execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf-8", stdio: "pipe" }).trim()
+              execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${mainBranch}`], {
+                cwd: worktreeInfo.directory,
+                stdio: "ignore",
+              })
+              hasTargetBranch = true
             } catch {
-              mainBranch = "main"
+              hasTargetBranch = false
             }
           }
 
-          if (mainBranch !== "main" && mainBranch !== "master") {
+          if (!hasTargetBranch) {
             try {
-              execSync("git show-ref --verify --quiet refs/heads/main", { stdio: "ignore" })
-              mainBranch = "main"
-            } catch {
-              try {
-                execSync("git show-ref --verify --quiet refs/heads/master", { stdio: "ignore" })
-                mainBranch = "master"
-              } catch (err) {
-                appendDebugLog("warn", "could not verify master branch", { taskId: task.id, error: String(err) })
+              const defaultBranch = execSync("git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true", {
+                cwd: worktreeInfo.directory,
+                encoding: "utf-8",
+                stdio: "pipe",
+              }).trim()
+              if (defaultBranch.startsWith("origin/")) {
+                mainBranch = defaultBranch.slice("origin/".length)
+              } else if (defaultBranch) {
+                mainBranch = defaultBranch
               }
+            } catch {}
+
+            if (!mainBranch) {
+              try {
+                mainBranch = execSync("git rev-parse --abbrev-ref HEAD", {
+                  cwd: worktreeInfo.directory,
+                  encoding: "utf-8",
+                  stdio: "pipe",
+                }).trim()
+              } catch {
+                mainBranch = "main"
+              }
+            }
+
+            try {
+              execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${mainBranch}`], {
+                cwd: worktreeInfo.directory,
+                stdio: "ignore",
+              })
+            } catch {
+              mainBranch = "main"
             }
           }
 
           if (mainBranch === "main") {
             try {
-              execSync("git show-ref --verify --quiet refs/heads/main", { stdio: "ignore" })
+              execFileSync("git", ["show-ref", "--verify", "--quiet", "refs/heads/main"], {
+                cwd: worktreeInfo.directory,
+                stdio: "ignore",
+              })
             } catch {
               try {
-                execSync("git show-ref --verify --quiet refs/heads/master", { stdio: "ignore" })
+                execFileSync("git", ["show-ref", "--verify", "--quiet", "refs/heads/master"], {
+                  cwd: worktreeInfo.directory,
+                  stdio: "ignore",
+                })
                 mainBranch = "master"
               } catch (err) {
                 appendDebugLog("warn", "could not verify master fallback branch", { taskId: task.id, error: String(err) })
@@ -664,8 +705,16 @@ export class Orchestrator {
           }
 
           appendDebugLog("info", "merge target branch selected", { taskId: task.id, mainBranch })
-          execSync(`cd "${worktreeInfo.directory}" && git checkout ${mainBranch} 2>/dev/null || true`, { encoding: "utf-8", stdio: "pipe" })
-          execSync(`cd "${worktreeInfo.directory}" && git merge ${worktreeInfo.branch} --no-edit`, { encoding: "utf-8", stdio: "pipe" })
+          try {
+            execFileSync("git", ["checkout", mainBranch], { cwd: worktreeInfo.directory, stdio: "ignore" })
+          } catch {
+            // Branch may be checked out in another worktree.
+          }
+          execFileSync("git", ["merge", worktreeInfo.branch, "--no-edit"], {
+            cwd: worktreeInfo.directory,
+            encoding: "utf-8",
+            stdio: "pipe",
+          })
         } catch (mergeErr) {
           const msg = `Merge failed: ${mergeErr instanceof Error ? mergeErr.message : String(mergeErr)}`
           throw new Error(msg)
@@ -673,7 +722,8 @@ export class Orchestrator {
       }
 
       // 9. Delete worktree
-      if (worktreeInfo?.directory) {
+      const shouldDeleteWorktree = currentTask.deleteWorktree !== false
+      if (worktreeInfo?.directory && shouldDeleteWorktree) {
         try {
           await this.removeWorktree(worktreeInfo.directory)
         } catch (e) {
@@ -683,7 +733,11 @@ export class Orchestrator {
 
       // 10. Mark done
       const now = Math.floor(Date.now() / 1000)
-      this.db.updateTask(task.id, { status: "done", completedAt: now, worktreeDir: null })
+      this.db.updateTask(task.id, {
+        status: "done",
+        completedAt: now,
+        worktreeDir: shouldDeleteWorktree ? null : (worktreeInfo?.directory ?? currentTask.worktreeDir),
+      })
       const doneTask = this.db.getTask(task.id)!
       this.server.broadcast({ type: "task_updated", payload: doneTask })
       appendDebugLog("info", "task completed", { taskId: task.id, taskName: task.name })
@@ -700,7 +754,7 @@ export class Orchestrator {
       this.server.broadcast({ type: "error", payload: { message: `Task \"${task.name}\" failed: ${contextMsg}` } })
 
       // Cleanup worktree on failure
-      if (worktreeInfo?.directory) {
+      if (worktreeInfo?.directory && currentTask.deleteWorktree !== false) {
         try {
           await this.removeWorktree(worktreeInfo.directory)
         } catch (cleanupErr) {
