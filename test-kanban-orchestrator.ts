@@ -46,6 +46,30 @@ const TEST_FILES = [
   join(TEST_DIR, "goodbye.txt"),
 ];
 
+async function listGitWorktrees(): Promise<Set<string>> {
+  const output = await Bun.$`git worktree list --porcelain`.text();
+  const paths = new Set<string>();
+  for (const line of output.split("\n")) {
+    if (line.startsWith("worktree ")) {
+      paths.add(line.slice("worktree ".length).trim());
+    }
+  }
+  return paths;
+}
+
+async function cleanupNewWorktrees(baseline: Set<string>): Promise<void> {
+  const current = await listGitWorktrees();
+  for (const path of current) {
+    if (baseline.has(path)) continue;
+    try {
+      await Bun.$`git worktree remove --force ${path}`;
+      console.log(`Removed worktree: ${path}`);
+    } catch (err) {
+      console.warn(`Failed to remove worktree ${path}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+}
+
 async function cleanup() {
   console.log("\nCleaning up test artifacts...");
   
@@ -158,6 +182,18 @@ async function pollForCondition(
   return false;
 }
 
+function getFreePort(): number {
+  const probe = Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response("ok");
+    },
+  });
+  const { port } = probe;
+  probe.stop();
+  return port;
+}
+
 async function main() {
   console.log("=== Kanban Task Orchestrator E2E Test ===\n");
   console.log("Test: Two tasks with dependency (B depends on A)");
@@ -167,6 +203,7 @@ async function main() {
   let kanbanServer: KanbanServer | null = null;
   let kanbanDb: KanbanDB | null = null;
   let orchestrator: Orchestrator | null = null;
+  let baselineWorktrees: Set<string> = new Set();
   
   try {
     // Pre-cleanup
@@ -182,12 +219,15 @@ async function main() {
     const opencode = await createOpencode({ port: 0 });
     server = opencode.server;
     const client = opencode.client;
+    baselineWorktrees = await listGitWorktrees();
     
     console.log(`Server started at ${server.url}`);
     
     // Initialize Kanban components directly
     console.log("\nInitializing Kanban components...");
     kanbanDb = new KanbanDB(DB_PATH);
+    const kanbanPort = getFreePort();
+    kanbanDb.updateOptions({ port: kanbanPort });
     
     let isExecuting = false;
     kanbanServer = new KanbanServer(kanbanDb, {
@@ -201,19 +241,20 @@ async function main() {
         if (orchestrator) orchestrator.stop();
       },
       getExecuting: () => isExecuting,
+      getStartError: () => (orchestrator ? orchestrator.preflightStartError() : "Kanban orchestrator is not ready"),
     });
     
     orchestrator = new Orchestrator(kanbanDb, kanbanServer, server.url, TEST_DIR);
     
-    const kanbanPort = kanbanServer.start();
-    console.log(`Kanban server started on port: ${kanbanPort}`);
+    const startedKanbanPort = kanbanServer.start();
+    console.log(`Kanban server started on port: ${startedKanbanPort}`);
     
     // Wait for components to be ready
     await waitFor(1000);
     
     // Create Task A via API
     console.log("\nCreating Task A...");
-    const taskAResponse = await fetch(`http://localhost:${kanbanPort}/api/tasks`, {
+    const taskAResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(TASK_A),
@@ -233,7 +274,7 @@ async function main() {
       requirements: [taskA.id],
     };
     
-    const taskBResponse = await fetch(`http://localhost:${kanbanPort}/api/tasks`, {
+    const taskBResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(taskBWithDep),
@@ -249,7 +290,7 @@ async function main() {
     
     // Start execution
     console.log("\nStarting task execution...");
-    const startResponse = await fetch(`http://localhost:${kanbanPort}/api/start`, {
+    const startResponse = await fetch(`http://localhost:${startedKanbanPort}/api/start`, {
       method: "POST",
     });
     
@@ -266,7 +307,7 @@ async function main() {
     
     // Poll for completion
     const completed = await pollForCondition(() => {
-      const tasksResp = fetch(`http://localhost:${kanbanPort}/api/tasks`).then(r => r.json()).catch(() => []);
+      const tasksResp = fetch(`http://localhost:${startedKanbanPort}/api/tasks`).then(r => r.json()).catch(() => []);
       return tasksResp.then((tasks: any[]) => tasks.every((t: any) => t.status === "done"));
     }, 120000, 2000);
     
@@ -277,7 +318,7 @@ async function main() {
     console.log("\n=== Test Results ===");
     
     // Check task statuses via API
-    const tasksResponse = await fetch(`http://localhost:${kanbanPort}/api/tasks`);
+    const tasksResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks`);
     const allTasks = await tasksResponse.json();
     
     console.log(`\nTask Statuses:`);
@@ -301,6 +342,7 @@ async function main() {
     
     // Cleanup
     await cleanup();
+    await cleanupNewWorktrees(baselineWorktrees);
     
     // Stop kanban server
     kanbanServer.stop();
@@ -317,6 +359,7 @@ async function main() {
   } catch (error) {
     console.error("\nTest failed with error:", error);
     await cleanup();
+    await cleanupNewWorktrees(baselineWorktrees);
     if (kanbanServer) kanbanServer.stop();
     if (kanbanDb) kanbanDb.close();
     if (server) server.close();

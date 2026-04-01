@@ -162,9 +162,6 @@ async function main() {
     // Cleanup
     await cleanup();
     
-    // Delete test session
-    await client.session.delete({ path: { id: session.id } });
-    
     // Close server
     server.close();
     

@@ -40,7 +40,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 .card:hover { border-color: var(--text-dim); }
 .card.dragging { opacity: .5; }
 .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.card-title { font-size: 14px; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-title { font-size: 14px; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); text-decoration: none; }
 .card-title.has-session { color: var(--accent); cursor: pointer; }
 .card-title.has-session:hover { text-decoration: underline; }
 .card-idx { font-size: 11px; background: var(--surface); border-radius: 4px; padding: 2px 6px; margin-left: 8px; color: var(--text-dim); flex-shrink: 0; }
@@ -356,13 +356,17 @@ function renderCard(task, colStatus) {
   const header = document.createElement('div')
   header.className = 'card-header'
 
-  const title = document.createElement('span')
+  const title = task.sessionUrl && colStatus !== 'backlog'
+    ? document.createElement('a')
+    : document.createElement('span')
   title.className = 'card-title'
   title.textContent = task.name
-  if (task.sessionUrl) {
+  if (task.sessionUrl && colStatus !== 'backlog') {
+    title.href = task.sessionUrl
+    title.target = '_blank'
+    title.rel = 'noopener noreferrer'
     title.classList.add('has-session')
     title.title = 'Open session in Opencode'
-    title.onclick = () => window.open(task.sessionUrl, '_blank')
   }
   header.appendChild(title)
 

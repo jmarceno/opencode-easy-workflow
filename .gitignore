@@ -3,7 +3,7 @@ temp
 .claude
 .opencode/easy-workflow/runs
 .opencode/easy-workflow/tasks.db*
-
+.opencode/easy-workflow/test-artifacts
 
 # Logs
 logs

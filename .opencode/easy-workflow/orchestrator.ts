@@ -199,21 +199,62 @@ function resolveBatches(tasks: Task[], parallelLimit: number): Task[][] {
 export class Orchestrator {
   private db: KanbanDB
   private server: KanbanServer
-  private serverUrl: string
+  private serverUrlSource: string | (() => string | null)
   private worktreeDir: string
   private running = false
   private shouldStop = false
   private providerCatalog: any | null = null
 
-  constructor(db: KanbanDB, server: KanbanServer, serverUrl: string, worktreeDir: string) {
+  constructor(db: KanbanDB, server: KanbanServer, serverUrl: string | (() => string | null), worktreeDir: string) {
     this.db = db
     this.server = server
-    this.serverUrl = serverUrl
+    this.serverUrlSource = serverUrl
     this.worktreeDir = worktreeDir
   }
 
-  private getClient(directory?: string) {
-    return createV2Client(this.serverUrl, directory || this.worktreeDir)
+  private resolveServerUrl(): string {
+    const raw = typeof this.serverUrlSource === "function"
+      ? this.serverUrlSource()
+      : this.serverUrlSource
+
+    if (!raw || !raw.trim()) {
+      throw new Error("OpenCode server URL is unavailable for this plugin instance")
+    }
+
+    let parsed: URL
+    try {
+      parsed = new URL(raw)
+    } catch {
+      throw new Error(`OpenCode server URL is invalid: ${raw}`)
+    }
+
+    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.port === "0") {
+      throw new Error(`OpenCode server URL is invalid: ${raw}`)
+    }
+
+    return parsed.origin
+  }
+
+  private getClient(directory?: string, serverUrl?: string) {
+    return createV2Client(serverUrl || this.resolveServerUrl(), directory || this.worktreeDir)
+  }
+
+  preflightStartError(): string | null {
+    if (this.running) {
+      return "Already executing"
+    }
+
+    if (this.db.getTasksByStatus("backlog").length === 0) {
+      return "No tasks in backlog"
+    }
+
+    try {
+      this.resolveServerUrl()
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err)
+    }
+
+    return null
   }
 
   private async createWorktree(name: string): Promise<any> {
@@ -307,6 +348,11 @@ export class Orchestrator {
   async start() {
     if (this.running) return
 
+    const preflightError = this.preflightStartError()
+    if (preflightError) {
+      throw new Error(preflightError)
+    }
+
     const tasks = this.db.getTasksByStatus("backlog")
     if (tasks.length === 0) {
       throw new Error("No tasks in backlog")
@@ -315,7 +361,13 @@ export class Orchestrator {
     this.running = true
     this.shouldStop = false
     this.providerCatalog = null
-    appendDebugLog("info", "orchestrator starting", { taskCount: tasks.length, serverUrl: this.serverUrl })
+    let resolvedServerUrl = "unresolved"
+    try {
+      resolvedServerUrl = this.resolveServerUrl()
+    } catch {
+      // Keep unresolved marker; execution will fail with explicit error later.
+    }
+    appendDebugLog("info", "orchestrator starting", { taskCount: tasks.length, serverUrl: resolvedServerUrl })
     this.server.broadcast({ type: "execution_started", payload: {} })
 
     try {
@@ -343,7 +395,13 @@ export class Orchestrator {
       this.server.broadcast({ type: "execution_complete", payload: {} })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      appendDebugLog("error", "orchestrator execution failed", { error: msg, serverUrl: this.serverUrl })
+      let resolvedServerUrl = "unresolved"
+      try {
+        resolvedServerUrl = this.resolveServerUrl()
+      } catch {
+        // Keep unresolved marker in logs.
+      }
+      appendDebugLog("error", "orchestrator execution failed", { error: msg, serverUrl: resolvedServerUrl })
       this.server.broadcast({ type: "error", payload: { message: msg } })
     } finally {
       this.running = false
@@ -377,11 +435,12 @@ export class Orchestrator {
 
     let worktreeInfo: any = null
     let sessionId: string | null = null
-    const client = this.getClient()
+    const resolvedServerUrl = this.resolveServerUrl()
+    const client = this.getClient(undefined, resolvedServerUrl)
 
     try {
       // 1. Create worktree
-      appendDebugLog("info", "creating worktree", { taskId: task.id, taskName: task.name, serverUrl: this.serverUrl })
+      appendDebugLog("info", "creating worktree", { taskId: task.id, taskName: task.name, serverUrl: resolvedServerUrl })
       worktreeInfo = await this.createWorktree(`task-${task.id}`)
       if (!worktreeInfo?.directory) {
         throw new Error(`Worktree creation returned invalid response: ${JSON.stringify(worktreeInfo)}`)
@@ -431,9 +490,10 @@ export class Orchestrator {
       if (!sessionId) {
         throw new Error("Failed to create session: no ID returned")
       }
-      const sessionUrl = buildSessionUrl(this.serverUrl, this.worktreeDir, sessionId)
+      const sessionUrl = buildSessionUrl(resolvedServerUrl, this.worktreeDir, sessionId)
       this.db.updateTask(task.id, { sessionId, sessionUrl })
       currentTask = this.db.getTask(task.id)!
+      this.server.broadcast({ type: "task_updated", payload: currentTask })
 
       // 4. Determine model
       const executionModel = task.executionModel !== "default"
@@ -631,9 +691,9 @@ export class Orchestrator {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       const contextMsg = msg.includes("fetch") || msg.includes("connect") || msg.includes("ECONNREFUSED")
-        ? `${msg} (opencode server: ${this.serverUrl})`
+        ? `${msg} (opencode server: ${resolvedServerUrl})`
         : msg
-      appendDebugLog("error", "task execution failed", { taskId: task.id, error: contextMsg, serverUrl: this.serverUrl })
+      appendDebugLog("error", "task execution failed", { taskId: task.id, error: contextMsg, serverUrl: resolvedServerUrl })
       this.db.updateTask(task.id, { status: "failed", errorMessage: contextMsg })
       const updated = this.db.getTask(task.id)!
       this.server.broadcast({ type: "task_updated", payload: updated })
@@ -654,15 +714,6 @@ export class Orchestrator {
 
       this.shouldStop = true
       throw err
-    } finally {
-      // Cleanup session
-      if (sessionId) {
-        try {
-          await client.session.delete({ sessionID: sessionId })
-        } catch (deleteErr) {
-          appendDebugLog("warn", "session cleanup failed", { taskId: task.id, sessionId, error: String(deleteErr) })
-        }
-      }
     }
   }
 

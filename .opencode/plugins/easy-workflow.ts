@@ -90,6 +90,30 @@ let kanbanDb: KanbanDB | null = null;
 let kanbanServer: KanbanServer | null = null;
 let orchestrator: Orchestrator | null = null;
 
+type KanbanSingletonState = {
+  db: KanbanDB | null;
+  server: KanbanServer | null;
+  orchestrator: Orchestrator | null;
+  ownerDirectory: string | null;
+  initPromise: Promise<void> | null;
+};
+
+const KANBAN_SINGLETON_KEY = "__easyWorkflowKanbanSingleton";
+
+function getKanbanSingletonState(): KanbanSingletonState {
+  const runtime = globalThis as typeof globalThis & { [KANBAN_SINGLETON_KEY]?: KanbanSingletonState };
+  if (!runtime[KANBAN_SINGLETON_KEY]) {
+    runtime[KANBAN_SINGLETON_KEY] = {
+      db: null,
+      server: null,
+      orchestrator: null,
+      ownerDirectory: null,
+      initPromise: null,
+    };
+  }
+  return runtime[KANBAN_SINGLETON_KEY]!;
+}
+
 // ---- Utility functions ----
 
 function formatErrorToast(message: string): string {
@@ -846,41 +870,167 @@ async function withRunningLock<T>(runPath: string, fn: () => Promise<T>): Promis
   }
 }
 
+function resolveOpencodeServerUrl(serverUrl: unknown): string | null {
+  const toOrigin = (value: string): string | null => {
+    try {
+      const parsed = new URL(value);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return null;
+      }
+      if (parsed.port === "0") {
+        return null;
+      }
+      return parsed.origin;
+    } catch {
+      return null;
+    }
+  };
+
+  if (serverUrl instanceof URL) {
+    const origin = toOrigin(serverUrl.toString());
+    if (origin) return origin;
+  }
+
+  if (typeof serverUrl === "string" && serverUrl.trim()) {
+    const origin = toOrigin(serverUrl.trim());
+    if (origin) return origin;
+  }
+
+  return null;
+}
+
+function resolveOpencodeServerUrlFromClient(client: unknown): string | null {
+  const candidateBaseUrl =
+    (client as any)?.client?.getConfig?.()?.baseUrl ??
+    (client as any)?._client?.getConfig?.()?.baseUrl ??
+    (client as any)?.baseUrl ??
+    (client as any)?.url;
+
+  return resolveOpencodeServerUrl(candidateBaseUrl);
+}
+
+function createStableOpencodeServerUrlResolver(readServerUrl: () => unknown, readClient?: () => unknown): () => string | null {
+  let stableServerUrl: string | null = null;
+
+  return () => {
+    let rawServerUrl: unknown = null;
+    try {
+      rawServerUrl = readServerUrl();
+    } catch {
+      rawServerUrl = null;
+    }
+
+    const resolved = resolveOpencodeServerUrl(rawServerUrl);
+    if (resolved) {
+      if (!stableServerUrl) {
+        stableServerUrl = resolved;
+      }
+      return stableServerUrl;
+    }
+
+    if (readClient) {
+      let rawClient: unknown = null;
+      try {
+        rawClient = readClient();
+      } catch {
+        rawClient = null;
+      }
+
+      const fromClient = resolveOpencodeServerUrlFromClient(rawClient);
+      if (fromClient) {
+        if (!stableServerUrl) {
+          stableServerUrl = fromClient;
+        }
+        return stableServerUrl;
+      }
+    }
+
+    return stableServerUrl;
+  };
+}
+
 // ---- Plugin export ----
 
-export const EasyWorkflowPlugin = async ({ client, directory, serverUrl }: any) => {
+export const EasyWorkflowPlugin = async (input: any) => {
+  const { client, directory } = input;
+  const singleton = getKanbanSingletonState();
+  kanbanDb = singleton.db;
+  kanbanServer = singleton.server;
+  orchestrator = singleton.orchestrator;
+
+  const getOpencodeServerUrl = createStableOpencodeServerUrlResolver(
+    () => input.serverUrl,
+    () => input.client,
+  );
+  const opencodeServerUrl = getOpencodeServerUrl();
+
   await log(client, "info", "workflow plugin initialized", {
     templatePath: TEMPLATE_PATH,
     runsDir: RUNS_DIR,
     agentsDir: AGENTS_DIR,
+    opencodeServerUrl,
   });
 
-  // Initialize kanban system (non-blocking)
-  (async () => {
+  // Initialize kanban system (non-blocking, singleton per process)
+  if (!singleton.server && !singleton.initPromise) {
+    singleton.initPromise = (async () => {
+    let nextDb: KanbanDB | null = null;
+    let nextServer: KanbanServer | null = null;
+    let nextOrchestrator: Orchestrator | null = null;
     try {
       const dbPath = join(directory || WORKFLOW_ROOT, ".opencode", "easy-workflow", "tasks.db");
-      kanbanDb = new KanbanDB(dbPath);
+      nextDb = new KanbanDB(dbPath);
 
-      kanbanServer = new KanbanServer(kanbanDb, {
+      nextServer = new KanbanServer(nextDb, {
         onStart: async () => {
-          if (orchestrator) await orchestrator.start();
+          if (nextOrchestrator) await nextOrchestrator.start();
         },
         onStop: () => {
-          if (orchestrator) orchestrator.stop();
+          if (nextOrchestrator) nextOrchestrator.stop();
         },
-        getExecuting: () => orchestrator?.isExecuting() ?? false,
+        getExecuting: () => nextOrchestrator?.isExecuting() ?? false,
+        getStartError: () => (nextOrchestrator ? nextOrchestrator.preflightStartError() : "Kanban orchestrator is not ready"),
       });
 
-      orchestrator = new Orchestrator(kanbanDb, kanbanServer, "http://localhost:4096", directory || process.cwd());
+      nextOrchestrator = new Orchestrator(
+        nextDb,
+        nextServer,
+        getOpencodeServerUrl,
+        directory || process.cwd(),
+      );
 
-      const port = kanbanServer.start();
+      const port = nextServer.start();
+      kanbanDb = nextDb;
+      kanbanServer = nextServer;
+      orchestrator = nextOrchestrator;
+      singleton.db = nextDb;
+      singleton.server = nextServer;
+      singleton.orchestrator = nextOrchestrator;
+      singleton.ownerDirectory = directory || process.cwd();
       await log(client, "info", "kanban server started", { port });
       await showToast(client, `Kanban board: http://localhost:${port}`, "success");
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      if (nextServer) {
+        try {
+          nextServer.stop();
+        } catch {}
+      }
+      if (nextDb) {
+        try {
+          nextDb.close();
+        } catch {}
+      }
       await log(client, "error", "kanban initialization failed", { error: msg });
+    } finally {
+      singleton.initPromise = null;
     }
   })();
+  } else if (singleton.server) {
+    await log(client, "info", "kanban initialization skipped; already running", {
+      ownerDirectory: singleton.ownerDirectory,
+    });
+  }
 
   return {
     "chat.message": async (input: any, output: any) => {

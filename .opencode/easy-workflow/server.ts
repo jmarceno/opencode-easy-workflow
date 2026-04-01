@@ -10,6 +10,7 @@ const KANBAN_HTML = readFileSync(join(__dirname, "kanban", "index.html"), "utf-8
 
 type StartFn = () => Promise<void>
 type StopFn = () => void
+type StartPreflightFn = () => string | null
 
 export class KanbanServer {
   private db: KanbanDB
@@ -18,15 +19,17 @@ export class KanbanServer {
   private onStart: StartFn
   private onStop: StopFn
   private getExecuting: () => boolean
+  private getStartError: StartPreflightFn
 
   constructor(
     db: KanbanDB,
-    opts: { onStart: StartFn; onStop: StopFn; getExecuting: () => boolean }
+    opts: { onStart: StartFn; onStop: StopFn; getExecuting: () => boolean; getStartError?: StartPreflightFn }
   ) {
     this.db = db
     this.onStart = opts.onStart
     this.onStop = opts.onStop
     this.getExecuting = opts.getExecuting
+    this.getStartError = opts.getStartError || (() => null)
   }
 
   broadcast(msg: WSMessage) {
@@ -58,6 +61,7 @@ export class KanbanServer {
     })
 
     this.server = server
+    console.log(`[kanban] server started on http://localhost:${server.port}`)
     return server.port
   }
 
@@ -147,6 +151,10 @@ export class KanbanServer {
         const tasks = this.db.getTasksByStatus("backlog")
         if (tasks.length === 0) {
           return this.json({ error: "No tasks in backlog" }, 400)
+        }
+        const preflightError = this.getStartError()
+        if (preflightError) {
+          return this.json({ error: preflightError }, 500)
         }
         this.onStart().catch((err) => {
           const msg = err instanceof Error ? err.message : String(err)
