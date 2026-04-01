@@ -30,8 +30,14 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 /* Board */
 .board { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; padding: 16px; flex: 1; min-height: 0; overflow: hidden; }
 .column { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); display: flex; flex-direction: column; min-height: 200px; }
-.column-header { padding: 12px 16px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--text-dim); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+.column-header { padding: 12px 16px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--text-dim); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .column-header .count { background: var(--surface2); border-radius: 12px; padding: 2px 8px; font-size: 11px; }
+.column-header-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.column[data-status="template"] .column-header { background: rgba(47,129,247,.12); color: #79c0ff; }
+.column[data-status="backlog"] .column-header { background: rgba(210,153,34,.12); color: #f2cc60; }
+.column[data-status="executing"] .column-header { background: rgba(35,134,54,.14); color: #7ee787; }
+.column[data-status="review"] .column-header { background: rgba(139,92,246,.14); color: #c4b5fd; }
+.column[data-status="done"] .column-header { background: rgba(56,189,248,.14); color: #7dd3fc; }
 .column-body { flex: 1; padding: 8px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
 .column-body.drag-over { background: rgba(47,125,247,.08); }
 
@@ -89,6 +95,25 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 /* Form */
 .form-group { margin-bottom: 14px; }
 .form-group label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 4px; color: var(--text-dim); }
+.label-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.label-row label { margin-bottom: 0; }
+.help-btn {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text-dim);
+  cursor: help;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.help-btn:hover { color: var(--text); border-color: var(--accent); }
 .form-group input[type="text"],
 .form-group input[type="number"],
 .form-group textarea,
@@ -148,27 +173,57 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 
 <div class="board">
   <div class="column" data-status="template">
-    <div class="column-header">Templates <span class="count" id="count-template">0</span></div>
+    <div class="column-header">
+      <div class="column-header-main">
+        <span>Templates</span>
+        <button class="help-btn" type="button" title="Reusable task blueprints. Keep common prompts and settings here, then deploy them into the backlog when you need a new task." aria-label="Templates column help">?</button>
+      </div>
+      <span class="count" id="count-template">0</span>
+    </div>
     <div class="column-body" id="col-template">
       <button class="add-task-btn" onclick="openTemplateTaskModal()">+ Add Template</button>
     </div>
   </div>
   <div class="column" data-status="backlog">
-    <div class="column-header">Backlog <span class="count" id="count-backlog">0</span></div>
+    <div class="column-header">
+      <div class="column-header-main">
+        <span>Backlog</span>
+        <button class="help-btn" type="button" title="Ready-to-run tasks waiting for execution. Add, edit, reorder, and set dependencies here before starting work." aria-label="Backlog column help">?</button>
+      </div>
+      <span class="count" id="count-backlog">0</span>
+    </div>
     <div class="column-body" id="col-backlog" ondrop="handleDrop(event,'backlog')" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)">
       <button class="add-task-btn" onclick="openTaskModal()">+ Add Task</button>
     </div>
   </div>
   <div class="column" data-status="executing">
-    <div class="column-header">Executing <span class="count" id="count-executing">0</span></div>
+    <div class="column-header">
+      <div class="column-header-main">
+        <span>Executing</span>
+        <button class="help-btn" type="button" title="Tasks currently being worked on by the agent. Use this column to monitor active runs and open their live sessions." aria-label="Executing column help">?</button>
+      </div>
+      <span class="count" id="count-executing">0</span>
+    </div>
     <div class="column-body" id="col-executing"></div>
   </div>
   <div class="column" data-status="review">
-    <div class="column-header">Review <span class="count" id="count-review">0</span></span></div>
+    <div class="column-header">
+      <div class="column-header-main">
+        <span>Review</span>
+        <button class="help-btn" type="button" title="Tasks that need human attention. Review outputs here, approve plans, or inspect stuck and failed work before deciding the next step." aria-label="Review column help">?</button>
+      </div>
+      <span class="count" id="count-review">0</span>
+    </div>
     <div class="column-body" id="col-review"></div>
   </div>
   <div class="column" data-status="done">
-    <div class="column-header">Done <span class="count" id="count-done">0</span></div>
+    <div class="column-header">
+      <div class="column-header-main">
+        <span>Done</span>
+        <button class="help-btn" type="button" title="Completed tasks. Use this column as the final state once the work and any needed review are finished." aria-label="Done column help">?</button>
+      </div>
+      <span class="count" id="count-done">0</span>
+    </div>
     <div class="column-body" id="col-done"></div>
   </div>
 </div>
@@ -183,27 +238,42 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
     <div class="modal-body">
       <input type="hidden" id="taskId">
       <div class="form-group">
-        <label>Name</label>
+        <div class="label-row">
+          <label for="taskName">Name</label>
+          <button class="help-btn" type="button" title="Short task title shown on the card. Make it specific enough to identify the work at a glance." aria-label="Task name help">?</button>
+        </div>
         <input type="text" id="taskName" placeholder="Task name">
       </div>
       <div class="form-group">
-        <label>Prompt</label>
+        <div class="label-row">
+          <label for="taskPrompt">Prompt</label>
+          <button class="help-btn" type="button" title="The main instructions for the agent. Describe the change, bug, or outcome you want it to produce." aria-label="Task prompt help">?</button>
+        </div>
         <textarea id="taskPrompt" placeholder="What should this task do?"></textarea>
       </div>
       <div class="form-row">
         <div class="form-group">
-          <label>Plan Model</label>
+          <div class="label-row">
+            <label for="taskPlanModel">Plan Model</label>
+            <button class="help-btn" type="button" title="Model used for planning steps before implementation. Use this when you want a specific model to reason about the approach first." aria-label="Task plan model help">?</button>
+          </div>
           <input type="text" id="taskPlanModelSearch" class="model-search" placeholder="Filter models...">
           <select id="taskPlanModel"></select>
         </div>
         <div class="form-group">
-          <label>Execution Model</label>
+          <div class="label-row">
+            <label for="taskExecModel">Execution Model</label>
+            <button class="help-btn" type="button" title="Model used for the actual implementation work. Set this when execution should run on a different model than planning." aria-label="Task execution model help">?</button>
+          </div>
           <input type="text" id="taskExecModelSearch" class="model-search" placeholder="Filter models...">
           <select id="taskExecModel"></select>
         </div>
       </div>
       <div class="form-group">
-        <label>Thinking Level</label>
+        <div class="label-row">
+          <label for="taskThinkingLevel">Thinking Level</label>
+          <button class="help-btn" type="button" title="Controls how much reasoning effort the agent should spend. Higher levels can improve harder tasks but usually take longer." aria-label="Task thinking level help">?</button>
+        </div>
         <select id="taskThinkingLevel">
           <option value="default">Default</option>
           <option value="low">Low</option>
@@ -212,19 +282,25 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
         </select>
       </div>
       <div class="form-group">
-        <label>Branch</label>
+        <div class="label-row">
+          <label for="taskBranch">Branch</label>
+          <button class="help-btn" type="button" title="Git branch the task should run against. Pick the branch where changes should be created or reviewed." aria-label="Task branch help">?</button>
+        </div>
         <select id="taskBranch"></select>
       </div>
       <div class="form-group">
         <div class="checkbox-group">
-          <label><input type="checkbox" id="taskPlanmode"> Plan Mode</label>
-          <label><input type="checkbox" id="taskReview" checked> Review</label>
-          <label><input type="checkbox" id="taskAutoCommit" checked> Auto-commit</label>
-          <label><input type="checkbox" id="taskDeleteWorktree" checked> Delete Worktree</label>
+          <label title="Create a plan first and wait for approval before full execution continues."><input type="checkbox" id="taskPlanmode"> Plan Mode</label>
+          <label title="Run an automated review pass after execution so the task can be checked before completion."><input type="checkbox" id="taskReview" checked> Review</label>
+          <label title="Allow the workflow to create a git commit automatically when the task finishes successfully."><input type="checkbox" id="taskAutoCommit" checked> Auto-commit</label>
+          <label title="Remove the temporary worktree after the task finishes. Disable this if you want to inspect files afterward."><input type="checkbox" id="taskDeleteWorktree" checked> Delete Worktree</label>
         </div>
       </div>
       <div class="form-group">
-        <label>Requirements (dependencies)</label>
+        <div class="label-row">
+          <label for="taskReqs">Requirements (dependencies)</label>
+          <button class="help-btn" type="button" title="Tasks that must be completed before this one should run. Use dependencies to enforce execution order." aria-label="Task requirements help">?</button>
+        </div>
         <div class="req-list" id="taskReqs"></div>
       </div>
     </div>
@@ -244,23 +320,35 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
     </div>
     <div class="modal-body">
       <div class="form-group">
-        <label>Default Branch</label>
+        <div class="label-row">
+          <label for="optBranch">Default Branch</label>
+          <button class="help-btn" type="button" title="Default git branch for new tasks when a task-specific branch is not selected." aria-label="Default branch help">?</button>
+        </div>
         <select id="optBranch"></select>
       </div>
       <div class="form-row">
         <div class="form-group">
-          <label>Plan Model (global)</label>
+          <div class="label-row">
+            <label for="optPlanModel">Plan Model (global)</label>
+            <button class="help-btn" type="button" title="Default planning model for new tasks. Individual tasks can override this value." aria-label="Global plan model help">?</button>
+          </div>
           <input type="text" id="optPlanModelSearch" class="model-search" placeholder="Filter models...">
           <select id="optPlanModel"></select>
         </div>
         <div class="form-group">
-          <label>Execution Model (global)</label>
+          <div class="label-row">
+            <label for="optExecModel">Execution Model (global)</label>
+            <button class="help-btn" type="button" title="Default execution model for new tasks. Individual tasks can override this value." aria-label="Global execution model help">?</button>
+          </div>
           <input type="text" id="optExecModelSearch" class="model-search" placeholder="Filter models...">
           <select id="optExecModel"></select>
         </div>
       </div>
       <div class="form-group">
-        <label>Thinking Level (global default)</label>
+        <div class="label-row">
+          <label for="optThinkingLevel">Thinking Level (global default)</label>
+          <button class="help-btn" type="button" title="Default reasoning effort for new tasks. Higher levels are better for harder work but can be slower." aria-label="Global thinking level help">?</button>
+        </div>
         <select id="optThinkingLevel">
           <option value="default">Default</option>
           <option value="low">Low</option>
@@ -269,15 +357,24 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
         </select>
       </div>
       <div class="form-group">
-        <label>Pre-execution Command</label>
+        <div class="label-row">
+          <label for="optCommand">Pre-execution Command</label>
+          <button class="help-btn" type="button" title="Command to run before task execution begins, such as installing dependencies or preparing the workspace." aria-label="Pre-execution command help">?</button>
+        </div>
         <input type="text" id="optCommand" placeholder="e.g. npm install">
       </div>
       <div class="form-group">
-        <label>Parallel Tasks</label>
+        <div class="label-row">
+          <label for="optParallel">Parallel Tasks</label>
+          <button class="help-btn" type="button" title="Maximum number of tasks the workflow should execute at the same time." aria-label="Parallel tasks help">?</button>
+        </div>
         <input type="number" id="optParallel" min="1" max="10" value="1">
       </div>
       <div class="form-group">
-        <label>Commit Prompt <span style="font-weight:normal;color:var(--text-dim)">({{base_ref}} will be replaced at runtime)</span></label>
+        <div class="label-row">
+          <label for="optCommitPrompt">Commit Prompt <span style="font-weight:normal;color:var(--text-dim)">({{base_ref}} will be replaced at runtime)</span></label>
+          <button class="help-btn" type="button" title="Instructions used when the workflow asks the agent to prepare a git commit. Use {{base_ref}} anywhere you want the current base branch inserted automatically." aria-label="Commit prompt help">?</button>
+        </div>
         <textarea id="optCommitPrompt" style="min-height:300px;font-family:monospace;font-size:12px" placeholder="Instructions for committing changes..."></textarea>
       </div>
     </div>
