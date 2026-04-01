@@ -5,12 +5,22 @@ import { dirname } from "path"
 import type { Task, TaskStatus, Options, ReviewResult } from "./types"
 import { KanbanDB } from "./db"
 import { KanbanServer } from "./server"
+import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const WORKFLOW_ROOT = join(__dirname, "..")
 const TEMPLATE_PATH = join(WORKFLOW_ROOT, "easy-workflow", "workflow.md")
 const AGENTS_DIR = join(WORKFLOW_ROOT, "agents")
 const DEBUG_LOG_PATH = join(WORKFLOW_ROOT, "easy-workflow", "debug.log")
+
+// ---- SDK v2 client wrapper ----
+
+function createV2Client(baseUrl: string, directory?: string) {
+  return createOpencodeClient({
+    baseUrl,
+    directory,
+  })
+}
 
 // ---- Utility functions (reused from existing plugin) ----
 
@@ -167,47 +177,42 @@ function resolveBatches(tasks: Task[], parallelLimit: number): Task[][] {
 export class Orchestrator {
   private db: KanbanDB
   private server: KanbanServer
-  private client: any
-  private serverUrl: URL | null
+  private serverUrl: string
+  private worktreeDir: string
   private running = false
   private shouldStop = false
 
-  constructor(db: KanbanDB, server: KanbanServer, client: any, serverUrl?: URL) {
+  constructor(db: KanbanDB, server: KanbanServer, serverUrl: string, worktreeDir: string) {
     this.db = db
     this.server = server
-    this.client = client
-    this.serverUrl = serverUrl || null
+    this.serverUrl = serverUrl
+    this.worktreeDir = worktreeDir
+  }
+
+  private getClient(directory?: string) {
+    return createV2Client(this.serverUrl, directory || this.worktreeDir)
   }
 
   private async createWorktree(name: string): Promise<any> {
-    if (!this.serverUrl) {
-      throw new Error("Server URL not available for worktree creation")
-    }
-    const url = new URL("/experimental/worktree", this.serverUrl)
-    const response = await fetch(url.toString(), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+    const client = this.getClient()
+    const response = await client.worktree.create({
+      worktreeCreateInput: { name },
     })
-    if (!response.ok) {
-      const error = await response.text()
-      throw new Error(`Worktree creation failed: ${response.status} ${error}`)
+    if (response.error) {
+      const error = response.error as any
+      throw new Error(`Worktree creation failed: ${error?.message ?? JSON.stringify(error)}`)
     }
-    return response.json()
+    return response.data
   }
 
   private async removeWorktree(directory: string): Promise<void> {
-    if (!this.serverUrl) {
-      throw new Error("Server URL not available for worktree removal")
-    }
-    const url = new URL("/experimental/worktree", this.serverUrl)
-    url.searchParams.set("directory", directory)
-    const response = await fetch(url.toString(), {
-      method: "DELETE",
+    const client = this.getClient()
+    const response = await client.worktree.remove({
+      worktreeRemoveInput: { directory },
     })
-    if (!response.ok) {
-      const error = await response.text()
-      throw new Error(`Worktree removal failed: ${response.status} ${error}`)
+    if (response.error) {
+      const error = response.error as any
+      throw new Error(`Worktree removal failed: ${error?.message ?? JSON.stringify(error)}`)
     }
   }
 
@@ -284,6 +289,7 @@ export class Orchestrator {
 
     let worktreeInfo: any = null
     let sessionId: string | null = null
+    const client = this.getClient()
 
     try {
       // 1. Create worktree
@@ -326,12 +332,14 @@ export class Orchestrator {
       }
 
       // 3. Create session
-      const session = unwrapResponseData<any>(
-        await this.client.session.create({
-          title: `Task: ${task.name}`,
-        })
-      )
-      sessionId = session.id
+      const sessionResponse = await client.session.create({
+        body: { title: `Task: ${task.name}` },
+      })
+      const session = unwrapResponseData<any>(sessionResponse)
+      sessionId = session?.id
+      if (!sessionId) {
+        throw new Error("Failed to create session")
+      }
       this.db.updateTask(task.id, { sessionId })
       currentTask = this.db.getTask(task.id)!
 
@@ -356,11 +364,13 @@ export class Orchestrator {
 
         // Planning phase
         appendDebugLog("info", "plan mode: sending planning prompt", { taskId: task.id })
-        const planResponse = await this.client.session.prompt({
-          sessionID: sessionId,
-          agent: "plan",
-          model: planModelParsed,
-          parts: [{ type: "text", text: task.prompt }],
+        const planResponse = await client.session.prompt({
+          path: { sessionID: sessionId },
+          body: {
+            agent: "plan",
+            model: planModelParsed,
+            parts: [{ type: "text", text: task.prompt }],
+          },
         })
         const planResult = unwrapResponseData<any>(planResponse)
         const planOutput = this.extractTextOutput(planResult)
@@ -371,10 +381,12 @@ export class Orchestrator {
 
         // Execution phase (continue in same session)
         appendDebugLog("info", "plan mode: sending execution prompt", { taskId: task.id })
-        const execResponse = await this.client.session.prompt({
-          sessionID: sessionId,
-          model,
-          parts: [{ type: "text", text: "Now implement the plan. Execute all changes." }],
+        const execResponse = await client.session.prompt({
+          path: { sessionID: sessionId },
+          body: {
+            model,
+            parts: [{ type: "text", text: "Now implement the plan. Execute all changes." }],
+          },
         })
         const execResult = unwrapResponseData<any>(execResponse)
         const execOutput = this.extractTextOutput(execResult)
@@ -385,10 +397,12 @@ export class Orchestrator {
       } else {
         // Direct execution
         appendDebugLog("info", "sending task prompt", { taskId: task.id })
-        const response = await this.client.session.prompt({
-          sessionID: sessionId,
-          model,
-          parts: [{ type: "text", text: task.prompt }],
+        const response = await client.session.prompt({
+          path: { sessionID: sessionId },
+          body: {
+            model,
+            parts: [{ type: "text", text: task.prompt }],
+          },
         })
         const result = unwrapResponseData<any>(response)
         const output = this.extractTextOutput(result)
@@ -423,9 +437,11 @@ export class Orchestrator {
           const baseRef = worktreeInfo.baseRef || worktreeInfo.branch || "main"
           const commitPromptText = options.commitPrompt.replace(/\{\{base_ref\}\}/g, baseRef)
           
-          const commitResponse = await this.client.session.prompt({
-            sessionID: sessionId,
-            parts: [{ type: "text", text: commitPromptText }],
+          const commitResponse = await client.session.prompt({
+            path: { sessionID: sessionId },
+            body: {
+              parts: [{ type: "text", text: commitPromptText }],
+            },
           })
           const commitResult = unwrapResponseData<any>(commitResponse)
           const commitOutput = this.extractTextOutput(commitResult)
@@ -508,7 +524,7 @@ export class Orchestrator {
       // Cleanup session
       if (sessionId) {
         try {
-          await this.client.session.delete({ sessionID: sessionId })
+          await client.session.delete({ path: { sessionID: sessionId } })
         } catch {}
       }
     }
@@ -522,6 +538,7 @@ export class Orchestrator {
 
     const maxRuns = config.maxReviewRuns
     let reviewCount = task.reviewCount
+    const client = this.getClient()
 
     // Create a temporary review file for this task
     const reviewFilePath = join(WORKFLOW_ROOT, "easy-workflow", `review-${task.id}.md`)
@@ -541,11 +558,11 @@ export class Orchestrator {
         appendDebugLog("info", "running review", { taskId: task.id, reviewCount, maxRuns })
 
         // Run review in a scratch session
-        const reviewSession = unwrapResponseData<any>(
-          await this.client.session.create({
-            title: `Review: ${task.name}`,
-          })
-        )
+        const reviewSessionResponse = await client.session.create({
+          body: { title: `Review: ${task.name}` },
+        })
+        const reviewSession = unwrapResponseData<any>(reviewSessionResponse)
+        const reviewSessionId = reviewSession?.id
 
         let reviewResult: ReviewResult
         try {
@@ -561,16 +578,20 @@ export class Orchestrator {
             `Goals: ${task.prompt}`,
           ].join("\n")
 
-          const response = await this.client.session.prompt({
-            sessionID: reviewSession.id,
-            agent: config.reviewAgent,
-            parts: [{ type: "text", text: promptText }],
+          const response = await client.session.prompt({
+            path: { sessionID: reviewSessionId },
+            body: {
+              agent: config.reviewAgent,
+              parts: [{ type: "text", text: promptText }],
+            },
           })
 
           const result = unwrapResponseData<any>(response)
           reviewResult = this.parseReviewResponse(result)
         } finally {
-          await this.client.session.delete({ sessionID: reviewSession.id }).catch(() => {})
+          if (reviewSessionId) {
+            await client.session.delete({ path: { sessionID: reviewSessionId } }).catch(() => {})
+          }
         }
 
         appendDebugLog("info", "review result", {
@@ -620,9 +641,11 @@ export class Orchestrator {
           || `Fix the following issues found during review:\n${reviewResult.gaps.map(g => `- ${g}`).join("\n")}`
 
         appendDebugLog("info", "sending fix prompt after review", { taskId: task.id, reviewCount })
-        const fixResponse = await this.client.session.prompt({
-          sessionID: sessionId,
-          parts: [{ type: "text", text: fixPrompt }],
+        const fixResponse = await client.session.prompt({
+          path: { sessionID: sessionId },
+          body: {
+            parts: [{ type: "text", text: fixPrompt }],
+          },
         })
         const fixResult = unwrapResponseData<any>(fixResponse)
         const fixOutput = this.extractTextOutput(fixResult)

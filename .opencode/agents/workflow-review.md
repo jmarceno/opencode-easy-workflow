@@ -1,7 +1,7 @@
 ---
 description: Reviews the current repository against workflow run goals
 mode: subagent
-model: opencode-go/kimi-k2.5
+model: minimax/minimax-m2.7"
 permission:
   edit: deny
   webfetch: deny

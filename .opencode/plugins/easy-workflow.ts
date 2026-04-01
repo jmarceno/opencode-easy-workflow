@@ -871,7 +871,7 @@ export const EasyWorkflowPlugin = async ({ client, directory, serverUrl }: any) 
         getExecuting: () => orchestrator?.isExecuting() ?? false,
       });
 
-      orchestrator = new Orchestrator(kanbanDb, kanbanServer, client, serverUrl);
+      orchestrator = new Orchestrator(kanbanDb, kanbanServer, String(serverUrl), directory || process.cwd());
 
       const port = kanbanServer.start();
       await log(client, "info", "kanban server started", { port });

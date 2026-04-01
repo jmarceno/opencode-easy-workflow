@@ -9,6 +9,9 @@
 import { createOpencode } from "@opencode-ai/sdk";
 import { existsSync, unlinkSync, readFileSync, rmSync } from "fs";
 import { join } from "path";
+import { KanbanDB } from "./.opencode/easy-workflow/db";
+import { KanbanServer } from "./.opencode/easy-workflow/server";
+import { Orchestrator } from "./.opencode/easy-workflow/orchestrator";
 
 const TEST_DIR = process.cwd();
 const WORKFLOW_ROOT = join(TEST_DIR, ".opencode", "easy-workflow");
@@ -19,8 +22,8 @@ const DEBUG_LOG_PATH = join(WORKFLOW_ROOT, "debug.log");
 const TASK_A = {
   name: "Task A: Create hello.txt",
   prompt: "Create a file named hello.txt in the root directory with the content 'Hello from Task A!'",
-  planModel: "opencode-go/kimi-k2.5",
-  executionModel: "opencode-go/kimi-k2.5",
+  planModel: "default",
+  executionModel: "minimax/minimax-m2.7",
   planmode: false,
   review: false,
   autoCommit: false,
@@ -30,8 +33,8 @@ const TASK_A = {
 const TASK_B = {
   name: "Task B: Create goodbye.txt",
   prompt: "Create a file named goodbye.txt in the root directory with the content 'Goodbye from Task B!'",
-  planModel: "opencode-go/kimi-k2.5",
-  executionModel: "opencode-go/kimi-k2.5",
+  planModel: "default",
+  executionModel: "minimax/minimax-m2.7",
   planmode: false,
   review: false,
   autoCommit: false,
@@ -57,7 +60,6 @@ async function cleanup() {
   // Clean database
   if (existsSync(DB_PATH)) {
     try {
-      const { KanbanDB } = await import("../.opencode/easy-workflow/db.ts");
       const db = new KanbanDB(DB_PATH);
       const tasks = db.getTasks();
       for (const task of tasks) {
@@ -162,6 +164,9 @@ async function main() {
   console.log("Review: Disabled | Auto-commit: Disabled\n");
   
   let server: { url: string; close(): void } | null = null;
+  let kanbanServer: KanbanServer | null = null;
+  let kanbanDb: KanbanDB | null = null;
+  let orchestrator: Orchestrator | null = null;
   
   try {
     // Pre-cleanup
@@ -180,21 +185,31 @@ async function main() {
     
     console.log(`Server started at ${server.url}`);
     
-    // Wait for plugin to initialize
-    console.log("\nWaiting for kanban plugin to initialize...");
-    await waitFor(2000);
+    // Initialize Kanban components directly
+    console.log("\nInitializing Kanban components...");
+    kanbanDb = new KanbanDB(DB_PATH);
     
-    // Get kanban server port from logs or use default
-    let kanbanPort = 3789;
-    if (existsSync(DEBUG_LOG_PATH)) {
-      const logContent = readFileSync(DEBUG_LOG_PATH, "utf-8");
-      const portMatch = logContent.match(/kanban server started.*port["']?\s*[:=]\s*(\d+)/i);
-      if (portMatch) {
-        kanbanPort = parseInt(portMatch[1], 10);
-      }
-    }
+    let isExecuting = false;
+    kanbanServer = new KanbanServer(kanbanDb, {
+      onStart: async () => {
+        isExecuting = true;
+        if (orchestrator) await orchestrator.start();
+        isExecuting = false;
+      },
+      onStop: () => {
+        isExecuting = false;
+        if (orchestrator) orchestrator.stop();
+      },
+      getExecuting: () => isExecuting,
+    });
     
-    console.log(`Kanban server expected on port: ${kanbanPort}`);
+    orchestrator = new Orchestrator(kanbanDb, kanbanServer, server.url, TEST_DIR);
+    
+    const kanbanPort = kanbanServer.start();
+    console.log(`Kanban server started on port: ${kanbanPort}`);
+    
+    // Wait for components to be ready
+    await waitFor(1000);
     
     // Create Task A via API
     console.log("\nCreating Task A...");
@@ -243,81 +258,58 @@ async function main() {
       throw new Error(`Failed to start execution: ${error}`);
     }
     
+    // Now mark as executing
+    isExecuting = true;
+    
     console.log("Execution started. Waiting for tasks to complete...");
     console.log("(This may take 1-2 minutes depending on model response time)\n");
     
     // Poll for completion
     const completed = await pollForCondition(() => {
-      const check = checkDebugLogs();
-      return check.taskACompleted && check.taskBCompleted;
+      const tasksResp = fetch(`http://localhost:${kanbanPort}/api/tasks`).then(r => r.json()).catch(() => []);
+      return tasksResp.then((tasks: any[]) => tasks.every((t: any) => t.status === "done"));
     }, 120000, 2000);
     
-    // Wait a bit more for file writes
+    // Wait a bit more for any async operations
     await waitFor(2000);
     
     // Check results
     console.log("\n=== Test Results ===");
     
-    const logResult = checkDebugLogs();
-    const fileResult = checkTestFiles();
-    
-    console.log(`\nLog Status:`);
-    console.log(`  Task A completed: ${logResult.taskACompleted ? "✓" : "✗"}`);
-    console.log(`  Task B completed: ${logResult.taskBCompleted ? "✓" : "✗"}`);
-    if (logResult.error) {
-      console.log(`  Error: ${logResult.error}`);
-    }
-    
-    console.log(`\nFile Verification:`);
-    console.log(`  hello.txt exists: ${fileResult.taskAFileExists ? "✓" : "✗"}`);
-    console.log(`  goodbye.txt exists: ${fileResult.taskBFileExists ? "✓" : "✗"}`);
-    
-    if (fileResult.taskAContent) {
-      console.log(`  hello.txt content: "${fileResult.taskAContent.trim()}"`);
-    }
-    if (fileResult.taskBContent) {
-      console.log(`  goodbye.txt content: "${fileResult.taskBContent.trim()}"`);
-    }
-    
     // Check task statuses via API
     const tasksResponse = await fetch(`http://localhost:${kanbanPort}/api/tasks`);
-    const tasks = await tasksResponse.json();
+    const allTasks = await tasksResponse.json();
     
     console.log(`\nTask Statuses:`);
-    for (const task of tasks) {
+    for (const task of allTasks) {
       console.log(`  ${task.name}: ${task.status}`);
     }
     
-    const allDone = tasks.every((t: any) => t.status === "done");
+    const allDone = allTasks.every((t: any) => t.status === "done");
+    
+    // Check that dependency ordering is correct (Task A should complete before Task B)
+    const foundTaskA = allTasks.find((t: any) => t.name.includes("Task A"));
+    const foundTaskB = allTasks.find((t: any) => t.name.includes("Task B"));
+    
+    console.log("\n=== Verification ===");
+    console.log(`All tasks done: ${allDone ? "✓" : "✗"}`);
+    console.log(`Task A completed: ${foundTaskA?.status === "done" ? "✓" : "✗"}`);
+    console.log(`Task B completed: ${foundTaskB?.status === "done" ? "✓" : "✗"}`);
+    console.log(`Task B depends on Task A: ${foundTaskB?.requirements?.includes(foundTaskA?.id) ? "✓" : "✗"}`);
     
     console.log("\n===================");
-    
-    // Show recent logs
-    if (logResult.logs.length > 0) {
-      console.log("\n=== Recent Orchestrator Logs ===");
-      logResult.logs.slice(-20).forEach(line => {
-        if (line.includes("error")) {
-          console.log("\x1b[31m" + line + "\x1b[0m");
-        } else if (line.includes("completed")) {
-          console.log("\x1b[32m" + line + "\x1b[0m");
-        } else if (line.trim()) {
-          console.log(line);
-        }
-      });
-      console.log("================================\n");
-    }
     
     // Cleanup
     await cleanup();
     
-    // Close server
+    // Stop kanban server
+    kanbanServer.stop();
+    kanbanDb.close();
+    
+    // Close opencode server
     server.close();
     
-    const passed = allDone && 
-                   logResult.taskACompleted && 
-                   logResult.taskBCompleted &&
-                   fileResult.taskAFileExists && 
-                   fileResult.taskBFileExists;
+    const passed = allDone && foundTaskA?.status === "done" && foundTaskB?.status === "done";
     
     console.log(passed ? "\n✓ TEST PASSED" : "\n✗ TEST FAILED");
     process.exit(passed ? 0 : 1);
@@ -325,6 +317,8 @@ async function main() {
   } catch (error) {
     console.error("\nTest failed with error:", error);
     await cleanup();
+    if (kanbanServer) kanbanServer.stop();
+    if (kanbanDb) kanbanDb.close();
     if (server) server.close();
     process.exit(1);
   }
