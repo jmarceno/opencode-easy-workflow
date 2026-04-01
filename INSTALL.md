@@ -58,6 +58,9 @@ Copy the following files to your project's `.opencode/` directory:
 │   └── easy-workflow.ts          # Main plugin entry point
 ├── agents/
 │   └── workflow-review.md        # Review agent configuration
+├── skills/
+│   └── workflow-task-setup/
+│       └── SKILL.md              # Agent guidance for creating tasks from user-provided planning material
 ├── easy-workflow/
 │   ├── workflow.md               # Workflow template with review settings
 │   ├── db.ts                     # SQLite database layer
@@ -119,7 +122,21 @@ The plugin will automatically:
 - Start the kanban server on port 3789 (configurable)
 - Show a toast notification with the kanban board URL
 
-### 6. Access the Kanban Board
+### 6. Task-Setup Skill
+
+This repo includes a project-local skill at `.opencode/skills/workflow-task-setup/SKILL.md`.
+
+Agents should load this skill when they need to convert any user-provided plan, spec, notes, checklist, or scope document into workflow tasks.
+
+The skill includes:
+
+- task creation heuristics for backlog tasks and templates
+- dependency and ordering guidance
+- Easy Workflow task states and plan-mode phases
+- database layout for `tasks` and `options`
+- API endpoints for creating, updating, reordering, and approving tasks
+
+### 7. Access the Kanban Board
 
 Open your browser to:
 
@@ -137,6 +154,9 @@ After installation, your `.opencode/` directory should look like this:
 │   └── easy-workflow.ts          # Main plugin
 ├── agents/
 │   └── workflow-review.md        # Review agent definition
+├── skills/
+│   └── workflow-task-setup/
+│       └── SKILL.md              # Task creation/setup skill for agents
 ├── easy-workflow/
 │   ├── workflow.md               # Workflow template & config
 │   ├── tasks.db                  # SQLite database (auto-created)

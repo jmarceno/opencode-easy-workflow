@@ -5,6 +5,8 @@ A plugin for [OpenCode](https://opencode.ai) that provides two modes of operatio
 1. **Workflow Review Mode** - Review-driven workflow triggered by `#workflow` tag
 2. **Kanban Orchestrator Mode** - Full task orchestration with dependency management
 
+It also includes a project-local skill for agents that need to translate user-provided planning material into kanban tasks.
+
 ## Quick Start
 
 Follow Installation Steps at INSTALL.md, then:
@@ -64,6 +66,19 @@ Full task orchestration with dependency management, parallel execution, and auto
 1. Open the Kanban board at `http://localhost:3789`
 2. Create tasks with prompts and optional dependencies
 3. Click "Start" to execute
+
+### Agent Skill: Task Setup
+
+The repo ships with a skill at `.opencode/skills/workflow-task-setup/SKILL.md`.
+
+Use it when an agent needs to:
+
+- turn any user-provided plan, spec, checklist, or scope document into workflow tasks
+- create or update backlog tasks and templates
+- assign dependencies, ordering, and task options correctly
+- understand the workflow DB layout, API, and task states before writing tasks
+
+The skill is designed to be generic about where source material comes from, and specific about how Easy Workflow stores and executes tasks.
 
 ### Task Features
 
@@ -168,6 +183,9 @@ curl -X POST http://localhost:3789/api/start
 │   └── easy-workflow.ts          # Main plugin entry
 ├── agents/
 │   └── workflow-review.md        # Review agent definition
+├── skills/
+│   └── workflow-task-setup/
+│       └── SKILL.md              # Agent guidance for plan-to-task setup
 ├── easy-workflow/
 │   ├── workflow.md               # Workflow template
 │   ├── db.ts                     # SQLite database
