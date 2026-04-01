@@ -126,6 +126,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 .conn-status { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .conn-status.connected { background: var(--green); }
 .conn-status.disconnected { background: var(--red); }
+.model-search { margin-bottom: 6px; }
 
 @media (max-width: 980px) {
   .board { grid-template-columns: 1fr; overflow-y: auto; }
@@ -191,10 +192,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
       <div class="form-row">
         <div class="form-group">
           <label>Plan Model</label>
+          <input type="text" id="taskPlanModelSearch" class="model-search" placeholder="Filter models...">
           <select id="taskPlanModel"></select>
         </div>
         <div class="form-group">
           <label>Execution Model</label>
+          <input type="text" id="taskExecModelSearch" class="model-search" placeholder="Filter models...">
           <select id="taskExecModel"></select>
         </div>
       </div>
@@ -250,10 +253,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
       <div class="form-row">
         <div class="form-group">
           <label>Plan Model (global)</label>
+          <input type="text" id="optPlanModelSearch" class="model-search" placeholder="Filter models...">
           <select id="optPlanModel"></select>
         </div>
         <div class="form-group">
           <label>Execution Model (global)</label>
+          <input type="text" id="optExecModelSearch" class="model-search" placeholder="Filter models...">
           <select id="optExecModel"></select>
         </div>
       </div>
@@ -307,6 +312,12 @@ const MAX_LOG_ENTRIES = 500
 let taskModalMode = 'create'
 let taskModalCreateStatus = 'backlog'
 let modelCatalog = { providers: [] }
+const MODEL_SELECT_FILTERS = [
+  { selectId: 'taskPlanModel', searchId: 'taskPlanModelSearch' },
+  { selectId: 'taskExecModel', searchId: 'taskExecModelSearch' },
+  { selectId: 'optPlanModel', searchId: 'optPlanModelSearch' },
+  { selectId: 'optExecModel', searchId: 'optExecModelSearch' },
+]
 
 // ---- API helpers ----
 async function api(path, method = 'GET', body) {
@@ -361,7 +372,20 @@ async function loadModels() {
   }
 }
 
-function populateModelSelect(selectId, selectedValue) {
+function matchesModelFilter(model, provider, query) {
+  if (!query) return true
+  const q = query.toLowerCase()
+  const providerName = (provider.name || provider.id || '').toLowerCase()
+  const providerId = (provider.id || '').toLowerCase()
+  const modelLabel = (model.label || '').toLowerCase()
+  const modelValue = (model.value || '').toLowerCase()
+  return providerName.includes(q)
+    || providerId.includes(q)
+    || modelLabel.includes(q)
+    || modelValue.includes(q)
+}
+
+function populateModelSelect(selectId, selectedValue, filterText = '') {
   const select = document.getElementById(selectId)
   if (!select) return
   select.innerHTML = ''
@@ -371,18 +395,23 @@ function populateModelSelect(selectId, selectedValue) {
   optDefault.textContent = 'default'
   select.appendChild(optDefault)
 
+  const filter = (filterText || '').trim()
+  let matchedCount = 0
   const providers = modelCatalog?.providers || []
   for (const provider of providers) {
     if (!provider.models || provider.models.length === 0) continue
     const group = document.createElement('optgroup')
     group.label = provider.name || provider.id
     for (const model of provider.models) {
+      const shouldInclude = matchesModelFilter(model, provider, filter) || model.value === selectedValue
+      if (!shouldInclude) continue
       const opt = document.createElement('option')
       opt.value = model.value
       opt.textContent = model.label
       group.appendChild(opt)
+      matchedCount++
     }
-    select.appendChild(group)
+    if (group.children.length > 0) select.appendChild(group)
   }
 
   if (selectedValue && selectedValue !== 'default') {
@@ -407,6 +436,30 @@ function populateModelSelect(selectId, selectedValue) {
   } else {
     select.value = 'default'
   }
+
+  if (filter && matchedCount === 0 && select.value === 'default') {
+    const noMatch = document.createElement('option')
+    noMatch.disabled = true
+    noMatch.textContent = 'No models match filter'
+    select.appendChild(noMatch)
+  }
+}
+
+function wireModelSearchInputs() {
+  for (const cfg of MODEL_SELECT_FILTERS) {
+    const search = document.getElementById(cfg.searchId)
+    const select = document.getElementById(cfg.selectId)
+    if (!search || !select) continue
+    search.addEventListener('input', () => {
+      populateModelSelect(cfg.selectId, select.value || 'default', search.value)
+    })
+  }
+}
+
+function resetModelSelectWithSearch(selectId, searchId, selectedValue) {
+  const search = document.getElementById(searchId)
+  if (search) search.value = ''
+  populateModelSelect(selectId, selectedValue, '')
 }
 
 function addLogEntry(message, variant = 'info') {
@@ -817,8 +870,8 @@ function openTaskModal(taskId, options = {}) {
     document.getElementById('taskPrompt').value = task.prompt
     populateBranchSelect('taskBranch', task.branch || getFallbackBranch())
     document.getElementById('taskBranch').value = task.branch || getFallbackBranch()
-    populateModelSelect('taskPlanModel', task.planModel)
-    populateModelSelect('taskExecModel', task.executionModel)
+    resetModelSelectWithSearch('taskPlanModel', 'taskPlanModelSearch', task.planModel)
+    resetModelSelectWithSearch('taskExecModel', 'taskExecModelSearch', task.executionModel)
     document.getElementById('taskPlanmode').checked = task.planmode
     document.getElementById('taskReview').checked = task.review
     document.getElementById('taskAutoCommit').checked = task.autoCommit
@@ -835,8 +888,8 @@ function openTaskModal(taskId, options = {}) {
     document.getElementById('taskPrompt').value = seedTask.prompt
     populateBranchSelect('taskBranch', seedTask.branch || getFallbackBranch())
     document.getElementById('taskBranch').value = seedTask.branch || getFallbackBranch()
-    populateModelSelect('taskPlanModel', seedTask.planModel || 'default')
-    populateModelSelect('taskExecModel', seedTask.executionModel || 'default')
+    resetModelSelectWithSearch('taskPlanModel', 'taskPlanModelSearch', seedTask.planModel || 'default')
+    resetModelSelectWithSearch('taskExecModel', 'taskExecModelSearch', seedTask.executionModel || 'default')
     document.getElementById('taskPlanmode').checked = seedTask.planmode
     document.getElementById('taskReview').checked = seedTask.review
     document.getElementById('taskAutoCommit').checked = seedTask.autoCommit
@@ -853,8 +906,8 @@ function openTaskModal(taskId, options = {}) {
     document.getElementById('taskPrompt').value = ''
     populateBranchSelect('taskBranch', getFallbackBranch())
     document.getElementById('taskBranch').value = getFallbackBranch()
-    populateModelSelect('taskPlanModel', 'default')
-    populateModelSelect('taskExecModel', 'default')
+    resetModelSelectWithSearch('taskPlanModel', 'taskPlanModelSearch', 'default')
+    resetModelSelectWithSearch('taskExecModel', 'taskExecModelSearch', 'default')
     document.getElementById('taskPlanmode').checked = false
     document.getElementById('taskReview').checked = true
     document.getElementById('taskAutoCommit').checked = true
@@ -1006,8 +1059,8 @@ function openOptionsModal() {
   populateBranchSelect('optBranch', allOptions.branch || getFallbackBranch())
   document.getElementById('optCommitPrompt').value = allOptions.commitPrompt || ''
   document.getElementById('optBranch').value = allOptions.branch || getFallbackBranch()
-  populateModelSelect('optPlanModel', allOptions.planModel || 'default')
-  populateModelSelect('optExecModel', allOptions.executionModel || 'default')
+  resetModelSelectWithSearch('optPlanModel', 'optPlanModelSearch', allOptions.planModel || 'default')
+  resetModelSelectWithSearch('optExecModel', 'optExecModelSearch', allOptions.executionModel || 'default')
   document.getElementById('optCommand').value = allOptions.command || ''
   document.getElementById('optParallel').value = allOptions.parallelTasks || 1
   document.getElementById('optThinkingLevel').value = allOptions.thinkingLevel || 'default'
@@ -1064,6 +1117,7 @@ function showToast(msg, variant = 'info') {
 
 // ---- Init ----
 async function init() {
+  wireModelSearchInputs()
   await loadOptions()
   await loadBranches()
   await loadModels()
