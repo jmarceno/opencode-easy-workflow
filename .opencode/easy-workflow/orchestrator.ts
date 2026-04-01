@@ -19,6 +19,7 @@ function createV2Client(baseUrl: string, directory?: string) {
   return createOpencodeClient({
     baseUrl,
     directory,
+    throwOnError: true,
   })
 }
 
@@ -74,7 +75,21 @@ function appendDebugLog(kind: string, message: string, extra?: Record<string, un
   try {
     mkdirSync(join(WORKFLOW_ROOT, "easy-workflow"), { recursive: true })
     appendFileSync(DEBUG_LOG_PATH, `[${new Date().toISOString()}] ${kind}: ${message}${payload}\n`, "utf-8")
-  } catch {}
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error("[kanban] failed to write debug log:", msg)
+  }
+}
+
+function base64EncodeUrlSafe(value: string): string {
+  const bytes = new TextEncoder().encode(value)
+  const binary = Array.from(bytes, (b) => String.fromCharCode(b)).join("")
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "")
+}
+
+function buildSessionUrl(serverUrl: string, directory: string, sessionId: string): string {
+  const encodedDir = base64EncodeUrlSafe(directory)
+  return `${serverUrl}/${encodedDir}/session/${sessionId}`
 }
 
 function getAssistantErrorMessage(error: any): string {
@@ -85,6 +100,13 @@ function getAssistantErrorMessage(error: any): string {
   }
   if (typeof error.message === "string") return error.message
   return JSON.stringify(error)
+}
+
+function unwrapResponseDataOrThrow<T>(response: any, operation: string): T {
+  if (response && typeof response === "object" && "error" in response && response.error) {
+    throw new Error(`${operation} failed: ${getAssistantErrorMessage(response.error)}`)
+  }
+  return unwrapResponseData<T>(response)
 }
 
 // ---- Review config from workflow.md ----
@@ -181,6 +203,7 @@ export class Orchestrator {
   private worktreeDir: string
   private running = false
   private shouldStop = false
+  private providerCatalog: any | null = null
 
   constructor(db: KanbanDB, server: KanbanServer, serverUrl: string, worktreeDir: string) {
     this.db = db
@@ -216,6 +239,69 @@ export class Orchestrator {
     }
   }
 
+  private async getProviderCatalog(client: any): Promise<any> {
+    if (this.providerCatalog) return this.providerCatalog
+    const response = await client.config.providers()
+    this.providerCatalog = unwrapResponseDataOrThrow<any>(response, "Provider discovery")
+    return this.providerCatalog
+  }
+
+  private async resolveModelSelection(rawModel: string | null, client: any, context: string): Promise<{ providerID: string; modelID: string } | undefined> {
+    if (!rawModel) return undefined
+
+    const parsed = parseModelSelection(rawModel)
+    if (!parsed) {
+      throw new Error(`${context} model is invalid: ${rawModel}. Expected format provider/model.`)
+    }
+
+    const catalog = await this.getProviderCatalog(client)
+    const providers = Array.isArray(catalog?.providers) ? catalog.providers : []
+    const provider = providers.find((p: any) => typeof p?.id === "string" && p.id.toLowerCase() === parsed.providerID.toLowerCase())
+    if (!provider) {
+      const availableProviders = providers.map((p: any) => p?.id).filter(Boolean).join(", ") || "none"
+      throw new Error(`${context} model provider not found: ${parsed.providerID}. Available providers: ${availableProviders}`)
+    }
+
+    const modelIds = Object.keys(provider.models || {})
+    const exact = modelIds.find((m) => m === parsed.modelID)
+    const insensitive = exact ?? modelIds.find((m) => m.toLowerCase() === parsed.modelID.toLowerCase())
+    if (!insensitive) {
+      const suggestions = modelIds.slice(0, 8).join(", ") || "none"
+      throw new Error(`${context} model not found: ${provider.id}/${parsed.modelID}. Available models: ${suggestions}`)
+    }
+
+    return {
+      providerID: provider.id,
+      modelID: insensitive,
+    }
+  }
+
+  private extractExecutionFailure(result: any): string | null {
+    const parts = result?.parts
+    if (!Array.isArray(parts)) return null
+
+    for (const part of parts) {
+      if (part?.type === "tool" && part?.state?.status === "error") {
+        const toolName = typeof part.tool === "string" ? part.tool : "tool"
+        const error = typeof part.state.error === "string" ? part.state.error : JSON.stringify(part.state.error)
+        return `${toolName} failed: ${error}`
+      }
+
+      if (part?.type === "retry" && part?.error) {
+        return `Assistant retry failed: ${getAssistantErrorMessage(part.error)}`
+      }
+
+      if (part?.type === "step-finish" && typeof part.reason === "string") {
+        const reason = part.reason.toLowerCase()
+        if (reason.includes("error") || reason.includes("abort") || reason.includes("failed")) {
+          return `Assistant step finished with failure reason: ${part.reason}`
+        }
+      }
+    }
+
+    return null
+  }
+
   isExecuting() { return this.running }
 
   async start() {
@@ -228,6 +314,8 @@ export class Orchestrator {
 
     this.running = true
     this.shouldStop = false
+    this.providerCatalog = null
+    appendDebugLog("info", "orchestrator starting", { taskCount: tasks.length, serverUrl: this.serverUrl })
     this.server.broadcast({ type: "execution_started", payload: {} })
 
     try {
@@ -255,7 +343,7 @@ export class Orchestrator {
       this.server.broadcast({ type: "execution_complete", payload: {} })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      appendDebugLog("error", "orchestrator execution failed", { error: msg })
+      appendDebugLog("error", "orchestrator execution failed", { error: msg, serverUrl: this.serverUrl })
       this.server.broadcast({ type: "error", payload: { message: msg } })
     } finally {
       this.running = false
@@ -293,8 +381,11 @@ export class Orchestrator {
 
     try {
       // 1. Create worktree
-      appendDebugLog("info", "creating worktree", { taskId: task.id, taskName: task.name })
+      appendDebugLog("info", "creating worktree", { taskId: task.id, taskName: task.name, serverUrl: this.serverUrl })
       worktreeInfo = await this.createWorktree(`task-${task.id}`)
+      if (!worktreeInfo?.directory) {
+        throw new Error(`Worktree creation returned invalid response: ${JSON.stringify(worktreeInfo)}`)
+      }
       this.db.updateTask(task.id, { worktreeDir: worktreeInfo.directory })
       currentTask = this.db.getTask(task.id)!
       this.server.broadcast({ type: "task_updated", payload: currentTask })
@@ -333,14 +424,15 @@ export class Orchestrator {
 
       // 3. Create session
       const sessionResponse = await client.session.create({
-        body: { title: `Task: ${task.name}` },
+        title: `Task: ${task.name}`,
       })
-      const session = unwrapResponseData<any>(sessionResponse)
+      const session = unwrapResponseDataOrThrow<any>(sessionResponse, "Session creation")
       sessionId = session?.id
       if (!sessionId) {
-        throw new Error("Failed to create session")
+        throw new Error("Failed to create session: no ID returned")
       }
-      this.db.updateTask(task.id, { sessionId })
+      const sessionUrl = buildSessionUrl(this.serverUrl, this.worktreeDir, sessionId)
+      this.db.updateTask(task.id, { sessionId, sessionUrl })
       currentTask = this.db.getTask(task.id)!
 
       // 4. Determine model
@@ -350,7 +442,7 @@ export class Orchestrator {
           ? options.executionModel
           : null
 
-      const model = executionModel ? parseModelSelection(executionModel) : undefined
+      const model = await this.resolveModelSelection(executionModel, client, "Execution")
 
       // 5. Execute: plan mode or direct
       if (task.planmode) {
@@ -360,19 +452,19 @@ export class Orchestrator {
             ? options.planModel
             : null
 
-        const planModelParsed = planModel ? parseModelSelection(planModel) : undefined
+        const planModelParsed = await this.resolveModelSelection(planModel, client, "Plan")
 
         // Planning phase
         appendDebugLog("info", "plan mode: sending planning prompt", { taskId: task.id })
         const planResponse = await client.session.prompt({
-          path: { sessionID: sessionId },
-          body: {
-            agent: "plan",
-            model: planModelParsed,
-            parts: [{ type: "text", text: task.prompt }],
-          },
+          sessionID: sessionId,
+          agent: "plan",
+          model: planModelParsed,
+          parts: [{ type: "text", text: task.prompt }],
         })
-        const planResult = unwrapResponseData<any>(planResponse)
+        const planResult = unwrapResponseDataOrThrow<any>(planResponse, "Planning prompt")
+        const planFailure = this.extractExecutionFailure(planResult)
+        if (planFailure) throw new Error(`Planning prompt failed: ${planFailure}`)
         const planOutput = this.extractTextOutput(planResult)
         if (planOutput) {
           this.db.appendAgentOutput(task.id, `[plan] ${planOutput}\n`)
@@ -382,13 +474,13 @@ export class Orchestrator {
         // Execution phase (continue in same session)
         appendDebugLog("info", "plan mode: sending execution prompt", { taskId: task.id })
         const execResponse = await client.session.prompt({
-          path: { sessionID: sessionId },
-          body: {
-            model,
-            parts: [{ type: "text", text: "Now implement the plan. Execute all changes." }],
-          },
+          sessionID: sessionId,
+          model,
+          parts: [{ type: "text", text: "Now implement the plan. Execute all changes." }],
         })
-        const execResult = unwrapResponseData<any>(execResponse)
+        const execResult = unwrapResponseDataOrThrow<any>(execResponse, "Execution prompt")
+        const execFailure = this.extractExecutionFailure(execResult)
+        if (execFailure) throw new Error(`Execution prompt failed: ${execFailure}`)
         const execOutput = this.extractTextOutput(execResult)
         if (execOutput) {
           this.db.appendAgentOutput(task.id, `[exec] ${execOutput}\n`)
@@ -398,13 +490,13 @@ export class Orchestrator {
         // Direct execution
         appendDebugLog("info", "sending task prompt", { taskId: task.id })
         const response = await client.session.prompt({
-          path: { sessionID: sessionId },
-          body: {
-            model,
-            parts: [{ type: "text", text: task.prompt }],
-          },
+          sessionID: sessionId,
+          model,
+          parts: [{ type: "text", text: task.prompt }],
         })
-        const result = unwrapResponseData<any>(response)
+        const result = unwrapResponseDataOrThrow<any>(response, "Task prompt")
+        const taskFailure = this.extractExecutionFailure(result)
+        if (taskFailure) throw new Error(`Task prompt failed: ${taskFailure}`)
         const output = this.extractTextOutput(result)
         if (output) {
           this.db.appendAgentOutput(task.id, output)
@@ -438,12 +530,12 @@ export class Orchestrator {
           const commitPromptText = options.commitPrompt.replace(/\{\{base_ref\}\}/g, baseRef)
           
           const commitResponse = await client.session.prompt({
-            path: { sessionID: sessionId },
-            body: {
-              parts: [{ type: "text", text: commitPromptText }],
-            },
+            sessionID: sessionId,
+            parts: [{ type: "text", text: commitPromptText }],
           })
-          const commitResult = unwrapResponseData<any>(commitResponse)
+          const commitResult = unwrapResponseDataOrThrow<any>(commitResponse, "Commit prompt")
+          const commitFailure = this.extractExecutionFailure(commitResult)
+          if (commitFailure) throw new Error(`Commit prompt failed: ${commitFailure}`)
           const commitOutput = this.extractTextOutput(commitResult)
           if (commitOutput) {
             this.db.appendAgentOutput(task.id, `\n[commit] ${commitOutput}\n`)
@@ -463,28 +555,60 @@ export class Orchestrator {
           appendDebugLog("info", "merging worktree", { taskId: task.id, branch: worktreeInfo.branch })
           const { execSync } = await import("child_process")
 
-          // Get the main branch name
-          let mainBranch = "main"
+          // Resolve merge target branch from worktree metadata first, then git defaults
+          let mainBranch = typeof worktreeInfo.baseRef === "string" && worktreeInfo.baseRef.trim()
+            ? worktreeInfo.baseRef.trim()
+            : ""
           try {
-            const defaultBranch = execSync("git symbolic-ref refs/remotes/origin/HEAD", { encoding: "utf-8" }).trim()
-            mainBranch = defaultBranch.replace("refs/remotes/origin/", "")
-          } catch {
+            const defaultBranch = execSync("git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true", { encoding: "utf-8", stdio: "pipe" }).trim()
+            if (defaultBranch.startsWith("origin/")) {
+              mainBranch = mainBranch || defaultBranch.slice("origin/".length)
+            } else if (defaultBranch && !mainBranch) {
+              mainBranch = defaultBranch
+            }
+          } catch {}
+
+          if (!mainBranch) {
             try {
-              const branches = execSync("git branch --list main master", { encoding: "utf-8" }).trim()
-              if (branches.includes("main")) mainBranch = "main"
-              else if (branches.includes("master")) mainBranch = "master"
-            } catch {}
+              mainBranch = execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf-8", stdio: "pipe" }).trim()
+            } catch {
+              mainBranch = "main"
+            }
           }
 
-          execSync(`cd "${worktreeInfo.directory}" && git checkout ${mainBranch} 2>/dev/null || true`, { encoding: "utf-8" })
-          execSync(`cd "${worktreeInfo.directory}" && git merge ${worktreeInfo.branch} --no-edit`, { encoding: "utf-8" })
+          if (mainBranch !== "main" && mainBranch !== "master") {
+            try {
+              execSync("git show-ref --verify --quiet refs/heads/main", { stdio: "ignore" })
+              mainBranch = "main"
+            } catch {
+              try {
+                execSync("git show-ref --verify --quiet refs/heads/master", { stdio: "ignore" })
+                mainBranch = "master"
+              } catch (err) {
+                appendDebugLog("warn", "could not verify master branch", { taskId: task.id, error: String(err) })
+              }
+            }
+          }
+
+          if (mainBranch === "main") {
+            try {
+              execSync("git show-ref --verify --quiet refs/heads/main", { stdio: "ignore" })
+            } catch {
+              try {
+                execSync("git show-ref --verify --quiet refs/heads/master", { stdio: "ignore" })
+                mainBranch = "master"
+              } catch (err) {
+                appendDebugLog("warn", "could not verify master fallback branch", { taskId: task.id, error: String(err) })
+              }
+            }
+          }
+
+          appendDebugLog("info", "merge target branch selected", { taskId: task.id, mainBranch })
+          execSync(`cd "${worktreeInfo.directory}" && git checkout ${mainBranch} 2>/dev/null || true`, { encoding: "utf-8", stdio: "pipe" })
+          execSync(`cd "${worktreeInfo.directory}" && git merge ${worktreeInfo.branch} --no-edit`, { encoding: "utf-8", stdio: "pipe" })
         } catch (mergeErr) {
           const msg = `Merge failed: ${mergeErr instanceof Error ? mergeErr.message : String(mergeErr)}`
-          this.db.updateTask(task.id, { status: "failed", errorMessage: msg })
-          const updated = this.db.getTask(task.id)!
-          this.server.broadcast({ type: "task_updated", payload: updated })
-          this.shouldStop = true
-          return
+          throw new Error(msg)
         }
       }
 
@@ -506,16 +630,26 @@ export class Orchestrator {
 
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      appendDebugLog("error", "task execution failed", { taskId: task.id, error: msg })
-      this.db.updateTask(task.id, { status: "failed", errorMessage: msg })
+      const contextMsg = msg.includes("fetch") || msg.includes("connect") || msg.includes("ECONNREFUSED")
+        ? `${msg} (opencode server: ${this.serverUrl})`
+        : msg
+      appendDebugLog("error", "task execution failed", { taskId: task.id, error: contextMsg, serverUrl: this.serverUrl })
+      this.db.updateTask(task.id, { status: "failed", errorMessage: contextMsg })
       const updated = this.db.getTask(task.id)!
       this.server.broadcast({ type: "task_updated", payload: updated })
+      this.server.broadcast({ type: "error", payload: { message: `Task \"${task.name}\" failed: ${contextMsg}` } })
 
       // Cleanup worktree on failure
       if (worktreeInfo?.directory) {
         try {
           await this.removeWorktree(worktreeInfo.directory)
-        } catch {}
+        } catch (cleanupErr) {
+          appendDebugLog("warn", "worktree cleanup on failure failed", {
+            taskId: task.id,
+            directory: worktreeInfo.directory,
+            error: String(cleanupErr),
+          })
+        }
       }
 
       this.shouldStop = true
@@ -524,8 +658,10 @@ export class Orchestrator {
       // Cleanup session
       if (sessionId) {
         try {
-          await client.session.delete({ path: { sessionID: sessionId } })
-        } catch {}
+          await client.session.delete({ sessionID: sessionId })
+        } catch (deleteErr) {
+          appendDebugLog("warn", "session cleanup failed", { taskId: task.id, sessionId, error: String(deleteErr) })
+        }
       }
     }
   }
@@ -559,9 +695,9 @@ export class Orchestrator {
 
         // Run review in a scratch session
         const reviewSessionResponse = await client.session.create({
-          body: { title: `Review: ${task.name}` },
+          title: `Review: ${task.name}`,
         })
-        const reviewSession = unwrapResponseData<any>(reviewSessionResponse)
+        const reviewSession = unwrapResponseDataOrThrow<any>(reviewSessionResponse, "Review session creation")
         const reviewSessionId = reviewSession?.id
 
         let reviewResult: ReviewResult
@@ -579,18 +715,24 @@ export class Orchestrator {
           ].join("\n")
 
           const response = await client.session.prompt({
-            path: { sessionID: reviewSessionId },
-            body: {
-              agent: config.reviewAgent,
-              parts: [{ type: "text", text: promptText }],
-            },
+            sessionID: reviewSessionId,
+            agent: config.reviewAgent,
+            parts: [{ type: "text", text: promptText }],
           })
 
-          const result = unwrapResponseData<any>(response)
+          const result = unwrapResponseDataOrThrow<any>(response, "Review prompt")
+          const reviewFailure = this.extractExecutionFailure(result)
+          if (reviewFailure) throw new Error(`Review prompt failed: ${reviewFailure}`)
           reviewResult = this.parseReviewResponse(result)
         } finally {
           if (reviewSessionId) {
-            await client.session.delete({ path: { sessionID: reviewSessionId } }).catch(() => {})
+            await client.session.delete({ sessionID: reviewSessionId }).catch((deleteErr: unknown) => {
+              appendDebugLog("warn", "review session cleanup failed", {
+                taskId: task.id,
+                reviewSessionId,
+                error: String(deleteErr),
+              })
+            })
           }
         }
 
@@ -642,12 +784,12 @@ export class Orchestrator {
 
         appendDebugLog("info", "sending fix prompt after review", { taskId: task.id, reviewCount })
         const fixResponse = await client.session.prompt({
-          path: { sessionID: sessionId },
-          body: {
-            parts: [{ type: "text", text: fixPrompt }],
-          },
+          sessionID: sessionId,
+          parts: [{ type: "text", text: fixPrompt }],
         })
-        const fixResult = unwrapResponseData<any>(fixResponse)
+        const fixResult = unwrapResponseDataOrThrow<any>(fixResponse, "Review fix prompt")
+        const fixFailure = this.extractExecutionFailure(fixResult)
+        if (fixFailure) throw new Error(`Review fix prompt failed: ${fixFailure}`)
         const fixOutput = this.extractTextOutput(fixResult)
         if (fixOutput) {
           this.db.appendAgentOutput(task.id, `\n[review-fix-${reviewCount}] ${fixOutput}\n`)
@@ -658,7 +800,9 @@ export class Orchestrator {
       // Cleanup review file
       try {
         unlinkSync(reviewFilePath)
-      } catch {}
+      } catch (cleanupErr) {
+        appendDebugLog("warn", "review file cleanup failed", { taskId: task.id, reviewFilePath, error: String(cleanupErr) })
+      }
     }
   }
 

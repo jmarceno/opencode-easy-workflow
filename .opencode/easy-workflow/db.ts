@@ -29,6 +29,7 @@ function rowToTask(row: any): Task {
     agentOutput: row.agent_output || "",
     reviewCount: row.review_count,
     sessionId: row.session_id,
+    sessionUrl: row.session_url,
     worktreeDir: row.worktree_dir,
     errorMessage: row.error_message,
     createdAt: row.created_at,
@@ -67,6 +68,7 @@ export class KanbanDB {
         agent_output TEXT DEFAULT '',
         review_count INTEGER NOT NULL DEFAULT 0,
         session_id TEXT,
+        session_url TEXT,
         worktree_dir TEXT,
         error_message TEXT,
         created_at INTEGER NOT NULL DEFAULT (unixepoch()),
@@ -82,6 +84,13 @@ export class KanbanDB {
       CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
       CREATE INDEX IF NOT EXISTS idx_tasks_idx ON tasks(idx);
     `)
+
+    // Migration: add session_url column if missing
+    const tableInfo = this.db.prepare("PRAGMA table_info(tasks)").all() as any[]
+    const hasSessionUrl = tableInfo.some((col: any) => col.name === "session_url")
+    if (!hasSessionUrl) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN session_url TEXT")
+    }
 
     const optCount = this.db.query("SELECT COUNT(*) as cnt FROM options").get() as any
     if (optCount.cnt === 0) {
@@ -162,6 +171,7 @@ export class KanbanDB {
     agentOutput: string
     reviewCount: number
     sessionId: string | null
+    sessionUrl: string | null
     worktreeDir: string | null
     errorMessage: string | null
     completedAt: number | null
@@ -182,6 +192,7 @@ export class KanbanDB {
     if (updates.agentOutput !== undefined) { sets.push("agent_output = ?"); values.push(updates.agentOutput) }
     if (updates.reviewCount !== undefined) { sets.push("review_count = ?"); values.push(updates.reviewCount) }
     if (updates.sessionId !== undefined) { sets.push("session_id = ?"); values.push(updates.sessionId) }
+    if (updates.sessionUrl !== undefined) { sets.push("session_url = ?"); values.push(updates.sessionUrl) }
     if (updates.worktreeDir !== undefined) { sets.push("worktree_dir = ?"); values.push(updates.worktreeDir) }
     if (updates.errorMessage !== undefined) { sets.push("error_message = ?"); values.push(updates.errorMessage) }
     if (updates.completedAt !== undefined) { sets.push("completed_at = ?"); values.push(updates.completedAt) }
@@ -264,7 +275,7 @@ export class KanbanDB {
 
   resetTasksForBacklog(): void {
     this.db.prepare(
-      "UPDATE tasks SET status = 'backlog', session_id = NULL, worktree_dir = NULL, agent_output = '', review_count = 0, error_message = NULL, completed_at = NULL, updated_at = unixepoch() WHERE status IN ('executing', 'review', 'failed', 'stuck')"
+      "UPDATE tasks SET status = 'backlog', session_id = NULL, session_url = NULL, worktree_dir = NULL, agent_output = '', review_count = 0, error_message = NULL, completed_at = NULL, updated_at = unixepoch() WHERE status IN ('executing', 'review', 'failed', 'stuck')"
     ).run()
   }
 

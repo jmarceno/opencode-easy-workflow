@@ -15,6 +15,7 @@ export interface Task {
   agentOutput: string
   reviewCount: number
   sessionId: string | null
+  sessionUrl: string | null
   worktreeDir: string | null
   errorMessage: string | null
   createdAt: number

@@ -148,7 +148,12 @@ export class KanbanServer {
         if (tasks.length === 0) {
           return this.json({ error: "No tasks in backlog" }, 400)
         }
-        this.onStart().catch(() => {})
+        this.onStart().catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err)
+          console.error("[kanban] orchestrator start failed:", msg)
+          this.broadcast({ type: "error", payload: { message: `Execution failed: ${msg}` } })
+          this.broadcast({ type: "execution_stopped", payload: {} })
+        })
         return this.json({ ok: true })
       }
 
