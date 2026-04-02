@@ -6,6 +6,7 @@ import type { Task, Options, ReviewResult, ThinkingLevel } from "./types"
 import { KanbanDB } from "./db"
 import { KanbanServer } from "./server"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
+import { getExecutableTasks, resolveBatches } from "./execution-plan"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const WORKFLOW_ROOT = join(__dirname, "..")
@@ -171,88 +172,6 @@ function loadReviewConfig(): ReviewConfig {
   }
 }
 
-// ---- Dependency resolution ----
-
-function resolveBatches(tasks: Task[], parallelLimit: number): Task[][] {
-  const taskMap = new Map<string, Task>()
-  for (const t of tasks) taskMap.set(t.id, t)
-
-  // Build in-degree map (only counting deps that are also in our task set)
-  const inDegree = new Map<string, number>()
-  const dependents = new Map<string, string[]>()
-  for (const t of tasks) {
-    inDegree.set(t.id, 0)
-    dependents.set(t.id, [])
-  }
-  for (const t of tasks) {
-    for (const dep of t.requirements) {
-      if (taskMap.has(dep)) {
-        inDegree.set(t.id, (inDegree.get(t.id) ?? 0) + 1)
-        dependents.get(dep)!.push(t.id)
-      }
-    }
-  }
-
-  // Kahn's algorithm with level grouping
-  const batches: Task[][] = []
-  let queue = tasks.filter(t => (inDegree.get(t.id) ?? 0) === 0)
-
-  while (queue.length > 0) {
-    // Sort by idx within this level
-    queue.sort((a, b) => a.idx - b.idx)
-    batches.push([...queue])
-
-    const nextQueue: Task[] = []
-    for (const t of queue) {
-      for (const depId of dependents.get(t.id) ?? []) {
-        const newDeg = (inDegree.get(depId) ?? 1) - 1
-        inDegree.set(depId, newDeg)
-        if (newDeg === 0) {
-          nextQueue.push(taskMap.get(depId)!)
-        }
-      }
-    }
-    queue = nextQueue
-  }
-
-  // Check for cycles
-  const totalInBatch = batches.reduce((sum, b) => sum + b.length, 0)
-  if (totalInBatch < tasks.length) {
-    const stuck = tasks.filter(t => !batches.some(b => b.some(bt => bt.id === t.id)))
-    throw new Error(`Circular dependency detected among: ${stuck.map(t => t.name).join(", ")}`)
-  }
-
-  // Apply parallel limit: split batches that exceed it
-  const finalBatches: Task[][] = []
-  for (const batch of batches) {
-    if (batch.length <= parallelLimit) {
-      finalBatches.push(batch)
-    } else {
-      for (let i = 0; i < batch.length; i += parallelLimit) {
-        finalBatches.push(batch.slice(i, i + parallelLimit))
-      }
-    }
-  }
-
-  return finalBatches
-}
-
-function getExecutableTasks(tasks: Task[]): Task[] {
-  const seen = new Set<string>()
-  const executable: Task[] = []
-
-  for (const task of tasks) {
-    const isBacklogTask = task.status === "backlog" && task.executionPhase !== "plan_complete_waiting_approval"
-    const isApprovedPlanTask = task.executionPhase === "implementation_pending"
-    if (!isBacklogTask && !isApprovedPlanTask) continue
-    if (seen.has(task.id)) continue
-    seen.add(task.id)
-    executable.push(task)
-  }
-
-  return executable
-}
-
 // ---- Orchestrator ----
 
 export class Orchestrator {
@@ -392,6 +311,16 @@ export class Orchestrator {
     return "main"
   }
 
+  private getTaskOrThrow(taskId: string, context: string, fallbackName?: string): Task {
+    const currentTask = this.db.getTask(taskId)
+    if (currentTask) return currentTask
+
+    const taskLabel = fallbackName
+      ? `Task "${fallbackName}" (${taskId})`
+      : `Task ${taskId}`
+    throw new Error(`${taskLabel} was removed while ${context}. Stop execution before modifying or deleting queued tasks.`)
+  }
+
   private extractExecutionFailure(result: any): string | null {
     const parts = result?.parts
     if (!Array.isArray(parts)) return null
@@ -415,7 +344,62 @@ export class Orchestrator {
       }
     }
 
+    const textFailure = this.extractTextualExecutionFailure(parts)
+    if (textFailure) return textFailure
+
     return null
+  }
+
+  private extractTextualExecutionFailure(parts: any[]): string | null {
+    const textParts = parts
+      .filter((part: any) => part?.type === "text" && typeof part.text === "string")
+      .map((part: any) => part.text.trim())
+      .filter(Boolean)
+
+    if (textParts.length === 0) return null
+
+    const hasNonErrorToolWork = parts.some((part: any) =>
+      part?.type === "tool" && part?.state?.status && part.state.status !== "error",
+    )
+    if (hasNonErrorToolWork) return null
+
+    for (const text of textParts) {
+      if (this.looksLikeExecutionFailureText(text)) {
+        return text
+      }
+    }
+
+    return null
+  }
+
+  private looksLikeExecutionFailureText(text: string): boolean {
+    const normalized = text.trim().toLowerCase()
+    if (!normalized) return false
+
+    const directPatterns = [
+      /requires more credits/,
+      /can only afford/,
+      /higher daily limit/,
+      /insufficient (credits|balance)/,
+      /quota exceeded/,
+      /rate limit exceeded/,
+      /maximum context length/,
+      /context length exceeded/,
+      /max[_ -]?tokens/,
+      /token limit exceeded/,
+    ]
+
+    let matchCount = 0
+    for (const pattern of directPatterns) {
+      if (pattern.test(normalized)) matchCount++
+    }
+
+    if (matchCount >= 2) return true
+
+    return normalized.startsWith("error:")
+      || normalized.startsWith("request failed:")
+      || normalized.startsWith("provider error:")
+      || normalized.startsWith("assistant error:")
   }
 
   isExecuting() { return this.running }
@@ -503,7 +487,8 @@ export class Orchestrator {
       errorMessage: null,
       ...(isPlanImplementationResume ? {} : { agentOutput: "" }),
     })
-    let currentTask = this.db.getTask(task.id)!
+    let currentTask = this.getTaskOrThrow(task.id, "marking the task as executing", task.name)
+    let lastKnownTask: Task | null = currentTask
     this.server.broadcast({ type: "task_updated", payload: currentTask })
 
     let worktreeInfo: any = null
@@ -519,7 +504,8 @@ export class Orchestrator {
         throw new Error(`Worktree creation returned invalid response: ${JSON.stringify(worktreeInfo)}`)
       }
       this.db.updateTask(task.id, { worktreeDir: worktreeInfo.directory })
-      currentTask = this.db.getTask(task.id)!
+      currentTask = this.getTaskOrThrow(task.id, "saving the worktree location", task.name)
+      lastKnownTask = currentTask
       this.server.broadcast({ type: "task_updated", payload: currentTask })
 
       // 2. Pre-execution command (using Bun shell directly)
@@ -565,7 +551,8 @@ export class Orchestrator {
       }
       const sessionUrl = buildSessionUrl(resolvedServerUrl, this.worktreeDir, sessionId)
       this.db.updateTask(task.id, { sessionId, sessionUrl })
-      currentTask = this.db.getTask(task.id)!
+      currentTask = this.getTaskOrThrow(task.id, "saving the session metadata", task.name)
+      lastKnownTask = currentTask
       this.server.broadcast({ type: "task_updated", payload: currentTask })
 
       // 4. Determine model
@@ -605,7 +592,10 @@ export class Orchestrator {
           const planResult = unwrapResponseDataOrThrow<any>(planResponse, "Planning prompt")
           const planFailure = this.extractExecutionFailure(planResult)
           if (planFailure) throw new Error(`Planning prompt failed: ${planFailure}`)
-          const planOutput = this.extractTextOutput(planResult)
+          const planOutput = this.extractTextOutput(planResult).trim()
+          if (!planOutput) {
+            throw new Error("Planning prompt failed: no plan output was captured")
+          }
           if (planOutput) {
             this.db.appendAgentOutput(task.id, `[plan] ${planOutput}\n`)
             this.server.broadcast({ type: "agent_output", payload: { taskId: task.id, output: `[plan] ${planOutput}\n` } })
@@ -626,7 +616,8 @@ export class Orchestrator {
             executionPhase: "plan_complete_waiting_approval",
             worktreeDir: shouldDeletePausedWorktree ? null : currentTask.worktreeDir,
           })
-          currentTask = this.db.getTask(task.id)!
+          currentTask = this.getTaskOrThrow(task.id, "saving the completed plan", task.name)
+          lastKnownTask = currentTask
           this.server.broadcast({ type: "task_updated", payload: currentTask })
           appendDebugLog("info", "plan mode: plan complete, awaiting approval", { taskId: task.id })
           return
@@ -690,14 +681,16 @@ export class Orchestrator {
       }
 
       // Refresh task state
-      currentTask = this.db.getTask(task.id)!
+      currentTask = this.getTaskOrThrow(task.id, "refreshing task state after execution", task.name)
+      lastKnownTask = currentTask
       if (this.shouldStop) return
 
       // 6. Review loop
       if (currentTask.review) {
         const reviewConfig = loadReviewConfig()
         await this.runReviewLoop(currentTask, sessionId, reviewConfig)
-        currentTask = this.db.getTask(task.id)!
+        currentTask = this.getTaskOrThrow(task.id, "refreshing task state after review", task.name)
+        lastKnownTask = currentTask
         if (currentTask.status === "stuck") {
           // Task is stuck - halt pipeline
           this.shouldStop = true
@@ -847,7 +840,7 @@ export class Orchestrator {
         completedAt: now,
         worktreeDir: shouldDeleteWorktree ? null : (worktreeInfo?.directory ?? currentTask.worktreeDir),
       })
-      const doneTask = this.db.getTask(task.id)!
+      const doneTask = this.getTaskOrThrow(task.id, "marking the task as done", task.name)
       this.server.broadcast({ type: "task_updated", payload: doneTask })
       appendDebugLog("info", "task completed", { taskId: task.id, taskName: task.name })
 
@@ -857,13 +850,17 @@ export class Orchestrator {
         ? `${msg} (opencode server: ${resolvedServerUrl})`
         : msg
       appendDebugLog("error", "task execution failed", { taskId: task.id, error: contextMsg, serverUrl: resolvedServerUrl })
-      this.db.updateTask(task.id, { status: "failed", errorMessage: contextMsg })
-      const updated = this.db.getTask(task.id)!
-      this.server.broadcast({ type: "task_updated", payload: updated })
+      const failedTask = this.db.updateTask(task.id, { status: "failed", errorMessage: contextMsg })
+      if (failedTask) {
+        lastKnownTask = failedTask
+        this.server.broadcast({ type: "task_updated", payload: failedTask })
+      } else {
+        appendDebugLog("warn", "failed task record missing during error handling", { taskId: task.id })
+      }
       this.server.broadcast({ type: "error", payload: { message: `Task \"${task.name}\" failed: ${contextMsg}` } })
 
       // Cleanup worktree on failure
-      if (worktreeInfo?.directory && currentTask.deleteWorktree !== false) {
+      if (worktreeInfo?.directory && lastKnownTask?.deleteWorktree !== false) {
         try {
           await this.removeWorktree(worktreeInfo.directory)
         } catch (cleanupErr) {

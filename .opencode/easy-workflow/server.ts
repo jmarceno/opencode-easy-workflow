@@ -6,6 +6,7 @@ import { execFileSync } from "child_process"
 import type { WSMessage, ThinkingLevel } from "./types"
 import { KanbanDB } from "./db"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
+import { buildExecutionGraph } from "./execution-plan"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const KANBAN_HTML = readFileSync(join(__dirname, "kanban", "index.html"), "utf-8")
@@ -49,6 +50,10 @@ function hasExecutableTasks(db: KanbanDB): boolean {
     const isApprovedPlanTask = task.executionPhase === "implementation_pending"
     return isBacklogTask || isApprovedPlanTask
   })
+}
+
+function getExecutionMutationError(): string {
+  return "Cannot modify workflow tasks while execution is running. Stop execution first."
 }
 
 export class KanbanServer {
@@ -180,6 +185,12 @@ export class KanbanServer {
         const taskId = taskMatch[1]
 
         if (method === "PATCH") {
+          const existingTask = this.db.getTask(taskId)
+          if (!existingTask) return this.json({ error: "Task not found" }, 404)
+          if (this.getExecuting() && existingTask.status !== "template") {
+            return this.json({ error: getExecutionMutationError() }, 409)
+          }
+
           const body = await req.json()
           if (body?.thinkingLevel !== undefined && !isThinkingLevel(body.thinkingLevel)) {
             return this.json({ error: "Invalid thinkingLevel. Allowed values: default, low, medium, high" }, 400)
@@ -195,6 +206,12 @@ export class KanbanServer {
         }
 
         if (method === "DELETE") {
+          const existingTask = this.db.getTask(taskId)
+          if (!existingTask) return this.json({ error: "Task not found" }, 404)
+          if (this.getExecuting() && existingTask.status !== "template") {
+            return this.json({ error: getExecutionMutationError() }, 409)
+          }
+
           const deleted = this.db.deleteTask(taskId)
           if (!deleted) return this.json({ error: "Task not found" }, 404)
           this.broadcast({ type: "task_deleted", payload: { id: taskId } })
@@ -203,6 +220,10 @@ export class KanbanServer {
       }
 
       if (method === "PUT" && url.pathname === "/api/tasks/reorder") {
+        if (this.getExecuting()) {
+          return this.json({ error: getExecutionMutationError() }, 409)
+        }
+
         const body = await req.json()
         if (body.id && typeof body.newIdx === "number") {
           this.db.reorderTask(body.id, body.newIdx)
@@ -278,6 +299,21 @@ export class KanbanServer {
         return this.json({ ok: true })
       }
 
+      if (method === "GET" && url.pathname === "/api/execution-graph") {
+        if (!hasExecutableTasks(this.db)) {
+          return this.json({ error: "No tasks in backlog" }, 400)
+        }
+        try {
+          const tasks = this.db.getTasks()
+          const options = this.db.getOptions()
+          const graph = buildExecutionGraph(tasks, options.parallelTasks)
+          return this.json(graph)
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          return this.json({ error: msg }, 400)
+        }
+      }
+
       if (method === "POST" && url.pathname === "/api/stop") {
         this.onStop()
         return this.json({ ok: true })
@@ -292,6 +328,12 @@ export class KanbanServer {
         const task = this.db.getTask(taskId)
         if (!task) {
           return this.json({ error: "Task not found" }, 404)
+        }
+        if (this.getExecuting()) {
+          return this.json({ error: getExecutionMutationError() }, 409)
+        }
+        if (!task.agentOutput.trim()) {
+          return this.json({ error: "Task has no captured plan output to approve. Reset it to backlog and rerun planning." }, 400)
         }
         if (task.planmode && (task.executionPhase === "implementation_pending" || task.executionPhase === "implementation_done")) {
           return this.json({ ok: true, message: "Plan already approved" })

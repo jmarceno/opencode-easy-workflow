@@ -70,6 +70,7 @@ export class KanbanDB {
     this.db.exec("PRAGMA busy_timeout = 5000")
     this.db.exec("PRAGMA foreign_keys = ON")
     this.migrate()
+    this.repairInvalidTaskStates()
   }
 
   private migrate() {
@@ -159,6 +160,27 @@ export class KanbanDB {
     if (hasThinkingLevelKey.cnt === 0) {
       this.db.prepare("INSERT OR IGNORE INTO options (key, value) VALUES ('thinking_level', 'default')").run()
     }
+  }
+
+  private repairInvalidTaskStates() {
+    this.db.prepare(`
+      UPDATE tasks
+      SET
+        status = 'failed',
+        awaiting_plan_approval = 0,
+        execution_phase = 'not_started',
+        error_message = CASE
+          WHEN error_message IS NULL OR trim(error_message) = ''
+            THEN 'Plan phase completed without any captured plan output. Reset the task to backlog and retry.'
+          ELSE error_message
+        END,
+        updated_at = unixepoch()
+      WHERE planmode = 1
+        AND status = 'review'
+        AND awaiting_plan_approval = 1
+        AND execution_phase = 'plan_complete_waiting_approval'
+        AND trim(COALESCE(agent_output, '')) = ''
+    `).run()
   }
 
   getTasks(): Task[] {
