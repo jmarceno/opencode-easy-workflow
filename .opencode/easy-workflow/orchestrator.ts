@@ -645,6 +645,8 @@ export class Orchestrator {
 
         appendDebugLog("info", "plan mode: sending execution prompt", { taskId: task.id })
         const approvedPlanContext = task.agentOutput.trim()
+        const userApprovalNoteMatch = task.agentOutput.match(/\[user-approval-note\]\s*([\s\S]*?)(?=\n\[|$)/)
+        const userApprovalNote = userApprovalNoteMatch ? userApprovalNoteMatch[1].trim() : null
         const execPromptOpts: any = {
           sessionID: sessionId,
           model,
@@ -654,6 +656,7 @@ export class Orchestrator {
               "The user has approved the plan below. Implement it now.",
               `Original task:\n${task.prompt}`,
               approvedPlanContext ? `Approved plan:\n${approvedPlanContext}` : "",
+              userApprovalNote ? `User guidance:\n${userApprovalNote}` : "",
             ].filter(Boolean).join("\n\n"),
           }],
         }

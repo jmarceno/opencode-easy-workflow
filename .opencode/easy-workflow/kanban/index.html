@@ -524,6 +524,24 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
   </div>
 </div>
 
+<div class="modal-overlay hidden" id="approveModal">
+  <div class="modal" style="width:440px;">
+    <div class="modal-header">
+      <h2 id="approveModalTitle">Approve Plan</h2>
+      <button class="modal-close" onclick="closeApproveModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div id="approveModalTaskName" style="margin-bottom:12px;font-size:14px;color:var(--text);"></div>
+      <label for="approveMessage" style="display:block;margin-bottom:6px;font-size:13px;color:var(--text-dim);">Message to agent (optional)</label>
+      <textarea id="approveMessage" rows="3" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;resize:vertical;box-sizing:border-box;" placeholder="Add guidance or feedback for the agent..."></textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeApproveModal()">Cancel</button>
+      <button class="btn btn-primary" id="approveConfirmBtn" onclick="confirmApprovePlan()">Approve and Run</button>
+    </div>
+  </div>
+</div>
+
 <div class="log-panel">
   <div class="log-header">
     <span>Event Log</span>
@@ -1648,13 +1666,39 @@ async function resetTask(id) {
   } catch (e) { showToast('Reset failed: ' + e.message, 'error') }
 }
 
-async function approvePlan(id) {
+let approveModalTaskId = null
+
+function openApproveModal(taskId) {
+  const task = allTasks.find(t => t.id === taskId)
+  if (!task) return
+  approveModalTaskId = taskId
+  document.getElementById('approveModalTitle').textContent = 'Approve Plan'
+  document.getElementById('approveModalTaskName').textContent = task.name
+  document.getElementById('approveMessage').value = ''
+  document.getElementById('approveModal').classList.remove('hidden')
+}
+
+function closeApproveModal() {
+  document.getElementById('approveModal').classList.add('hidden')
+  approveModalTaskId = null
+}
+
+async function confirmApprovePlan() {
+  if (!approveModalTaskId) return
+  const message = document.getElementById('approveMessage').value
+  const taskId = approveModalTaskId
+  closeApproveModal()
   try {
-    await api(`/api/tasks/${id}/approve-plan`, 'POST')
-    addLogEntry(`Plan approved for task: ${allTasks.find(t => t.id === id)?.name || id}`)
+    const body = message.trim() ? { message } : {}
+    await api(`/api/tasks/${taskId}/approve-plan`, 'POST', body)
+    addLogEntry(`Plan approved for task: ${allTasks.find(t => t.id === taskId)?.name || taskId}`)
     await loadTasks()
     showToast('Plan approved', 'success')
   } catch (e) { showToast('Approve plan failed: ' + e.message, 'error') }
+}
+
+async function approvePlan(id) {
+  openApproveModal(id)
 }
 
 // ---- Options ----
@@ -1800,6 +1844,51 @@ function renderGraphModal(graph) {
     batchesList.appendChild(batchDiv)
   }
   container.appendChild(batchesList)
+
+  const pendingApprovals = graph.pendingApprovals || []
+  if (pendingApprovals.length > 0) {
+    const pendingDiv = document.createElement('div')
+    pendingDiv.style.cssText = 'margin-top:16px;border:1px solid var(--green);border-radius:8px;padding:12px;background:rgba(63,185,80,.08);'
+    
+    const pendingHeader = document.createElement('div')
+    pendingHeader.style.cssText = 'font-size:12px;font-weight:600;color:var(--green);margin-bottom:8px;'
+    pendingHeader.textContent = `Pending Approvals (${pendingApprovals.length})`
+    pendingDiv.appendChild(pendingHeader)
+
+    const pendingList = document.createElement('div')
+    pendingList.style.cssText = 'display:flex;flex-direction:column;gap:6px;'
+    
+    for (const task of pendingApprovals) {
+      const taskItem = document.createElement('div')
+      taskItem.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 0;'
+      
+      const taskInfo = document.createElement('div')
+      taskInfo.style.cssText = 'display:flex;align-items:center;gap:8px;'
+      
+      const arrow = document.createElement('span')
+      arrow.style.cssText = 'color:var(--green);font-size:12px;'
+      arrow.textContent = '\u25B6'
+      taskInfo.appendChild(arrow)
+      
+      const name = document.createElement('span')
+      name.style.cssText = 'font-size:13px;'
+      name.textContent = task.name
+      taskInfo.appendChild(name)
+      
+      taskItem.appendChild(taskInfo)
+      
+      const approveBtn = document.createElement('button')
+      approveBtn.className = 'btn btn-sm'
+      approveBtn.style.cssText = 'border-color:var(--green);color:var(--green);'
+      approveBtn.textContent = 'Approve'
+      approveBtn.onclick = () => openApproveModal(task.id)
+      taskItem.appendChild(approveBtn)
+      
+      pendingList.appendChild(taskItem)
+    }
+    pendingDiv.appendChild(pendingList)
+    container.appendChild(pendingDiv)
+  }
 }
 
 async function confirmExecution() {

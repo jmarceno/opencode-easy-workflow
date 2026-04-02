@@ -1,0 +1,289 @@
+#!/usr/bin/env bun
+
+import { mkdtempSync, rmSync } from "fs"
+import { tmpdir } from "os"
+import { join } from "path"
+import { KanbanDB } from "../.opencode/easy-workflow/db"
+import { KanbanServer } from "../.opencode/easy-workflow/server"
+
+function assert(condition: unknown, message: string) {
+  if (!condition) {
+    throw new Error(message)
+  }
+}
+
+async function testApprovePlanWithMessage() {
+  const tempDir = mkdtempSync(join(tmpdir(), "easy-workflow-approve-msg-"))
+  const dbPath = join(tempDir, "tasks.db")
+  const db = new KanbanDB(dbPath)
+  const portProbe = Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response("ok")
+    },
+  })
+  const port = portProbe.port
+  portProbe.stop()
+  db.updateOptions({ port })
+
+  let broadcastMessages: any[] = []
+  const server = new KanbanServer(db, {
+    onStart: async () => {},
+    onStop: () => {},
+    getExecuting: () => false,
+    getStartError: () => null,
+    getServerUrl: () => `http://127.0.0.1:${port}`,
+  })
+  const originalBroadcast = server.broadcast.bind(server)
+  server.broadcast = (msg: any) => {
+    broadcastMessages.push(msg)
+    originalBroadcast(msg)
+  }
+
+  server.start()
+
+  try {
+    const planTask = db.createTask({
+      name: "Test Plan Task",
+      prompt: "Test prompt",
+      planmode: true,
+      review: false,
+      autoCommit: false,
+      status: "review",
+      executionPhase: "plan_complete_waiting_approval",
+      awaitingPlanApproval: true,
+    })
+    db.updateTask(planTask.id, { agentOutput: "[plan] A simple plan output\n" })
+
+    const approveResp = await fetch(`http://127.0.0.1:${port}/api/tasks/${planTask.id}/approve-plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "Please implement carefully" }),
+    })
+
+    if (!approveResp.ok) {
+      const errorText = await approveResp.text()
+      console.error("Approve failed:", approveResp.status, errorText)
+    }
+    assert(approveResp.ok, `Expected approve-plan to succeed, got ${approveResp.status}`)
+
+    const updated = db.getTask(planTask.id)!
+    assert(updated.awaitingPlanApproval === false, "Expected awaitingPlanApproval to be false")
+    assert(updated.executionPhase === "implementation_pending", "Expected executionPhase to be implementation_pending")
+    assert(updated.status === "backlog", "Expected status to be backlog")
+    assert(updated.agentOutput.includes("[user-approval-note] Please implement carefully"), "Expected agentOutput to contain user-approval-note")
+
+    const hasAgentOutputBroadcast = broadcastMessages.some(
+      m => m.type === "agent_output" && m.payload.taskId === planTask.id && m.payload.output.includes("user-approval-note")
+    )
+    if (!hasAgentOutputBroadcast) {
+      console.error("Broadcast messages:", JSON.stringify(broadcastMessages, null, 2))
+    }
+    assert(hasAgentOutputBroadcast, "Expected agent_output broadcast for user approval note")
+
+    console.log("✓ approve-plan with message succeeds and persists note")
+  } finally {
+    server.stop()
+    db.close()
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+}
+
+async function testApprovePlanWithoutMessage() {
+  const tempDir = mkdtempSync(join(tmpdir(), "easy-workflow-approve-no-msg-"))
+  const dbPath = join(tempDir, "tasks.db")
+  const db = new KanbanDB(dbPath)
+  const portProbe = Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response("ok")
+    },
+  })
+  const port = portProbe.port
+  portProbe.stop()
+  db.updateOptions({ port })
+
+  let broadcastMessages: any[] = []
+  const server = new KanbanServer(db, {
+    onStart: async () => {},
+    onStop: () => {},
+    getExecuting: () => false,
+    getStartError: () => null,
+    getServerUrl: () => `http://127.0.0.1:${port}`,
+  })
+  const originalBroadcast = server.broadcast.bind(server)
+  server.broadcast = (msg: any) => {
+    broadcastMessages.push(msg)
+    originalBroadcast(msg)
+  }
+
+  server.start()
+
+  try {
+    const planTask = db.createTask({
+      name: "Test Plan Task No Msg",
+      prompt: "Test prompt",
+      planmode: true,
+      review: false,
+      autoCommit: false,
+      status: "review",
+      executionPhase: "plan_complete_waiting_approval",
+      awaitingPlanApproval: true,
+    })
+    db.updateTask(planTask.id, { agentOutput: "[plan] A simple plan output\n" })
+
+    const taskAfterUpdate = db.getTask(planTask.id)!
+    const initialOutput = taskAfterUpdate.agentOutput
+
+    const approveResp = await fetch(`http://127.0.0.1:${port}/api/tasks/${planTask.id}/approve-plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    })
+
+    assert(approveResp.ok, `Expected approve-plan to succeed, got ${approveResp.status}`)
+
+    const updated = db.getTask(planTask.id)!
+    assert(updated.awaitingPlanApproval === false, "Expected awaitingPlanApproval to be false")
+    assert(updated.agentOutput === initialOutput, "Expected agentOutput to be unchanged when no message provided")
+
+    console.log("✓ approve-plan without message works as before")
+  } finally {
+    server.stop()
+    db.close()
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+}
+
+async function testApprovePlanWithEmptyMessage() {
+  const tempDir = mkdtempSync(join(tmpdir(), "easy-workflow-approve-empty-msg-"))
+  const dbPath = join(tempDir, "tasks.db")
+  const db = new KanbanDB(dbPath)
+  const portProbe = Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response("ok")
+    },
+  })
+  const port = portProbe.port
+  portProbe.stop()
+  db.updateOptions({ port })
+
+  const server = new KanbanServer(db, {
+    onStart: async () => {},
+    onStop: () => {},
+    getExecuting: () => false,
+    getStartError: () => null,
+    getServerUrl: () => `http://127.0.0.1:${port}`,
+  })
+  const originalBroadcast = server.broadcast.bind(server)
+  server.broadcast = (msg: any) => {
+    originalBroadcast(msg)
+  }
+
+  server.start()
+
+  try {
+    const planTask = db.createTask({
+      name: "Test Plan Task Empty",
+      prompt: "Test prompt",
+      planmode: true,
+      review: false,
+      autoCommit: false,
+      status: "review",
+      executionPhase: "plan_complete_waiting_approval",
+      awaitingPlanApproval: true,
+    })
+    db.updateTask(planTask.id, { agentOutput: "[plan] A simple plan output\n" })
+
+    const taskAfterUpdate = db.getTask(planTask.id)!
+    const initialOutput = taskAfterUpdate.agentOutput
+
+    const approveResp = await fetch(`http://127.0.0.1:${port}/api/tasks/${planTask.id}/approve-plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "   " }),
+    })
+
+    assert(approveResp.ok, `Expected approve-plan to succeed with empty message, got ${approveResp.status}`)
+
+    const updated = db.getTask(planTask.id)!
+    assert(updated.agentOutput === initialOutput, "Expected agentOutput to be unchanged when message is empty after trim")
+
+    console.log("✓ approve-plan with whitespace-only message treated as no message")
+  } finally {
+    server.stop()
+    db.close()
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+}
+
+async function testApprovePlanWithExistingApprovalNote() {
+  const tempDir = mkdtempSync(join(tmpdir(), "easy-workflow-approve-existing-note-"))
+  const dbPath = join(tempDir, "tasks.db")
+  const db = new KanbanDB(dbPath)
+  const portProbe = Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response("ok")
+    },
+  })
+  const port = portProbe.port
+  portProbe.stop()
+  db.updateOptions({ port })
+
+  const server = new KanbanServer(db, {
+    onStart: async () => {},
+    onStop: () => {},
+    getExecuting: () => false,
+    getStartError: () => null,
+    getServerUrl: () => `http://127.0.0.1:${port}`,
+  })
+
+  server.start()
+
+  try {
+    const planTask = db.createTask({
+      name: "Test Plan Task Existing Note",
+      prompt: "Test prompt",
+      planmode: true,
+      review: false,
+      autoCommit: false,
+      status: "review",
+      executionPhase: "plan_complete_waiting_approval",
+      awaitingPlanApproval: true,
+    })
+    db.updateTask(planTask.id, { agentOutput: "[plan] A simple plan output\n[user-approval-note] Previous note\n" })
+
+    const approveResp = await fetch(`http://127.0.0.1:${port}/api/tasks/${planTask.id}/approve-plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "New note" }),
+    })
+
+    assert(approveResp.ok, `Expected approve-plan to succeed, got ${approveResp.status}`)
+
+    const updated = db.getTask(planTask.id)!
+    assert(updated.agentOutput.includes("[user-approval-note] Previous note"), "Expected original note to be preserved")
+    assert(updated.agentOutput.includes("[user-approval-note] New note"), "Expected new note to be appended")
+
+    console.log("✓ approve-plan appends new note without removing existing notes")
+  } finally {
+    server.stop()
+    db.close()
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+}
+
+async function main() {
+  await testApprovePlanWithMessage()
+  await testApprovePlanWithoutMessage()
+  await testApprovePlanWithEmptyMessage()
+  await testApprovePlanWithExistingApprovalNote()
+  console.log("\nAll approval message tests passed")
+}
+
+main().catch((err) => {
+  console.error(err)
+  process.exit(1)
+})

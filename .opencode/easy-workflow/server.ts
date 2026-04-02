@@ -477,6 +477,14 @@ export class KanbanServer {
             }
           }
 
+          const pendingApprovalTasks = tasks.filter(t => t.status === "review" && t.awaitingPlanApproval)
+          graph.pendingApprovals = pendingApprovalTasks.map(t => ({
+            id: t.id,
+            name: t.name,
+            status: t.status,
+            awaitingPlanApproval: t.awaitingPlanApproval,
+          }))
+
           return this.json(graph)
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
@@ -510,6 +518,22 @@ export class KanbanServer {
         }
         if (task.status !== "review" || !task.awaitingPlanApproval) {
           return this.json({ error: "Task is not awaiting plan approval" }, 400)
+        }
+        let approvalNote: string | undefined
+        try {
+          const body = await req.json()
+          if (body && typeof body.message === "string") {
+            const trimmed = body.message.trim()
+            if (trimmed) {
+              approvalNote = trimmed
+            }
+          }
+        } catch {
+          // ignore parse errors, message is optional
+        }
+        if (approvalNote) {
+          this.db.appendAgentOutput(taskId, `[user-approval-note] ${approvalNote}\n`)
+          this.broadcast({ type: "agent_output", payload: { taskId, output: `[user-approval-note] ${approvalNote}\n` } })
         }
         this.db.updateTask(taskId, {
           awaitingPlanApproval: false,

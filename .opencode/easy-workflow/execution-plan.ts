@@ -90,6 +90,12 @@ export interface ExecutionGraph {
   edges: { from: string; to: string }[]
   totalTasks: number
   parallelLimit: number
+  pendingApprovals?: {
+    id: string
+    name: string
+    status: string
+    awaitingPlanApproval: boolean
+  }[]
 }
 
 export function buildExecutionGraph(tasks: Task[], parallelLimit: number): ExecutionGraph {
