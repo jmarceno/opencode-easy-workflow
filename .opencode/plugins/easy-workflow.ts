@@ -743,7 +743,7 @@ async function extractGoals(client: any, cleanedPrompt: string, context?: Sessio
 
     return { summary, goals };
   } finally {
-    await client.session.delete({ sessionID: scratchSessionId }).catch(() => undefined);
+    await client.session.delete({ sessionID: scratchSessionId });
   }
 }
 
@@ -1015,12 +1015,16 @@ export const EasyWorkflowPlugin = async (input: any) => {
       if (nextServer) {
         try {
           nextServer.stop();
-        } catch {}
+        } catch (e) {
+          await log(client, "error", "failed to stop server during cleanup", { error: String(e) });
+        }
       }
       if (nextDb) {
         try {
           nextDb.close();
-        } catch {}
+        } catch (e) {
+          await log(client, "error", "failed to close database during cleanup", { error: String(e) });
+        }
       }
       await log(client, "error", "kanban initialization failed", { error: msg });
     } finally {

@@ -408,7 +408,7 @@ async function main() {
     process.exitCode = 1;
   } finally {
     writeFileSync(reportPath, JSON.stringify(report, null, 2), "utf-8");
-    if (browser) await browser.close().catch(() => undefined);
+    if (browser) await browser.close();
     if (kanbanServer) kanbanServer.stop();
     if (kanbanDb) kanbanDb.close();
     if (opencode) opencode.server.close();
@@ -639,7 +639,7 @@ async function testPlanModeApprovalUI() {
     process.exitCode = 1;
   } finally {
     writeFileSync(reportPath, JSON.stringify(report, null, 2), "utf-8");
-    if (browser) await browser.close().catch(() => undefined);
+    if (browser) await browser.close();
     if (kanbanServer) kanbanServer.stop();
     if (kanbanDb) kanbanDb.close();
     if (opencode) opencode.server.close();

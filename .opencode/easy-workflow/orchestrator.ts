@@ -763,7 +763,9 @@ export class Orchestrator {
               } else if (defaultBranch) {
                 mainBranch = defaultBranch
               }
-            } catch {}
+            } catch (e) {
+              throw new Error(`Failed to detect main branch: ${e}`);
+            }
 
             if (!mainBranch) {
               try {
@@ -772,8 +774,8 @@ export class Orchestrator {
                   encoding: "utf-8",
                   stdio: "pipe",
                 }).trim()
-              } catch {
-                mainBranch = "main"
+              } catch (e) {
+                throw new Error(`Failed to get current branch: ${e}`);
               }
             }
 
@@ -782,8 +784,8 @@ export class Orchestrator {
                 cwd: worktreeInfo.directory,
                 stdio: "ignore",
               })
-            } catch {
-              mainBranch = "main"
+            } catch (e) {
+              throw new Error(`Branch ${mainBranch} does not exist: ${e}`);
             }
           }
 

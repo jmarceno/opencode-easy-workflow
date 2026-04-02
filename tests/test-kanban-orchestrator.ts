@@ -331,7 +331,7 @@ async function main() {
     
     // Poll for completion
     const completed = await pollForCondition(() => {
-      const tasksResp = fetch(`http://localhost:${startedKanbanPort}/api/tasks`).then(r => r.json()).catch(() => []);
+      const tasksResp = fetch(`http://localhost:${startedKanbanPort}/api/tasks`).then(r => r.json());
       return tasksResp.then((tasks: any[]) => tasks.every((t: any) => t.status === "done"));
     }, 120000, 2000);
     
@@ -470,7 +470,7 @@ console.log("\n\n=== Plan-Mode Approval Workflow Test ===\n");
     
     // Poll for plan task to be in review with awaiting approval
     const planAwaitingApproval = await pollForCondition(() => {
-      const tasksResp = fetch(`http://localhost:${startedKanbanPort}/api/tasks`).then(r => r.json()).catch(() => []);
+      const tasksResp = fetch(`http://localhost:${startedKanbanPort}/api/tasks`).then(r => r.json());
       return tasksResp.then((tasks: any[]) => {
         const pt = tasks.find((t: any) => t.id === planTask.id);
         return pt?.status === "review" && pt?.awaitingPlanApproval === true;
@@ -530,7 +530,7 @@ console.log("\n\n=== Plan-Mode Approval Workflow Test ===\n");
     console.log("Waiting for implementation to complete...");
     
     const implementationComplete = await pollForCondition(() => {
-      const tasksResp = fetch(`http://localhost:${startedKanbanPort}/api/tasks`).then(r => r.json()).catch(() => []);
+      const tasksResp = fetch(`http://localhost:${startedKanbanPort}/api/tasks`).then(r => r.json());
       return tasksResp.then((tasks: any[]) => {
         const pt = tasks.find((t: any) => t.id === planTask.id);
         return pt?.status === "done";
@@ -682,7 +682,7 @@ async function testPlanModeWithDependencies() {
     
     // Wait for first plan task to be in review awaiting approval
     const planAwaitingApproval = await pollForCondition(() => {
-      const tasksResp = fetch(`http://localhost:${startedKanbanPort}/api/tasks`).then(r => r.json()).catch(() => []);
+      const tasksResp = fetch(`http://localhost:${startedKanbanPort}/api/tasks`).then(r => r.json());
       return tasksResp.then((tasks: any[]) => {
         const pt = tasks.find((t: any) => t.id === planTask.id);
         return pt?.status === "review" && pt?.awaitingPlanApproval === true;
@@ -719,7 +719,7 @@ async function testPlanModeWithDependencies() {
     // Wait for first task to complete
     console.log("Waiting for first task to complete...");
     const firstComplete = await pollForCondition(() => {
-      const tasksResp = fetch(`http://localhost:${startedKanbanPort}/api/tasks`).then(r => r.json()).catch(() => []);
+      const tasksResp = fetch(`http://localhost:${startedKanbanPort}/api/tasks`).then(r => r.json());
       return tasksResp.then((tasks: any[]) => {
         const pt = tasks.find((t: any) => t.id === planTask.id);
         return pt?.status === "done";
@@ -743,7 +743,7 @@ async function testPlanModeWithDependencies() {
     }
 
     const dependentAwaitingApproval = await pollForCondition(() => {
-      const tasksResp = fetch(`http://localhost:${startedKanbanPort}/api/tasks`).then(r => r.json()).catch(() => []);
+      const tasksResp = fetch(`http://localhost:${startedKanbanPort}/api/tasks`).then(r => r.json());
       return tasksResp.then((taskList: any[]) => {
         const dependent = taskList.find((t: any) => t.id === depTask.id);
         return dependent?.status === "review" && dependent?.awaitingPlanApproval === true;
