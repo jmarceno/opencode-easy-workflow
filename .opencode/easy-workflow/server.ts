@@ -3,10 +3,14 @@ import { join } from "path"
 import { fileURLToPath } from "url"
 import { dirname } from "path"
 import { execFileSync } from "child_process"
-import type { WSMessage, ThinkingLevel } from "./types"
+import type { WSMessage, ThinkingLevel, ExecutionStrategy, BestOfNConfig, SelectionMode } from "./types"
 import { KanbanDB } from "./db"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
 import { buildExecutionGraph } from "./execution-plan"
+
+const MAX_EXPANDED_WORKER_RUNS = 8
+const MAX_EXPANDED_REVIEWER_RUNS = 4
+const MAX_TOTAL_INTERNAL_RUNS = 12
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const KANBAN_HTML = readFileSync(join(__dirname, "kanban", "index.html"), "utf-8")
@@ -28,6 +32,108 @@ const THINKING_LEVELS: ThinkingLevel[] = ["default", "low", "medium", "high"]
 
 function isThinkingLevel(value: unknown): value is ThinkingLevel {
   return typeof value === "string" && THINKING_LEVELS.includes(value as ThinkingLevel)
+}
+
+function isExecutionStrategy(value: unknown): value is ExecutionStrategy {
+  return value === "standard" || value === "best_of_n"
+}
+
+function isSelectionMode(value: unknown): value is SelectionMode {
+  return value === "pick_best" || value === "synthesize" || value === "pick_or_synthesize"
+}
+
+function validateBestOfNConfig(config: unknown): { valid: boolean; error?: string } {
+  if (!config || typeof config !== "object") {
+    return { valid: false, error: "bestOfNConfig must be an object" }
+  }
+
+  const cfg = config as any
+
+  if (!Array.isArray(cfg.workers) || cfg.workers.length === 0) {
+    return { valid: false, error: "At least one worker slot is required" }
+  }
+
+  for (let i = 0; i < cfg.workers.length; i++) {
+    const slot = cfg.workers[i]
+    if (!slot.model || typeof slot.model !== "string") {
+      return { valid: false, error: `Worker slot ${i + 1}: model is required` }
+    }
+    if (typeof slot.count !== "number" || slot.count < 1) {
+      return { valid: false, error: `Worker slot ${i + 1}: count must be at least 1` }
+    }
+  }
+
+  if (!Array.isArray(cfg.reviewers)) {
+    return { valid: false, error: "Reviewers must be an array" }
+  }
+
+  for (let i = 0; i < cfg.reviewers.length; i++) {
+    const slot = cfg.reviewers[i]
+    if (!slot.model || typeof slot.model !== "string") {
+      return { valid: false, error: `Reviewer slot ${i + 1}: model is required` }
+    }
+    if (typeof slot.count !== "number" || slot.count < 1) {
+      return { valid: false, error: `Reviewer slot ${i + 1}: count must be at least 1` }
+    }
+  }
+
+  if (!cfg.finalApplier || typeof cfg.finalApplier !== "object") {
+    return { valid: false, error: "Final applier is required" }
+  }
+
+  if (!cfg.finalApplier.model || typeof cfg.finalApplier.model !== "string") {
+    return { valid: false, error: "Final applier model is required" }
+  }
+
+  if (cfg.selectionMode && !isSelectionMode(cfg.selectionMode)) {
+    return { valid: false, error: "selectionMode must be pick_best, synthesize, or pick_or_synthesize" }
+  }
+
+  if (typeof cfg.minSuccessfulWorkers !== "number" || cfg.minSuccessfulWorkers < 1) {
+    return { valid: false, error: "minSuccessfulWorkers must be at least 1" }
+  }
+
+  const totalWorkers = cfg.workers.reduce((sum: number, s: any) => sum + s.count, 0)
+  if (cfg.minSuccessfulWorkers > totalWorkers) {
+    return { valid: false, error: "minSuccessfulWorkers cannot exceed total worker count" }
+  }
+
+  const totalReviewers = cfg.reviewers.reduce((sum: number, s: any) => sum + s.count, 0)
+  const totalRuns = totalWorkers + totalReviewers + 1
+
+  if (totalWorkers > MAX_EXPANDED_WORKER_RUNS) {
+    return { valid: false, error: `Total worker runs (${totalWorkers}) exceeds maximum of ${MAX_EXPANDED_WORKER_RUNS}` }
+  }
+
+  if (totalReviewers > MAX_EXPANDED_REVIEWER_RUNS) {
+    return { valid: false, error: `Total reviewer runs (${totalReviewers}) exceeds maximum of ${MAX_EXPANDED_REVIEWER_RUNS}` }
+  }
+
+  if (totalRuns > MAX_TOTAL_INTERNAL_RUNS) {
+    return { valid: false, error: `Total internal runs (${totalRuns}) exceeds maximum of ${MAX_TOTAL_INTERNAL_RUNS}` }
+  }
+
+  return { valid: true }
+}
+
+function expandWorkerSlots(workers: BestOfNConfig["workers"]): { model: string; taskSuffix?: string }[] {
+  const expanded: { model: string; taskSuffix?: string }[] = []
+  for (const slot of workers) {
+    for (let i = 0; i < slot.count; i++) {
+      expanded.push({ model: slot.model, taskSuffix: slot.taskSuffix })
+    }
+  }
+  return expanded
+}
+
+function expandReviewerSlots(reviewers: BestOfNConfig["reviewers"]): { model: string; taskSuffix?: string }[] {
+  const expanded: { model: string; taskSuffix?: string }[] = []
+  for (const slot of reviewers) {
+    for (let i = 0; i < slot.count; i++) {
+      expanded.push({ model: slot.model, taskSuffix: slot.taskSuffix })
+    }
+  }
+  return expanded
 }
 
 function normalizeDefaultModelMap(catalog: any): Record<string, string> {
@@ -81,8 +187,19 @@ export class KanbanServer {
   broadcast(msg: WSMessage) {
     const data = JSON.stringify(msg)
     for (const ws of this.clients) {
-      try { ws.send(data) } catch { this.clients.delete(ws) }
+      try {
+        ws.send(data)
+      } catch (sendErr) {
+        void sendErr
+        this.clients.delete(ws)
+      }
     }
+  }
+
+  private reportExecutionStartFailure(err: unknown): void {
+    const msg = err instanceof Error ? err.message : String(err)
+    this.broadcast({ type: "error", payload: { message: `Execution failed: ${msg}` } })
+    this.broadcast({ type: "execution_stopped", payload: {} })
   }
 
   start(): number {
@@ -107,7 +224,6 @@ export class KanbanServer {
     })
 
     this.server = server
-    console.log(`[kanban] server started on http://localhost:${server.port}`)
     return server.port
   }
 
@@ -123,7 +239,7 @@ export class KanbanServer {
     })
   }
 
-  private getGitBranches(): { branches: string[]; current: string | null } {
+  private getGitBranches(): { branches: string[]; current: string | null; error?: string } {
     try {
       const branchOutput = execFileSync("git", ["branch", "--format=%(refname:short)"], {
         cwd: process.cwd(),
@@ -147,8 +263,9 @@ export class KanbanServer {
       }
 
       return { branches, current }
-    } catch {
-      return { branches: [], current: null }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return { branches: [], current: null, error: `Failed to list git branches: ${message}` }
     }
   }
 
@@ -175,6 +292,24 @@ export class KanbanServer {
         if (body?.thinkingLevel !== undefined && !isThinkingLevel(body.thinkingLevel)) {
           return this.json({ error: "Invalid thinkingLevel. Allowed values: default, low, medium, high" }, 400)
         }
+        if (body?.executionStrategy !== undefined && !isExecutionStrategy(body.executionStrategy)) {
+          return this.json({ error: "Invalid executionStrategy. Allowed values: standard, best_of_n" }, 400)
+        }
+        if (body?.executionStrategy === "best_of_n") {
+          if (!body.bestOfNConfig) {
+            return this.json({ error: "bestOfNConfig is required when executionStrategy is best_of_n" }, 400)
+          }
+          const validation = validateBestOfNConfig(body.bestOfNConfig)
+          if (!validation.valid) {
+            return this.json({ error: validation.error }, 400)
+          }
+        }
+        if (body?.executionStrategy === "standard" && body?.bestOfNConfig !== undefined && body.bestOfNConfig !== null) {
+          return this.json({ error: "bestOfNConfig must be null when executionStrategy is standard" }, 400)
+        }
+        if (body?.planmode === true && body?.executionStrategy === "best_of_n") {
+          return this.json({ error: "planmode and best_of_n execution strategy cannot be combined in v1" }, 400)
+        }
         const task = this.db.createTask(body)
         this.broadcast({ type: "task_created", payload: task })
         return this.json(task, 201)
@@ -195,9 +330,31 @@ export class KanbanServer {
           if (body?.thinkingLevel !== undefined && !isThinkingLevel(body.thinkingLevel)) {
             return this.json({ error: "Invalid thinkingLevel. Allowed values: default, low, medium, high" }, 400)
           }
+          if (body?.executionStrategy !== undefined && !isExecutionStrategy(body.executionStrategy)) {
+            return this.json({ error: "Invalid executionStrategy. Allowed values: standard, best_of_n" }, 400)
+          }
+          if (body?.executionStrategy === "best_of_n" || (body?.bestOfNConfig && existingTask.executionStrategy === "best_of_n")) {
+            if (body.bestOfNConfig === null) {
+              return this.json({ error: "bestOfNConfig cannot be set to null for best_of_n tasks" }, 400)
+            }
+            const configToValidate = body.bestOfNConfig ?? existingTask.bestOfNConfig
+            const validation = validateBestOfNConfig(configToValidate)
+            if (!validation.valid) {
+              return this.json({ error: validation.error }, 400)
+            }
+          }
+          if (body?.executionStrategy === "standard" && body?.bestOfNConfig !== undefined && body.bestOfNConfig !== null) {
+            return this.json({ error: "bestOfNConfig must be null when executionStrategy is standard" }, 400)
+          }
+          if (body?.planmode === true && (body?.executionStrategy === "best_of_n" || existingTask.executionStrategy === "best_of_n")) {
+            return this.json({ error: "planmode and best_of_n execution strategy cannot be combined in v1" }, 400)
+          }
           if (body?.status === "backlog" && body?.executionPhase === undefined) {
             body.executionPhase = "not_started"
             body.awaitingPlanApproval = false
+          }
+          if (body?.status === "backlog") {
+            body.bestOfNSubstage = "idle"
           }
           const task = this.db.updateTask(taskId, body)
           if (!task) return this.json({ error: "Task not found" }, 404)
@@ -290,12 +447,7 @@ export class KanbanServer {
         if (preflightError) {
           return this.json({ error: preflightError }, 500)
         }
-        this.onStart().catch((err) => {
-          const msg = err instanceof Error ? err.message : String(err)
-          console.error("[kanban] orchestrator start failed:", msg)
-          this.broadcast({ type: "error", payload: { message: `Execution failed: ${msg}` } })
-          this.broadcast({ type: "execution_stopped", payload: {} })
-        })
+        this.onStart().catch((err) => this.reportExecutionStartFailure(err))
         return this.json({ ok: true })
       }
 
@@ -307,6 +459,24 @@ export class KanbanServer {
           const tasks = this.db.getTasks()
           const options = this.db.getOptions()
           const graph = buildExecutionGraph(tasks, options.parallelTasks)
+
+          for (const node of graph.nodes) {
+            const task = tasks.find(t => t.id === node.id)
+            if (task && task.executionStrategy === "best_of_n" && task.bestOfNConfig) {
+              const expandedWorkers = expandWorkerSlots(task.bestOfNConfig.workers).length
+              const expandedReviewers = expandReviewerSlots(task.bestOfNConfig.reviewers).length
+              node.expandedWorkerRuns = expandedWorkers
+              node.expandedReviewerRuns = expandedReviewers
+              node.hasFinalApplier = true
+              node.estimatedRunCount = expandedWorkers + expandedReviewers + 1
+            } else {
+              node.expandedWorkerRuns = 1
+              node.expandedReviewerRuns = 0
+              node.hasFinalApplier = false
+              node.estimatedRunCount = 1
+            }
+          }
+
           return this.json(graph)
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
@@ -351,20 +521,61 @@ export class KanbanServer {
         if (!this.getExecuting()) {
           const preflightError = this.getStartError()
           if (!preflightError) {
-            this.onStart().catch((err) => {
-              const msg = err instanceof Error ? err.message : String(err)
-              console.error("[kanban] orchestrator start failed:", msg)
-              this.broadcast({ type: "error", payload: { message: `Execution failed: ${msg}` } })
-              this.broadcast({ type: "execution_stopped", payload: {} })
-            })
+            this.onStart().catch((err) => this.reportExecutionStartFailure(err))
           }
         }
         return this.json({ ok: true })
       }
 
+      // Task runs
+      const runsMatch = method === "GET" ? url.pathname.match(/^\/api\/tasks\/([a-z0-9]+)\/runs$/) : null
+      if (runsMatch) {
+        const taskId = runsMatch[1]
+        const task = this.db.getTask(taskId)
+        if (!task) return this.json({ error: "Task not found" }, 404)
+        const runs = this.db.getTaskRuns(taskId)
+        return this.json(runs)
+      }
+
+      // Task candidates
+      const candidatesMatch = method === "GET" ? url.pathname.match(/^\/api\/tasks\/([a-z0-9]+)\/candidates$/) : null
+      if (candidatesMatch) {
+        const taskId = candidatesMatch[1]
+        const task = this.db.getTask(taskId)
+        if (!task) return this.json({ error: "Task not found" }, 404)
+        const candidates = this.db.getTaskCandidates(taskId)
+        return this.json(candidates)
+      }
+
+      // Best-of-n summary
+      const summaryMatch = method === "GET" ? url.pathname.match(/^\/api\/tasks\/([a-z0-9]+)\/best-of-n-summary$/) : null
+      if (summaryMatch) {
+        const taskId = summaryMatch[1]
+        const task = this.db.getTask(taskId)
+        if (!task) return this.json({ error: "Task not found" }, 404)
+        if (task.executionStrategy !== "best_of_n") {
+          return this.json({ error: "Task is not a best_of_n task" }, 400)
+        }
+        const counts = this.db.getBestOfNCounts(taskId)
+        const candidates = this.db.getTaskCandidates(taskId)
+        const expandedWorkerCount = task.bestOfNConfig ? expandWorkerSlots(task.bestOfNConfig.workers).length : 0
+        const expandedReviewerCount = task.bestOfNConfig ? expandReviewerSlots(task.bestOfNConfig.reviewers).length : 0
+        return this.json({
+          taskId,
+          substage: task.bestOfNSubstage,
+          ...counts,
+          expandedWorkerCount,
+          expandedReviewerCount,
+          totalExpandedRuns: expandedWorkerCount + expandedReviewerCount + 1,
+          successfulCandidateCount: candidates.length,
+          selectedCandidate: candidates.find(c => c.status === "selected")?.id ?? null,
+        })
+      }
+
       return this.json({ error: "Not found" }, 404)
     } catch (err) {
-      return this.json({ error: String(err) }, 500)
+      const message = err instanceof Error ? err.message : String(err)
+      return this.json({ error: message }, 500)
     }
   }
 }

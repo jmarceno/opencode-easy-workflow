@@ -84,10 +84,40 @@ The skill is designed to be generic about where source material comes from, and 
 
 - **Dependencies**: Tasks can depend on other tasks (topological sort)
 - **Parallel Execution**: Configure max parallel tasks
+- **Best-of-N Execution**: Fan out one logical task into multiple worker candidates, optional reviewers, and a final applier run
 - **Plan Mode**: Use OpenCode's built-in `plan` agent
 - **Automated Review**: Enable review after task execution
 - **Auto-commit**: Automatically commit changes to git
 - **Pre-execution Commands**: Run shell commands before task execution
+
+### Best-of-N Execution Strategy
+
+Kanban tasks can now opt into `best_of_n` execution for multi-candidate implementation and convergence.
+
+How it works:
+
+1. The orchestrator expands configured worker slots into parallel worker runs.
+2. Successful worker outputs are stored as candidate artifacts (`task_candidates`).
+3. Optional reviewer runs evaluate candidates and provide structured guidance.
+4. A final applier run executes in a fresh worktree and becomes the single merge source.
+5. The board keeps one card per logical task while run-level details are available via `View Runs`.
+
+Key behavior:
+
+- Uses existing safe worktree merge path (no direct live-branch edits by candidates)
+- Supports partial worker/reviewer failures with surfaced task/run errors
+- Routes ambiguous reviewer outcomes to the existing `Review` column
+- Enforces limits on expanded runs to avoid runaway execution
+
+Best-of-N task config fields:
+
+- `executionStrategy`: `standard` | `best_of_n`
+- `bestOfNConfig.workers[]`: per-slot `model`, `count`, optional `taskSuffix`
+- `bestOfNConfig.reviewers[]`: per-slot `model`, `count`, optional `taskSuffix`
+- `bestOfNConfig.finalApplier`: `model`, optional `taskSuffix`
+- `bestOfNConfig.selectionMode`: `pick_best` | `synthesize` | `pick_or_synthesize`
+- `bestOfNConfig.minSuccessfulWorkers`: minimum successful worker threshold
+- `bestOfNConfig.verificationCommand` (optional): command run in worker/final-applier worktrees
 
 ### Task States
 
@@ -130,11 +160,19 @@ curl -X POST http://localhost:3789/api/start
 | Option | Description |
 |--------|-------------|
 | `executionModel` | Model to use for execution (e.g., `minimax/minimax-m2.7`) |
+| `executionStrategy` | `standard` or `best_of_n` |
+| `bestOfNConfig` | Best-of-N worker/reviewer/final-applier configuration |
 | `planModel` | Model for planning phase |
 | `planmode` | Enable plan-then-execute flow |
 | `review` | Run review agent after execution |
 | `autoCommit` | Commit changes after execution |
 | `requirements` | Array of task IDs this task depends on |
+
+### Best-of-N API Endpoints
+
+- `GET /api/tasks/:id/runs` - child run records (`worker`, `reviewer`, `final_applier`)
+- `GET /api/tasks/:id/candidates` - successful worker candidate artifacts
+- `GET /api/tasks/:id/best-of-n-summary` - aggregated counts/status for card/modal UI
 
 ## Architecture
 

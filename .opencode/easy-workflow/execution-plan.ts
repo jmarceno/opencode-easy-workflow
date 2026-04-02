@@ -77,7 +77,16 @@ export function resolveBatches(tasks: Task[], parallelLimit: number): Task[][] {
 
 export interface ExecutionGraph {
   batches: { idx: number; taskIds: string[]; taskNames: string[] }[]
-  nodes: { id: string; name: string; status: string; requirements: string[] }[]
+  nodes: {
+    id: string
+    name: string
+    status: string
+    requirements: string[]
+    expandedWorkerRuns?: number
+    expandedReviewerRuns?: number
+    hasFinalApplier?: boolean
+    estimatedRunCount?: number
+  }[]
   edges: { from: string; to: string }[]
   totalTasks: number
   parallelLimit: number

@@ -65,6 +65,51 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 .badge-plan { background: rgba(136,98,246,.15); color: #8b5cf6; }
 .badge-approval { background: rgba(210,153,34,.15); color: var(--yellow); }
 .badge-template { background: rgba(47,125,247,.15); color: var(--accent); }
+.badge-bestofn { background: rgba(219,109,40,.15); color: var(--orange); }
+.badge-workers { background: rgba(47,129,247,.15); color: #79c0ff; }
+.badge-reviewers { background: rgba(136,98,246,.15); color: #8b5cf6; }
+.badge-final { background: rgba(35,134,54,.15); color: #7ee787; }
+.badge-warning { background: rgba(210,153,34,.15); color: var(--yellow); }
+
+/* Best-of-n config section */
+.bon-config-section { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin-top: 12px; background: var(--bg); }
+.bon-config-section h4 { font-size: 13px; margin-bottom: 10px; color: var(--text); }
+.bon-slot-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
+.bon-slot-row input[type="number"] { width: 60px; }
+.bon-slot-row select { flex: 1; }
+.bon-slot-row textarea { flex: 1; min-height: 40px; }
+.bon-remove-btn { background: none; border: none; color: var(--red); cursor: pointer; font-size: 16px; padding: 4px; }
+.bon-remove-btn:hover { color: #ff7b72; }
+.bon-add-btn { background: var(--surface2); border: 1px dashed var(--border); border-radius: 4px; color: var(--text-dim); cursor: pointer; padding: 4px 12px; font-size: 12px; width: 100%; }
+.bon-add-btn:hover { border-color: var(--accent); color: var(--accent); }
+.bon-validation-error { color: var(--red); font-size: 12px; margin-top: 4px; }
+
+/* Detail modal */
+.modal-detail-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.modal-detail-tab { padding: 8px 16px; font-size: 13px; cursor: pointer; border: none; background: none; color: var(--text-dim); border-bottom: 2px solid transparent; }
+.modal-detail-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.modal-detail-tab:hover { color: var(--text); }
+.run-list { display: flex; flex-direction: column; gap: 8px; }
+.run-item { border: 1px solid var(--border); border-radius: 6px; padding: 10px; background: var(--bg); }
+.run-item-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.run-item-phase { font-size: 12px; font-weight: 600; text-transform: uppercase; }
+.run-item-phase.worker { color: #79c0ff; }
+.run-item-phase.reviewer { color: #8b5cf6; }
+.run-item-phase.final_applier { color: #7ee787; }
+.run-item-model { font-size: 11px; color: var(--text-dim); }
+.run-item-status { font-size: 11px; padding: 2px 6px; border-radius: 4px; }
+.run-item-status.pending { background: var(--surface2); color: var(--text-dim); }
+.run-item-status.running { background: rgba(47,125,247,.15); color: var(--accent); }
+.run-item-status.done { background: rgba(35,134,54,.15); color: #7ee787; }
+.run-item-status.failed { background: rgba(218,54,51,.15); color: var(--red); }
+.run-item-summary { font-size: 12px; color: var(--text-dim); margin-top: 4px; white-space: pre-wrap; }
+.run-item-actions { display: flex; gap: 8px; margin-top: 8px; }
+.candidate-list { display: flex; flex-direction: column; gap: 8px; }
+.candidate-item { border: 1px solid var(--border); border-radius: 6px; padding: 10px; background: var(--bg); }
+.candidate-item.selected { border-color: var(--green); }
+.candidate-header { display: flex; justify-content: space-between; align-items: center; }
+.candidate-id { font-size: 11px; color: var(--text-dim); }
+.candidate-files { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
 
 /* Collapsible output */
 .output-toggle { font-size: 12px; color: var(--accent); cursor: pointer; background: none; border: none; padding: 4px 0; }
@@ -289,6 +334,77 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
       </div>
       <div class="form-group">
         <div class="label-row">
+          <label for="taskExecutionStrategy">Execution Strategy</label>
+          <button class="help-btn" type="button" title="Standard runs a single execution. Best of N runs multiple candidates in parallel and picks or synthesizes the best result." aria-label="Execution strategy help">?</button>
+        </div>
+        <select id="taskExecutionStrategy">
+          <option value="standard">Standard</option>
+          <option value="best_of_n">Best of N</option>
+        </select>
+      </div>
+      <div class="bon-config-section" id="bonConfigSection" style="display:none;">
+        <h4>Best of N Configuration</h4>
+        <div id="bonValidationErrors"></div>
+        
+        <div class="form-group">
+          <div class="label-row">
+            <label>Workers</label>
+          </div>
+          <div id="bonWorkersList"></div>
+          <button type="button" class="bon-add-btn" onclick="addBonWorkerSlot()">+ Add Worker Slot</button>
+        </div>
+        
+        <div class="form-group">
+          <div class="label-row">
+            <label>Reviewers</label>
+          </div>
+          <div id="bonReviewersList"></div>
+          <button type="button" class="bon-add-btn" onclick="addBonReviewerSlot()">+ Add Reviewer Slot</button>
+        </div>
+        
+        <div class="form-group">
+          <div class="label-row">
+            <label for="bonFinalApplierModel">Final Applier Model</label>
+          </div>
+          <input type="text" id="bonFinalApplierModelSearch" class="model-search" placeholder="Filter models...">
+          <select id="bonFinalApplierModel"></select>
+        </div>
+        
+        <div class="form-group">
+          <div class="label-row">
+            <label for="bonFinalApplierSuffix">Final Applier Suffix (optional)</label>
+          </div>
+          <textarea id="bonFinalApplierSuffix" placeholder="Additional instructions for the final applier..."></textarea>
+        </div>
+        
+        <div class="form-row">
+          <div class="form-group">
+            <div class="label-row">
+              <label for="bonSelectionMode">Selection Mode</label>
+            </div>
+            <select id="bonSelectionMode">
+              <option value="pick_best">Pick Best</option>
+              <option value="synthesize">Synthesize</option>
+              <option value="pick_or_synthesize">Pick or Synthesize</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <div class="label-row">
+              <label for="bonMinSuccessful">Min Successful Workers</label>
+            </div>
+            <input type="number" id="bonMinSuccessful" min="1" max="8" value="1">
+          </div>
+        </div>
+        
+        <div class="form-group">
+          <div class="label-row">
+            <label for="bonVerificationCmd">Verification Command (optional)</label>
+          </div>
+          <input type="text" id="bonVerificationCmd" placeholder="e.g. npm test">
+        </div>
+      </div>
+      <div class="form-group">
+        <div class="label-row">
           <label for="taskBranch">Branch</label>
           <button class="help-btn" type="button" title="Git branch the task should run against. Pick the branch where changes should be created or reviewed." aria-label="Task branch help">?</button>
         </div>
@@ -430,6 +546,7 @@ let reconnectTimer = null
 let dragTaskId = null
 let eventLogs = []
 const MAX_LOG_ENTRIES = 500
+let bonSummaryByTask = {}
 let taskModalMode = 'create'
 let taskModalCreateStatus = 'backlog'
 let modelCatalog = { providers: [] }
@@ -438,7 +555,104 @@ const MODEL_SELECT_FILTERS = [
   { selectId: 'taskExecModel', searchId: 'taskExecModelSearch' },
   { selectId: 'optPlanModel', searchId: 'optPlanModelSearch' },
   { selectId: 'optExecModel', searchId: 'optExecModelSearch' },
+  { selectId: 'bonFinalApplierModel', searchId: 'bonFinalApplierModelSearch' },
 ]
+
+let bonWorkers = []
+let bonReviewers = []
+
+function addBonWorkerSlot(model = 'default', count = 1, suffix = '') {
+  bonWorkers.push({ model, count, suffix })
+  renderBonWorkerSlots()
+}
+
+function removeBonWorkerSlot(index) {
+  bonWorkers.splice(index, 1)
+  renderBonWorkerSlots()
+}
+
+function renderBonWorkerSlots() {
+  const container = document.getElementById('bonWorkersList')
+  container.innerHTML = ''
+  for (let i = 0; i < bonWorkers.length; i++) {
+    const slot = bonWorkers[i]
+    const row = document.createElement('div')
+    row.className = 'bon-slot-row'
+    row.innerHTML = `
+      <input type="number" min="1" max="4" value="${slot.count}" onchange="bonWorkers[${i}].count = parseInt(this.value) || 1">
+      <select onchange="bonWorkers[${i}].model = this.value">
+        ${getModelOptions(slot.model)}
+      </select>
+      <input type="text" placeholder="Suffix (optional)" value="${slot.suffix || ''}" onchange="bonWorkers[${i}].suffix = this.value">
+      <button type="button" class="bon-remove-btn" onclick="removeBonWorkerSlot(${i})">\u2715</button>
+    `
+    container.appendChild(row)
+  }
+}
+
+function addBonReviewerSlot(model = 'default', count = 1, suffix = '') {
+  bonReviewers.push({ model, count, suffix })
+  renderBonReviewerSlots()
+}
+
+function removeBonReviewerSlot(index) {
+  bonReviewers.splice(index, 1)
+  renderBonReviewerSlots()
+}
+
+function renderBonReviewerSlots() {
+  const container = document.getElementById('bonReviewersList')
+  container.innerHTML = ''
+  for (let i = 0; i < bonReviewers.length; i++) {
+    const slot = bonReviewers[i]
+    const row = document.createElement('div')
+    row.className = 'bon-slot-row'
+    row.innerHTML = `
+      <input type="number" min="1" max="4" value="${slot.count}" onchange="bonReviewers[${i}].count = parseInt(this.value) || 1">
+      <select onchange="bonReviewers[${i}].model = this.value">
+        ${getModelOptions(slot.model)}
+      </select>
+      <input type="text" placeholder="Suffix (optional)" value="${slot.suffix || ''}" onchange="bonReviewers[${i}].suffix = this.value">
+      <button type="button" class="bon-remove-btn" onclick="removeBonReviewerSlot(${i})">\u2715</button>
+    `
+    container.appendChild(row)
+  }
+}
+
+function getModelOptions(selected = 'default') {
+  let html = '<option value="default">default</option>'
+  for (const provider of modelCatalog?.providers || []) {
+    for (const model of provider.models || []) {
+      const selectedAttr = model.value === selected ? ' selected' : ''
+      html += `<option value="${model.value}"${selectedAttr}>${model.label}</option>`
+    }
+  }
+  return html
+}
+
+function validateBonConfig() {
+  const errors = []
+  if (bonWorkers.length === 0) {
+    errors.push('Add at least one worker slot')
+  }
+  const totalWorkers = bonWorkers.reduce((sum, w) => sum + (w.count || 1), 0)
+  if (totalWorkers > 8) {
+    errors.push(`Total workers (${totalWorkers}) exceeds maximum of 8`)
+  }
+  const minSuccess = parseInt(document.getElementById('bonMinSuccessful')?.value || '1', 10)
+  if (minSuccess > totalWorkers) {
+    errors.push('Minimum successful workers cannot exceed total workers')
+  }
+  return errors
+}
+
+function updateBonConfigVisibility() {
+  const strategy = document.getElementById('taskExecutionStrategy')?.value || 'standard'
+  const section = document.getElementById('bonConfigSection')
+  if (section) {
+    section.style.display = strategy === 'best_of_n' ? 'block' : 'none'
+  }
+}
 
 // ---- API helpers ----
 async function api(path, method = 'GET', body) {
@@ -446,8 +660,21 @@ async function api(path, method = 'GET', body) {
   if (body) opts.body = JSON.stringify(body)
   const res = await fetch(API + path, opts)
   if (!res.ok) {
-    const err = await res.text()
-    throw new Error(err)
+    let errorMessage = `Request failed (${res.status})`
+    const responseText = await res.text()
+    if (responseText) {
+      try {
+        const parsed = JSON.parse(responseText)
+        if (parsed && typeof parsed.error === 'string' && parsed.error.trim()) {
+          errorMessage = parsed.error
+        } else {
+          errorMessage = responseText
+        }
+      } catch {
+        errorMessage = responseText
+      }
+    }
+    throw new Error(errorMessage)
   }
   return res.status === 204 ? null : res.json()
 }
@@ -455,8 +682,39 @@ async function api(path, method = 'GET', body) {
 async function loadTasks() {
   try {
     allTasks = await api('/api/tasks')
+    await refreshBonSummaries()
     renderBoard()
   } catch (e) { showToast('Failed to load tasks: ' + e.message, 'error') }
+}
+
+async function refreshBonSummaries(taskIds) {
+  const targetTaskIds = Array.isArray(taskIds)
+    ? taskIds
+    : allTasks.filter((t) => t.executionStrategy === 'best_of_n').map((t) => t.id)
+
+  if (targetTaskIds.length === 0) {
+    bonSummaryByTask = {}
+    return
+  }
+
+  const uniqueTaskIds = [...new Set(targetTaskIds)]
+  const updates = await Promise.all(uniqueTaskIds.map(async (taskId) => {
+    try {
+      const summary = await api(`/api/tasks/${taskId}/best-of-n-summary`)
+      return { taskId, summary }
+    } catch (e) {
+      addLogEntry(`Failed to refresh best-of-n summary for ${taskId}: ${e.message}`, 'error')
+      return { taskId, summary: null }
+    }
+  }))
+
+  const next = { ...bonSummaryByTask }
+  for (const update of updates) {
+    if (update.summary) {
+      next[update.taskId] = update.summary
+    }
+  }
+  bonSummaryByTask = next
 }
 
 async function loadOptions() {
@@ -468,6 +726,11 @@ async function loadOptions() {
 async function loadBranches() {
   try {
     const data = await api('/api/branches')
+    if (data.error) {
+      availableBranches = []
+      showToast('Failed to load branches: ' + data.error, 'error')
+      return
+    }
     const branches = Array.isArray(data.branches) ? data.branches.filter(Boolean) : []
     currentGitBranch = typeof data.current === 'string' && data.current ? data.current : null
     if (currentGitBranch && !branches.includes(currentGitBranch)) branches.unshift(currentGitBranch)
@@ -679,9 +942,15 @@ function connectWS() {
         const ui = allTasks.findIndex(t => t.id === msg.payload.id)
         if (ui >= 0) allTasks[ui] = msg.payload; else allTasks.push(msg.payload)
         logTaskTransition(previous, msg.payload)
-        renderBoard(); break
+        if (msg.payload.executionStrategy === 'best_of_n') {
+          refreshBonSummaries([msg.payload.id]).finally(() => renderBoard())
+        } else {
+          renderBoard()
+        }
+        break
       case 'task_deleted':
         addLogEntry(`Task deleted: ${allTasks.find(t => t.id === msg.payload.id)?.name || msg.payload.id}`)
+        delete bonSummaryByTask[msg.payload.id]
         allTasks = allTasks.filter(t => t.id !== msg.payload.id); renderBoard(); break
       case 'task_reordered': addLogEntry('Task order updated'); loadTasks(); break
       case 'options_updated': addLogEntry('Options updated'); loadOptions(); break
@@ -693,6 +962,14 @@ function connectWS() {
         if (t) { t.agentOutput = (t.agentOutput || '') + msg.payload.output; renderBoard() }
         break
       case 'error': showToast(msg.payload.message, 'error'); break
+      case 'task_run_created':
+      case 'task_run_updated':
+      case 'task_candidate_created':
+      case 'task_candidate_updated':
+        if (msg.payload?.taskId) {
+          refreshBonSummaries([msg.payload.taskId]).finally(() => renderBoard())
+        }
+        break
     }
   }
 }
@@ -911,6 +1188,63 @@ function renderCard(task, colStatus) {
     b.textContent = 'keep worktree'
     meta.appendChild(b)
   }
+  if (task.executionStrategy === 'best_of_n') {
+    const bonSummary = bonSummaryByTask[task.id] || null
+    const b = document.createElement('span')
+    b.className = 'badge badge-bestofn'
+    b.textContent = 'best-of-n'
+    meta.appendChild(b)
+    if (task.bestOfNSubstage && task.bestOfNSubstage !== 'idle') {
+      const stageMap = {
+        'workers_running': 'workers running',
+        'reviewers_running': 'reviewers running',
+        'final_apply_running': 'final apply',
+        'blocked_for_manual_review': 'manual review',
+        'completed': 'completed',
+      }
+      const b2 = document.createElement('span')
+      b2.className = 'badge badge-' + (task.bestOfNSubstage === 'completed' ? 'final' : 'workers')
+      b2.textContent = stageMap[task.bestOfNSubstage] || task.bestOfNSubstage
+      meta.appendChild(b2)
+    }
+    if (bonSummary) {
+      const b3 = document.createElement('span')
+      b3.className = 'badge badge-workers'
+      b3.textContent = `workers ${bonSummary.workersDone}/${bonSummary.workersTotal}`
+      meta.appendChild(b3)
+
+      const b4 = document.createElement('span')
+      b4.className = 'badge badge-reviewers'
+      b4.textContent = `reviewers ${bonSummary.reviewersDone}/${bonSummary.reviewersTotal}`
+      meta.appendChild(b4)
+    } else {
+      if (task.bestOfNConfig?.workers) {
+        const totalWorkers = task.bestOfNConfig.workers.reduce((sum, w) => sum + w.count, 0)
+        const b3 = document.createElement('span')
+        b3.className = 'badge badge-workers'
+        b3.textContent = `workers ${totalWorkers}`
+        meta.appendChild(b3)
+      }
+      if (task.bestOfNConfig?.reviewers?.length > 0) {
+        const totalReviewers = task.bestOfNConfig.reviewers.reduce((sum, r) => sum + r.count, 0)
+        const b4 = document.createElement('span')
+        b4.className = 'badge badge-reviewers'
+        b4.textContent = `reviewers ${totalReviewers}`
+        meta.appendChild(b4)
+      }
+    }
+  }
+  if (task.executionStrategy === 'best_of_n' && task.status !== 'template' && task.status !== 'backlog') {
+    const viewRunsBtn = document.createElement('button')
+    viewRunsBtn.className = 'btn btn-sm'
+    viewRunsBtn.textContent = 'View Runs'
+    viewRunsBtn.style.marginTop = '4px'
+    viewRunsBtn.onclick = (e) => {
+      e.stopPropagation()
+      openBestOfNDetailModal(task.id)
+    }
+    card.appendChild(viewRunsBtn)
+  }
   if (meta.children.length > 0) card.appendChild(meta)
 
   if (task.status === 'review' && task.awaitingPlanApproval && !hasPlanOutput(task)) {
@@ -1051,6 +1385,9 @@ function openTaskModal(taskId, options = {}) {
   let currentReqs = []
   let reqExcludeId = null
 
+  bonWorkers = []
+  bonReviewers = []
+
   if (taskId) {
     const task = allTasks.find(t => t.id === taskId)
     if (!task) return
@@ -1072,6 +1409,26 @@ function openTaskModal(taskId, options = {}) {
     document.getElementById('taskThinkingLevel').value = task.thinkingLevel || 'default'
     currentReqs = task.requirements || []
     reqExcludeId = task.id
+
+    if (task.executionStrategy === 'best_of_n' && task.bestOfNConfig) {
+      document.getElementById('taskExecutionStrategy').value = 'best_of_n'
+      bonWorkers = (task.bestOfNConfig.workers || []).map(w => ({ model: w.model, count: w.count, suffix: w.taskSuffix || '' }))
+      bonReviewers = (task.bestOfNConfig.reviewers || []).map(r => ({ model: r.model, count: r.count, suffix: r.taskSuffix || '' }))
+      if (task.bestOfNConfig.finalApplier) {
+        resetModelSelectWithSearch('bonFinalApplierModel', 'bonFinalApplierModelSearch', task.bestOfNConfig.finalApplier.model)
+        document.getElementById('bonFinalApplierSuffix').value = task.bestOfNConfig.finalApplier.taskSuffix || ''
+      }
+      document.getElementById('bonSelectionMode').value = task.bestOfNConfig.selectionMode || 'pick_best'
+      document.getElementById('bonMinSuccessful').value = task.bestOfNConfig.minSuccessfulWorkers || 1
+      document.getElementById('bonVerificationCmd').value = task.bestOfNConfig.verificationCommand || ''
+    } else {
+      document.getElementById('taskExecutionStrategy').value = 'standard'
+      resetModelSelectWithSearch('bonFinalApplierModel', 'bonFinalApplierModelSearch', 'default')
+      document.getElementById('bonFinalApplierSuffix').value = ''
+      document.getElementById('bonSelectionMode').value = 'pick_best'
+      document.getElementById('bonMinSuccessful').value = '1'
+      document.getElementById('bonVerificationCmd').value = ''
+    }
   } else if (seedTask) {
     taskModalMode = explicitMode || 'deploy'
     taskModalCreateStatus = createStatus
@@ -1090,6 +1447,8 @@ function openTaskModal(taskId, options = {}) {
     document.getElementById('taskThinkingLevel').value = seedTask.thinkingLevel || 'default'
     currentReqs = seedTask.requirements || []
     reqExcludeId = seedTask.id
+    document.getElementById('taskExecutionStrategy').value = 'standard'
+    resetModelSelectWithSearch('bonFinalApplierModel', 'bonFinalApplierModelSearch', 'default')
   } else {
     taskModalMode = explicitMode || 'create'
     taskModalCreateStatus = createStatus
@@ -1106,7 +1465,18 @@ function openTaskModal(taskId, options = {}) {
     document.getElementById('taskAutoCommit').checked = true
     document.getElementById('taskDeleteWorktree').checked = true
     document.getElementById('taskThinkingLevel').value = 'default'
+    document.getElementById('taskExecutionStrategy').value = 'standard'
+    resetModelSelectWithSearch('bonFinalApplierModel', 'bonFinalApplierModelSearch', 'default')
+    document.getElementById('bonFinalApplierSuffix').value = ''
+    document.getElementById('bonSelectionMode').value = 'pick_best'
+    document.getElementById('bonMinSuccessful').value = '1'
+    document.getElementById('bonVerificationCmd').value = ''
   }
+
+  renderBonWorkerSlots()
+  renderBonReviewerSlots()
+  updateBonConfigVisibility()
+  document.getElementById('taskExecutionStrategy').onchange = updateBonConfigVisibility
 
   saveBtn.style.display = viewOnly ? 'none' : ''
   if (!viewOnly) {
@@ -1178,6 +1548,18 @@ async function saveTask() {
   if (!name || !prompt) { showToast('Name and prompt are required', 'error'); return }
   if (!branch) { showToast('Select a valid branch', 'error'); return }
 
+  const executionStrategy = document.getElementById('taskExecutionStrategy').value || 'standard'
+  
+  if (executionStrategy === 'best_of_n') {
+    const errors = validateBonConfig()
+    if (errors.length > 0) {
+      const errorDiv = document.getElementById('bonValidationErrors')
+      errorDiv.innerHTML = errors.map(e => `<div class="bon-validation-error">${e}</div>`).join('')
+      showToast('Invalid best-of-n configuration: ' + errors.join('; '), 'error')
+      return
+    }
+  }
+
   const reqs = Array.from(document.querySelectorAll('#taskReqs input:checked')).map(cb => cb.value)
   const createStatus = taskModalCreateStatus === 'template' ? 'template' : 'backlog'
   const data = {
@@ -1192,6 +1574,23 @@ async function saveTask() {
     deleteWorktree: document.getElementById('taskDeleteWorktree').checked,
     requirements: reqs,
     thinkingLevel: document.getElementById('taskThinkingLevel').value || 'default',
+    executionStrategy,
+  }
+
+  if (executionStrategy === 'best_of_n') {
+    data.bestOfNConfig = {
+      workers: bonWorkers.map(w => ({ model: w.model, count: w.count || 1, taskSuffix: w.suffix || undefined })),
+      reviewers: bonReviewers.map(r => ({ model: r.model, count: r.count || 1, taskSuffix: r.suffix || undefined })),
+      finalApplier: {
+        model: document.getElementById('bonFinalApplierModel').value || 'default',
+        taskSuffix: document.getElementById('bonFinalApplierSuffix').value.trim() || undefined,
+      },
+      selectionMode: document.getElementById('bonSelectionMode').value || 'pick_best',
+      minSuccessfulWorkers: parseInt(document.getElementById('bonMinSuccessful').value || '1', 10),
+      verificationCommand: document.getElementById('bonVerificationCmd').value.trim() || undefined,
+    }
+  } else {
+    data.bestOfNConfig = null
   }
 
   try {
@@ -1333,10 +1732,28 @@ function renderGraphModal(graph) {
   const container = document.getElementById('graphContent')
   container.innerHTML = ''
 
+   const nodes = Array.isArray(graph.nodes) ? graph.nodes : []
+   const totalWorkerRuns = nodes.reduce((sum, node) => sum + (node.expandedWorkerRuns ?? 1), 0)
+   const totalReviewerRuns = nodes.reduce((sum, node) => sum + (node.expandedReviewerRuns ?? 0), 0)
+   const totalFinalApplierRuns = nodes.reduce((sum, node) => sum + (node.hasFinalApplier ? 1 : 0), 0)
+   const totalInternalRuns = nodes.reduce((sum, node) => sum + (node.estimatedRunCount ?? 1), 0)
+
   const summary = document.createElement('div')
   summary.style.cssText = 'margin-bottom:16px;font-size:13px;color:var(--text-dim);'
   summary.textContent = `${graph.totalTasks} task${graph.totalTasks !== 1 ? 's' : ''} in ${graph.batches.length} batch${graph.batches.length !== 1 ? 'es' : ''} (parallel limit: ${graph.parallelLimit})`
   container.appendChild(summary)
+
+  const runSummary = document.createElement('div')
+  runSummary.style.cssText = 'margin-bottom:16px;font-size:13px;color:var(--text-dim);padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);'
+  runSummary.textContent = `${graph.totalTasks} logical task${graph.totalTasks !== 1 ? 's' : ''}, ${totalWorkerRuns} worker run${totalWorkerRuns !== 1 ? 's' : ''}, ${totalReviewerRuns} reviewer run${totalReviewerRuns !== 1 ? 's' : ''}, ${totalFinalApplierRuns} final applier run${totalFinalApplierRuns !== 1 ? 's' : ''} (${totalInternalRuns} total internal run${totalInternalRuns !== 1 ? 's' : ''})`
+  container.appendChild(runSummary)
+
+  if (totalInternalRuns > 10) {
+    const warning = document.createElement('div')
+    warning.style.cssText = 'margin-bottom:16px;font-size:12px;color:var(--yellow);padding:10px;border:1px solid rgba(210,153,34,.45);border-radius:8px;background:rgba(210,153,34,.12);'
+    warning.textContent = `Warning: this run plan expands to ${totalInternalRuns} internal runs and may increase cost and total runtime.`
+    container.appendChild(warning)
+  }
 
   const batchesList = document.createElement('div')
   batchesList.style.cssText = 'display:flex;flex-direction:column;gap:12px;'
@@ -1353,7 +1770,10 @@ function renderGraphModal(graph) {
     const taskList = document.createElement('div')
     taskList.style.cssText = 'display:flex;flex-direction:column;gap:6px;'
     
-    for (const taskName of batch.taskNames) {
+    for (let i = 0; i < batch.taskNames.length; i++) {
+      const taskName = batch.taskNames[i]
+      const taskId = batch.taskIds[i]
+      const node = nodes.find(n => n.id === taskId)
       const taskItem = document.createElement('div')
       taskItem.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0;'
       
@@ -1366,6 +1786,13 @@ function renderGraphModal(graph) {
       name.style.cssText = 'font-size:13px;'
       name.textContent = taskName
       taskItem.appendChild(name)
+
+      if (node && node.hasFinalApplier) {
+        const details = document.createElement('span')
+        details.style.cssText = 'font-size:11px;color:var(--text-dim);'
+        details.textContent = `(workers: ${node.expandedWorkerRuns || 0}, reviewers: ${node.expandedReviewerRuns || 0}, final applier: 1)`
+        taskItem.appendChild(details)
+      }
       
       taskList.appendChild(taskItem)
     }
@@ -1381,6 +1808,159 @@ async function confirmExecution() {
   try {
     await api('/api/start', 'POST')
   } catch (e) { showToast('Execution start failed: ' + e.message, 'error') }
+}
+
+let bonDetailModal = null
+
+async function openBestOfNDetailModal(taskId) {
+  if (!bonDetailModal) {
+    bonDetailModal = document.createElement('div')
+    bonDetailModal.className = 'modal-overlay hidden'
+    bonDetailModal.id = 'bonDetailModal'
+    bonDetailModal.innerHTML = `
+      <div class="modal" style="width:700px;max-height:85vh;">
+        <div class="modal-header">
+          <h2>Best-of-N Details</h2>
+          <button class="modal-close" onclick="closeBonDetailModal()">&times;</button>
+        </div>
+        <div class="modal-body" id="bonDetailBody">
+          <div id="bonDetailContent"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" onclick="closeBonDetailModal()">Close</button>
+        </div>
+      </div>
+    `
+    document.body.appendChild(bonDetailModal)
+  }
+  
+  await refreshBonDetailModal(taskId)
+  bonDetailModal.classList.remove('hidden')
+}
+
+function closeBonDetailModal() {
+  if (bonDetailModal) bonDetailModal.classList.add('hidden')
+}
+
+async function refreshBonDetailModal(taskId) {
+  const task = allTasks.find(t => t.id === taskId)
+  if (!task) return
+  
+  const content = document.getElementById('bonDetailContent')
+  
+  try {
+    const [runs, candidates, summary] = await Promise.all([
+      api(`/api/tasks/${taskId}/runs`),
+      api(`/api/tasks/${taskId}/candidates`),
+      api(`/api/tasks/${taskId}/best-of-n-summary`),
+    ])
+    
+    const statusMap = {
+      'pending': 'pending',
+      'running': 'running',
+      'done': 'done',
+      'failed': 'failed',
+      'skipped': 'skipped',
+    }
+    
+    const workers = runs.filter(r => r.phase === 'worker')
+    const reviewers = runs.filter(r => r.phase === 'reviewer')
+    const finalApplier = runs.filter(r => r.phase === 'final_applier')
+    
+    const renderRun = (run, phaseClass, title) => `
+      <div class="run-item">
+        <div class="run-item-header">
+          <span class="run-item-phase ${phaseClass}">${title}</span>
+          <span class="run-item-model">${run.model}</span>
+          <span class="run-item-status ${statusMap[run.status] || 'pending'}">${run.status}</span>
+        </div>
+        ${run.summary ? `<div class="run-item-summary">${run.summary.substring(0, 300)}</div>` : ''}
+        ${run.errorMessage ? `<div class="run-item-summary" style="color:var(--red);">Error: ${run.errorMessage}</div>` : ''}
+        ${run.worktreeDir ? `<div class="run-item-summary">Worktree: ${run.worktreeDir}</div>` : ''}
+        ${run.sessionUrl ? `<div class="run-item-actions"><a href="${run.sessionUrl}" target="_blank" class="btn btn-sm">Open Session</a></div>` : ''}
+      </div>
+    `
+
+    const workerRows = workers.map((w) => renderRun(w, 'worker', `Worker Slot ${w.slotIndex + 1}`)).join('')
+      || '<div class="run-item-summary">No worker runs yet.</div>'
+    const reviewerRows = reviewers.map((r) => renderRun(r, 'reviewer', `Reviewer Slot ${r.slotIndex + 1}`)).join('')
+      || '<div class="run-item-summary">No reviewer runs yet.</div>'
+    const finalRows = finalApplier.map((f) => renderRun(f, 'final_applier', 'Final Applier')).join('')
+      || '<div class="run-item-summary">Final applier has not started yet.</div>'
+    const candidateRows = candidates.map((c) => `
+      <div class="candidate-item ${c.status === 'selected' ? 'selected' : ''}">
+        <div class="candidate-header">
+          <span class="candidate-id">${c.id}</span>
+          <span class="run-item-status ${c.status === 'selected' ? 'done' : 'pending'}">${c.status}</span>
+        </div>
+        ${c.summary ? `<div class="run-item-summary">${c.summary.substring(0, 300)}</div>` : '<div class="run-item-summary">No summary</div>'}
+        <div class="candidate-files">Files: ${(c.changedFilesJson || []).join(', ') || 'None'}</div>
+      </div>
+    `).join('') || '<div class="run-item-summary">No successful candidates yet.</div>'
+
+    let html = `
+      <div style="margin-bottom:16px;">
+        <strong>Task:</strong> ${task.name}<br>
+        <strong>Substage:</strong> ${task.bestOfNSubstage || 'idle'}<br>
+        <strong>Successful Workers:</strong> ${summary.successfulCandidateCount || 0} / ${summary.expandedWorkerCount || 0}
+      </div>
+      
+      <div class="modal-detail-tabs">
+        <button class="modal-detail-tab active" onclick="showBonTab('overview', '${taskId}')">Overview</button>
+        <button class="modal-detail-tab" onclick="showBonTab('workers', '${taskId}')">Workers (${workers.length})</button>
+        <button class="modal-detail-tab" onclick="showBonTab('reviewers', '${taskId}')">Reviewers (${reviewers.length})</button>
+        <button class="modal-detail-tab" onclick="showBonTab('final', '${taskId}')">Final Applier (${finalApplier.length})</button>
+      </div>
+      
+      <div id="bonTabContent">
+        <div id="bonTab-overview" style="display:block;">
+          <h4 style="margin-bottom:12px;">Execution Summary</h4>
+          <div class="run-item-summary" style="margin-bottom:12px;">
+            Workers completed: ${summary.workersDone || 0}/${summary.workersTotal || 0}<br>
+            Reviewers completed: ${summary.reviewersDone || 0}/${summary.reviewersTotal || 0}<br>
+            Final applier completed: ${summary.finalApplierDone ? 'yes' : 'no'}
+          </div>
+          <h4 style="margin-bottom:8px;">Candidates</h4>
+          <div class="candidate-list">${candidateRows}</div>
+        </div>
+
+        <div id="bonTab-workers" style="display:none;">
+          <h4 style="margin-bottom:12px;">Worker Runs</h4>
+          <div class="run-list">
+            ${workerRows}
+          </div>
+        </div>
+
+        <div id="bonTab-reviewers" style="display:none;">
+          <h4 style="margin-bottom:12px;">Reviewer Runs</h4>
+          <div class="run-list">
+            ${reviewerRows}
+          </div>
+        </div>
+
+        <div id="bonTab-final" style="display:none;">
+          <h4 style="margin-bottom:12px;">Final Applier</h4>
+          <div class="run-list">
+            ${finalRows}
+          </div>
+        </div>
+      </div>
+    `
+    
+    content.innerHTML = html
+  } catch (e) {
+    showToast('Failed to load best-of-n details: ' + e.message, 'error')
+    content.innerHTML = `<div style="color:var(--red);">Failed to load best-of-n details: ${e.message}</div>`
+  }
+}
+
+function showBonTab(tab, taskId) {
+  for (const t of ['overview', 'workers', 'reviewers', 'final']) {
+    const el = document.getElementById(`bonTab-${t}`)
+    if (el) el.style.display = t === tab ? 'block' : 'none'
+    const btn = document.querySelector(`.modal-detail-tab:nth-child(${['overview', 'workers', 'reviewers', 'final'].indexOf(t) + 1})`)
+    if (btn) btn.className = `modal-detail-tab ${t === tab ? 'active' : ''}`
+  }
 }
 
 // ---- Toasts ----

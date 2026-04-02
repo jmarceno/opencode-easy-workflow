@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite"
 import { mkdirSync } from "fs"
 import { dirname } from "path"
-import type { Task, TaskStatus, Options, ThinkingLevel, ExecutionPhase } from "./types"
+import type { Task, TaskStatus, Options, ThinkingLevel, ExecutionPhase, ExecutionStrategy, BestOfNConfig, BestOfNSubstage, TaskRun, TaskCandidate, RunPhase, RunStatus } from "./types"
 import { DEFAULT_COMMIT_PROMPT } from "./types"
 
 const DEFAULT_OPTIONS: Options = {
@@ -48,7 +48,22 @@ function rowToTask(row: any): Task {
     thinkingLevel: normalizeThinkingLevel(row.thinking_level),
     executionPhase: normalizeExecutionPhase(row.execution_phase),
     awaitingPlanApproval: row.awaiting_plan_approval === 1,
+    executionStrategy: normalizeExecutionStrategy(row.execution_strategy),
+    bestOfNConfig: row.best_of_n_config ? JSON.parse(row.best_of_n_config) : null,
+    bestOfNSubstage: normalizeBestOfNSubstage(row.best_of_n_substage),
   }
+}
+
+function normalizeExecutionStrategy(value: unknown): ExecutionStrategy {
+  return value === "standard" || value === "best_of_n" ? value : "standard"
+}
+
+function normalizeBestOfNSubstage(value: unknown): BestOfNSubstage {
+  const validSubstages: BestOfNSubstage[] = ["idle", "workers_running", "reviewers_running", "final_apply_running", "blocked_for_manual_review", "completed"]
+  if (validSubstages.includes(value as BestOfNSubstage)) {
+    return value as BestOfNSubstage
+  }
+  return "idle"
 }
 
 function normalizeExecutionPhase(value: unknown): ExecutionPhase {
@@ -97,7 +112,51 @@ export class KanbanDB {
         error_message TEXT,
         created_at INTEGER NOT NULL DEFAULT (unixepoch()),
         updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
-        completed_at INTEGER
+        completed_at INTEGER,
+        thinking_level TEXT NOT NULL DEFAULT 'default',
+        execution_phase TEXT NOT NULL DEFAULT 'not_started',
+        awaiting_plan_approval INTEGER NOT NULL DEFAULT 0,
+        execution_strategy TEXT NOT NULL DEFAULT 'standard',
+        best_of_n_config TEXT,
+        best_of_n_substage TEXT NOT NULL DEFAULT 'idle'
+      );
+
+      CREATE TABLE IF NOT EXISTS task_runs (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        phase TEXT NOT NULL,
+        slot_index INTEGER NOT NULL DEFAULT 0,
+        attempt_index INTEGER NOT NULL DEFAULT 0,
+        model TEXT NOT NULL,
+        task_suffix TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        session_id TEXT,
+        session_url TEXT,
+        worktree_dir TEXT,
+        summary TEXT,
+        error_message TEXT,
+        candidate_id TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        completed_at INTEGER,
+        FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS task_candidates (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        worker_run_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'available',
+        changed_files_json TEXT NOT NULL DEFAULT '[]',
+        diff_stats_json TEXT NOT NULL DEFAULT '{}',
+        verification_json TEXT NOT NULL DEFAULT '{}',
+        summary TEXT,
+        error_message TEXT,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+        FOREIGN KEY(worker_run_id) REFERENCES task_runs(id) ON DELETE CASCADE
       );
 
       CREATE TABLE IF NOT EXISTS options (
@@ -107,6 +166,10 @@ export class KanbanDB {
 
       CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
       CREATE INDEX IF NOT EXISTS idx_tasks_idx ON tasks(idx);
+      CREATE INDEX IF NOT EXISTS idx_task_runs_task_id ON task_runs(task_id);
+      CREATE INDEX IF NOT EXISTS idx_task_runs_phase ON task_runs(phase);
+      CREATE INDEX IF NOT EXISTS idx_task_runs_status ON task_runs(status);
+      CREATE INDEX IF NOT EXISTS idx_task_candidates_task_id ON task_candidates(task_id);
     `)
 
     // Migration: add session_url column if missing
@@ -139,6 +202,21 @@ export class KanbanDB {
     const hasAwaitingPlanApproval = tableInfo.some((col: any) => col.name === "awaiting_plan_approval")
     if (!hasAwaitingPlanApproval) {
       this.db.exec("ALTER TABLE tasks ADD COLUMN awaiting_plan_approval INTEGER NOT NULL DEFAULT 0")
+    }
+
+    const hasExecutionStrategy = tableInfo.some((col: any) => col.name === "execution_strategy")
+    if (!hasExecutionStrategy) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN execution_strategy TEXT NOT NULL DEFAULT 'standard'")
+    }
+
+    const hasBestOfNConfig = tableInfo.some((col: any) => col.name === "best_of_n_config")
+    if (!hasBestOfNConfig) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN best_of_n_config TEXT")
+    }
+
+    const hasBestOfNSubstage = tableInfo.some((col: any) => col.name === "best_of_n_substage")
+    if (!hasBestOfNSubstage) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN best_of_n_substage TEXT NOT NULL DEFAULT 'idle'")
     }
 
     const optCount = this.db.query("SELECT COUNT(*) as cnt FROM options").get() as any
@@ -181,6 +259,61 @@ export class KanbanDB {
         AND execution_phase = 'plan_complete_waiting_approval'
         AND trim(COALESCE(agent_output, '')) = ''
     `).run()
+
+    this.db.prepare(`
+      UPDATE tasks
+      SET
+        status = 'failed',
+        best_of_n_substage = 'idle',
+        error_message = 'Best-of-n task marked executing but all child runs are terminal with no final result. Reset the task to backlog and retry.',
+        updated_at = unixepoch()
+      WHERE execution_strategy = 'best_of_n'
+        AND status = 'executing'
+        AND best_of_n_substage IN ('workers_running', 'reviewers_running', 'final_apply_running')
+        AND NOT EXISTS (
+          SELECT 1 FROM task_runs
+          WHERE task_id = tasks.id
+          AND status NOT IN ('done', 'failed', 'skipped')
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM task_candidates
+          WHERE task_id = tasks.id
+        )
+    `).run()
+
+    this.db.prepare(`
+      UPDATE tasks
+      SET
+        status = 'failed',
+        best_of_n_substage = 'idle',
+        error_message = 'Best-of-n task in final_apply_running state but no final applier run exists. Reset the task to backlog and retry.',
+        updated_at = unixepoch()
+      WHERE execution_strategy = 'best_of_n'
+        AND status = 'executing'
+        AND best_of_n_substage = 'final_apply_running'
+        AND NOT EXISTS (
+          SELECT 1 FROM task_runs
+          WHERE task_id = tasks.id
+          AND phase = 'final_applier'
+          AND status = 'done'
+        )
+    `).run()
+
+    this.db.prepare(`
+      UPDATE tasks
+      SET
+        status = 'failed',
+        best_of_n_substage = 'idle',
+        error_message = 'Best-of-n task in reviewers_running state but no successful workers exist. Reset the task to backlog and retry.',
+        updated_at = unixepoch()
+      WHERE execution_strategy = 'best_of_n'
+        AND status = 'executing'
+        AND best_of_n_substage = 'reviewers_running'
+        AND NOT EXISTS (
+          SELECT 1 FROM task_candidates
+          WHERE task_id = tasks.id
+        )
+    `).run()
   }
 
   getTasks(): Task[] {
@@ -213,6 +346,9 @@ export class KanbanDB {
     thinkingLevel?: ThinkingLevel
     executionPhase?: ExecutionPhase
     awaitingPlanApproval?: boolean
+    executionStrategy?: ExecutionStrategy
+    bestOfNConfig?: BestOfNConfig | null
+    bestOfNSubstage?: BestOfNSubstage
   }): Task {
     const id = Math.random().toString(36).substring(2, 10)
     const maxIdx = this.db.query("SELECT COALESCE(MAX(idx), -1) as max_idx FROM tasks").get() as any
@@ -220,8 +356,8 @@ export class KanbanDB {
     const now = Math.floor(Date.now() / 1000)
 
     this.db.prepare(`
-      INSERT INTO tasks (id, name, idx, prompt, branch, plan_model, execution_model, planmode, review, auto_commit, delete_worktree, status, requirements, created_at, updated_at, thinking_level, execution_phase, awaiting_plan_approval)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tasks (id, name, idx, prompt, branch, plan_model, execution_model, planmode, review, auto_commit, delete_worktree, status, requirements, created_at, updated_at, thinking_level, execution_phase, awaiting_plan_approval, execution_strategy, best_of_n_config, best_of_n_substage)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       data.name,
@@ -241,6 +377,9 @@ export class KanbanDB {
       data.thinkingLevel ?? "default",
       data.executionPhase ?? "not_started",
       data.awaitingPlanApproval ? 1 : 0,
+      data.executionStrategy ?? "standard",
+      data.bestOfNConfig ? JSON.stringify(data.bestOfNConfig) : null,
+      data.bestOfNSubstage ?? "idle",
     )
 
     return this.getTask(id)!
@@ -269,6 +408,9 @@ export class KanbanDB {
     thinkingLevel: ThinkingLevel
     executionPhase: ExecutionPhase
     awaitingPlanApproval: boolean
+    executionStrategy: ExecutionStrategy
+    bestOfNConfig: BestOfNConfig | null
+    bestOfNSubstage: BestOfNSubstage
   }>): Task | null {
     const sets: string[] = []
     const values: any[] = []
@@ -295,6 +437,9 @@ export class KanbanDB {
     if (updates.thinkingLevel !== undefined) { sets.push("thinking_level = ?"); values.push(updates.thinkingLevel) }
     if (updates.executionPhase !== undefined) { sets.push("execution_phase = ?"); values.push(updates.executionPhase) }
     if (updates.awaitingPlanApproval !== undefined) { sets.push("awaiting_plan_approval = ?"); values.push(updates.awaitingPlanApproval ? 1 : 0) }
+    if (updates.executionStrategy !== undefined) { sets.push("execution_strategy = ?"); values.push(updates.executionStrategy) }
+    if (updates.bestOfNConfig !== undefined) { sets.push("best_of_n_config = ?"); values.push(updates.bestOfNConfig ? JSON.stringify(updates.bestOfNConfig) : null) }
+    if (updates.bestOfNSubstage !== undefined) { sets.push("best_of_n_substage = ?"); values.push(updates.bestOfNSubstage) }
 
     if (sets.length === 0) return this.getTask(id)
 
@@ -377,12 +522,224 @@ export class KanbanDB {
   }
 
   resetTasksForBacklog(): void {
+    const tasksToReset = this.db.query("SELECT id FROM tasks WHERE status IN ('executing', 'review', 'failed', 'stuck')").all() as any[]
+    for (const task of tasksToReset) {
+      this.db.prepare("DELETE FROM task_candidates WHERE task_id = ?").run(task.id)
+      this.db.prepare("DELETE FROM task_runs WHERE task_id = ?").run(task.id)
+    }
     this.db.prepare(
-      "UPDATE tasks SET status = 'backlog', session_id = NULL, session_url = NULL, worktree_dir = NULL, agent_output = '', review_count = 0, error_message = NULL, completed_at = NULL, updated_at = unixepoch(), execution_phase = 'not_started', awaiting_plan_approval = 0 WHERE status IN ('executing', 'review', 'failed', 'stuck')"
+      "UPDATE tasks SET status = 'backlog', session_id = NULL, session_url = NULL, worktree_dir = NULL, agent_output = '', review_count = 0, error_message = NULL, completed_at = NULL, updated_at = unixepoch(), execution_phase = 'not_started', awaiting_plan_approval = 0, best_of_n_substage = 'idle' WHERE status IN ('executing', 'review', 'failed', 'stuck')"
     ).run()
+  }
+
+  createTaskRun(data: {
+    taskId: string
+    phase: RunPhase
+    slotIndex: number
+    attemptIndex: number
+    model: string
+    taskSuffix?: string | null
+    status?: RunStatus
+  }): TaskRun {
+    const id = Math.random().toString(36).substring(2, 10)
+    const now = Math.floor(Date.now() / 1000)
+
+    this.db.prepare(`
+      INSERT INTO task_runs (id, task_id, phase, slot_index, attempt_index, model, task_suffix, status, metadata_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?)
+    `).run(
+      id,
+      data.taskId,
+      data.phase,
+      data.slotIndex,
+      data.attemptIndex,
+      data.model,
+      data.taskSuffix ?? null,
+      data.status ?? "pending",
+      now,
+      now,
+    )
+
+    return this.getTaskRun(id)!
+  }
+
+  getTaskRun(id: string): TaskRun | null {
+    const row = this.db.query("SELECT * FROM task_runs WHERE id = ?").get(id) as any
+    return row ? rowToTaskRun(row) : null
+  }
+
+  getTaskRuns(taskId: string): TaskRun[] {
+    const rows = this.db.query("SELECT * FROM task_runs WHERE task_id = ? ORDER BY created_at ASC").all(taskId) as any[]
+    return rows.map(rowToTaskRun)
+  }
+
+  getTaskRunsByPhase(taskId: string, phase: RunPhase): TaskRun[] {
+    const rows = this.db.query("SELECT * FROM task_runs WHERE task_id = ? AND phase = ? ORDER BY created_at ASC").all(taskId, phase) as any[]
+    return rows.map(rowToTaskRun)
+  }
+
+  updateTaskRun(id: string, updates: Partial<{
+    status: RunStatus
+    sessionId: string | null
+    sessionUrl: string | null
+    worktreeDir: string | null
+    summary: string | null
+    errorMessage: string | null
+    candidateId: string | null
+    metadataJson: Record<string, any>
+    completedAt: number | null
+  }>): TaskRun | null {
+    const sets: string[] = []
+    const values: any[] = []
+
+    if (updates.status !== undefined) { sets.push("status = ?"); values.push(updates.status) }
+    if (updates.sessionId !== undefined) { sets.push("session_id = ?"); values.push(updates.sessionId) }
+    if (updates.sessionUrl !== undefined) { sets.push("session_url = ?"); values.push(updates.sessionUrl) }
+    if (updates.worktreeDir !== undefined) { sets.push("worktree_dir = ?"); values.push(updates.worktreeDir) }
+    if (updates.summary !== undefined) { sets.push("summary = ?"); values.push(updates.summary) }
+    if (updates.errorMessage !== undefined) { sets.push("error_message = ?"); values.push(updates.errorMessage) }
+    if (updates.candidateId !== undefined) { sets.push("candidate_id = ?"); values.push(updates.candidateId) }
+    if (updates.metadataJson !== undefined) { sets.push("metadata_json = ?"); values.push(JSON.stringify(updates.metadataJson)) }
+    if (updates.completedAt !== undefined) { sets.push("completed_at = ?"); values.push(updates.completedAt) }
+
+    if (sets.length === 0) return this.getTaskRun(id)
+
+    sets.push("updated_at = unixepoch()")
+    values.push(id)
+
+    this.db.prepare(`UPDATE task_runs SET ${sets.join(", ")} WHERE id = ?`).run(...values)
+    return this.getTaskRun(id)
+  }
+
+  deleteTaskRunsForTask(taskId: string): void {
+    this.db.prepare("DELETE FROM task_runs WHERE task_id = ?").run(taskId)
+  }
+
+  createTaskCandidate(data: {
+    taskId: string
+    workerRunId: string
+    status?: "available" | "selected" | "rejected"
+    changedFiles?: string[]
+    diffStats?: Record<string, number>
+    verificationJson?: Record<string, any>
+    summary?: string | null
+    errorMessage?: string | null
+  }): TaskCandidate {
+    const id = Math.random().toString(36).substring(2, 10)
+    const now = Math.floor(Date.now() / 1000)
+
+    this.db.prepare(`
+      INSERT INTO task_candidates (id, task_id, worker_run_id, status, changed_files_json, diff_stats_json, verification_json, summary, error_message, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      data.taskId,
+      data.workerRunId,
+      data.status ?? "available",
+      JSON.stringify(data.changedFiles ?? []),
+      JSON.stringify(data.diffStats ?? {}),
+      JSON.stringify(data.verificationJson ?? {}),
+      data.summary ?? null,
+      data.errorMessage ?? null,
+      now,
+      now,
+    )
+
+    return this.getTaskCandidate(id)!
+  }
+
+  getTaskCandidate(id: string): TaskCandidate | null {
+    const row = this.db.query("SELECT * FROM task_candidates WHERE id = ?").get(id) as any
+    return row ? rowToTaskCandidate(row) : null
+  }
+
+  getTaskCandidates(taskId: string): TaskCandidate[] {
+    const rows = this.db.query("SELECT * FROM task_candidates WHERE task_id = ? ORDER BY created_at ASC").all(taskId) as any[]
+    return rows.map(rowToTaskCandidate)
+  }
+
+  updateTaskCandidate(id: string, updates: Partial<{
+    status: "available" | "selected" | "rejected"
+    changedFilesJson: string[]
+    diffStatsJson: Record<string, number>
+    verificationJson: Record<string, any>
+    summary: string | null
+    errorMessage: string | null
+  }>): TaskCandidate | null {
+    const sets: string[] = []
+    const values: any[] = []
+
+    if (updates.status !== undefined) { sets.push("status = ?"); values.push(updates.status) }
+    if (updates.changedFilesJson !== undefined) { sets.push("changed_files_json = ?"); values.push(JSON.stringify(updates.changedFilesJson)) }
+    if (updates.diffStatsJson !== undefined) { sets.push("diff_stats_json = ?"); values.push(JSON.stringify(updates.diffStatsJson)) }
+    if (updates.verificationJson !== undefined) { sets.push("verification_json = ?"); values.push(JSON.stringify(updates.verificationJson)) }
+    if (updates.summary !== undefined) { sets.push("summary = ?"); values.push(updates.summary) }
+    if (updates.errorMessage !== undefined) { sets.push("error_message = ?"); values.push(updates.errorMessage) }
+
+    if (sets.length === 0) return this.getTaskCandidate(id)
+
+    sets.push("updated_at = unixepoch()")
+    values.push(id)
+
+    this.db.prepare(`UPDATE task_candidates SET ${sets.join(", ")} WHERE id = ?`).run(...values)
+    return this.getTaskCandidate(id)
+  }
+
+  getBestOfNCounts(taskId: string): { workersTotal: number; workersDone: number; reviewersTotal: number; reviewersDone: number; hasFinalApplier: boolean; finalApplierDone: boolean } {
+    const workers = this.getTaskRunsByPhase(taskId, "worker")
+    const reviewers = this.getTaskRunsByPhase(taskId, "reviewer")
+    const finalApplierRuns = this.getTaskRunsByPhase(taskId, "final_applier")
+
+    return {
+      workersTotal: workers.length,
+      workersDone: workers.filter(w => w.status === "done" || w.status === "failed" || w.status === "skipped").length,
+      reviewersTotal: reviewers.length,
+      reviewersDone: reviewers.filter(r => r.status === "done" || r.status === "failed" || r.status === "skipped").length,
+      hasFinalApplier: finalApplierRuns.length > 0,
+      finalApplierDone: finalApplierRuns.some(f => f.status === "done"),
+    }
   }
 
   close() {
     this.db.close()
+  }
+}
+
+function rowToTaskRun(row: any): TaskRun {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    phase: row.phase as RunPhase,
+    slotIndex: row.slot_index,
+    attemptIndex: row.attempt_index,
+    model: row.model,
+    taskSuffix: row.task_suffix,
+    status: row.status as RunStatus,
+    sessionId: row.session_id,
+    sessionUrl: row.session_url,
+    worktreeDir: row.worktree_dir,
+    summary: row.summary,
+    errorMessage: row.error_message,
+    candidateId: row.candidate_id,
+    metadataJson: JSON.parse(row.metadata_json || "{}"),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    completedAt: row.completed_at,
+  }
+}
+
+function rowToTaskCandidate(row: any): TaskCandidate {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    workerRunId: row.worker_run_id,
+    status: row.status as "available" | "selected" | "rejected",
+    changedFilesJson: JSON.parse(row.changed_files_json || "[]"),
+    diffStatsJson: JSON.parse(row.diff_stats_json || "{}"),
+    verificationJson: JSON.parse(row.verification_json || "{}"),
+    summary: row.summary,
+    errorMessage: row.error_message,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   }
 }

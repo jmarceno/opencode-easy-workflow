@@ -12,6 +12,7 @@ metadata:
 - Turn any user-provided planning material into Easy Workflow tasks.
 - Map steps and milestones into executable backlog tasks or reusable templates.
 - Set dependencies, ordering, and task options so the workflow can run them correctly.
+- Configure `standard` vs `best_of_n` execution strategy per task when needed.
 - Explain and use the workflow's API, database layout, and state model accurately.
 
 ## When to use me
@@ -28,6 +29,7 @@ metadata:
 - Use dependencies for real sequencing constraints, not just because steps are numbered.
 - Create template tasks only when the user wants reusable blueprints; otherwise create backlog tasks.
 - Reuse or update an existing task instead of creating a duplicate when the match is clear. If the match is ambiguous, ask.
+- Use `best_of_n` only for tasks where multiple candidate implementations and convergence are useful; otherwise keep `standard`.
 
 ## Recommended Workflow
 
@@ -59,6 +61,8 @@ Common optional fields:
 | `planModel` | Planning model override | `default` |
 | `executionModel` | Execution model override | `default` |
 | `planmode` | Pause after planning and wait for approval | `false` |
+| `executionStrategy` | Execution mode (`standard` or `best_of_n`) | `standard` |
+| `bestOfNConfig` | Best-of-N worker/reviewer/final-applier config | `null` unless strategy is `best_of_n` |
 | `review` | Run review loop after implementation | `true` |
 | `autoCommit` | Auto-commit on success | `true` |
 | `deleteWorktree` | Remove worktree after completion | `true` |
@@ -70,6 +74,7 @@ Advanced fields normally left alone on fresh task creation:
 | Field | Meaning |
 | --- | --- |
 | `executionPhase` | Internal phase for plan-mode lifecycle |
+| `bestOfNSubstage` | Internal substage for best-of-n lifecycle |
 | `awaitingPlanApproval` | Whether a plan-mode task is waiting for approval |
 | `agentOutput` | Accumulated agent output |
 | `reviewCount` | Review loop counter |
@@ -101,6 +106,17 @@ Execution phase values:
 | `implementation_pending` | Plan was approved and implementation can run |
 | `implementation_done` | Implementation finished |
 
+Best-of-N substage values:
+
+| Substage | Meaning |
+| --- | --- |
+| `idle` | No active best-of-n internals running |
+| `workers_running` | Worker candidates are running |
+| `reviewers_running` | Reviewer runs are evaluating candidates |
+| `final_apply_running` | Final applier is running and preparing merge result |
+| `blocked_for_manual_review` | Automation paused for human decision |
+| `completed` | Best-of-n flow finished successfully |
+
 Important runtime rules from the server and orchestrator:
 
 - A task is executable when `status = backlog` and `executionPhase != plan_complete_waiting_approval`.
@@ -108,6 +124,8 @@ Important runtime rules from the server and orchestrator:
 - When a plan-mode task finishes planning, it moves to `status = review`, `awaitingPlanApproval = true`, `executionPhase = plan_complete_waiting_approval`.
 - Approving that plan moves it to `status = backlog`, `awaitingPlanApproval = false`, `executionPhase = implementation_pending`.
 - Resetting a task to backlog clears it back to `executionPhase = not_started` and `awaitingPlanApproval = false`.
+- Best-of-N and plan mode cannot be combined in v1 (`planmode = true` with `executionStrategy = best_of_n` is rejected by API validation).
+- For `best_of_n`, the board still treats it as one logical task card while child runs are stored separately.
 - `failed` and `stuck` appear in the review column in the UI, but they are distinct stored statuses.
 
 ## Dependency Rules
@@ -158,6 +176,9 @@ Tables:
 | `thinking_level` | `default`, `low`, `medium`, `high` |
 | `execution_phase` | Internal plan-mode phase |
 | `awaiting_plan_approval` | `0/1` boolean |
+| `execution_strategy` | `standard` or `best_of_n` |
+| `best_of_n_config` | JSON config for worker/reviewer/final-applier runs |
+| `best_of_n_substage` | Internal best-of-n substage |
 
 Indexes:
 
@@ -180,6 +201,42 @@ Important keys:
 | `parallel_tasks` | Parallelism limit |
 | `port` | Kanban server port |
 | `thinking_level` | Default thinking level |
+
+### `task_runs`
+
+Child run records for best-of-n internals.
+
+| Column | Notes |
+| --- | --- |
+| `id` | Text primary key |
+| `task_id` | Parent logical task id |
+| `phase` | `worker`, `reviewer`, `final_applier` |
+| `slot_index` / `attempt_index` | Expanded slot position and attempt |
+| `model` | Model used for the run |
+| `task_suffix` | Optional slot-specific prompt suffix |
+| `status` | `pending`, `running`, `done`, `failed`, `skipped` |
+| `session_id` / `session_url` | Session metadata |
+| `worktree_dir` | Worktree path (kept if cleanup fails or disabled) |
+| `summary` | Short run summary |
+| `error_message` | Run-level error details |
+| `candidate_id` | Linked candidate id (worker runs) |
+| `metadata_json` | Structured metadata (reviewer output, verification, etc.) |
+
+### `task_candidates`
+
+Successful worker candidate artifacts for best-of-n.
+
+| Column | Notes |
+| --- | --- |
+| `id` | Text primary key |
+| `task_id` | Parent logical task id |
+| `worker_run_id` | Source worker run |
+| `status` | `available`, `selected`, `rejected` |
+| `changed_files_json` | JSON array of changed file paths |
+| `diff_stats_json` | JSON diff stats map |
+| `verification_json` | JSON verification result |
+| `summary` | Candidate summary |
+| `error_message` | Candidate artifact error detail |
 
 ## Preferred Write Path
 
@@ -206,6 +263,9 @@ Useful endpoints from `.opencode/easy-workflow/server.ts`:
 | `GET` | `/api/options` | Read workflow defaults |
 | `PUT` | `/api/options` | Update workflow defaults |
 | `GET` | `/api/branches` | List git branches |
+| `GET` | `/api/tasks/:id/runs` | List best-of-n child runs for task |
+| `GET` | `/api/tasks/:id/candidates` | List best-of-n candidate artifacts |
+| `GET` | `/api/tasks/:id/best-of-n-summary` | Aggregated best-of-n progress/status |
 
 API payload field names use camelCase.
 DB column names use snake_case.
@@ -214,6 +274,7 @@ If you must write directly to SQLite, remember:
 
 - `requirements` must be JSON-encoded text.
 - boolean fields are stored as `0` or `1`.
+- `best_of_n_config` must be JSON-encoded text when strategy is `best_of_n`.
 - direct DB writes do not broadcast websocket updates.
 - creating via raw SQL means you are responsible for `idx`, timestamps, and field normalization.
 - when the server receives a `PATCH` that sets `status = backlog` without an explicit `executionPhase`, it resets `executionPhase` to `not_started` and `awaitingPlanApproval` to `false`.
@@ -331,6 +392,39 @@ Create a plan-mode task that should pause for approval after planning:
 }
 ```
 
+Create a best-of-n task:
+
+```json
+{
+  "name": "Implement API pagination (best-of-n)",
+  "prompt": "Add cursor-based pagination to the list endpoint and update tests.",
+  "status": "backlog",
+  "executionStrategy": "best_of_n",
+  "bestOfNConfig": {
+    "workers": [
+      { "model": "openai-codex/gpt-5.3-codex-spark", "count": 2 },
+      { "model": "openai-codex/gpt-5.4-mini", "count": 1, "taskSuffix": "Prefer minimal schema changes." }
+    ],
+    "reviewers": [
+      { "model": "openai-codex/gpt-5.4-mini", "count": 1 }
+    ],
+    "finalApplier": {
+      "model": "openai-codex/gpt-5.3-codex",
+      "taskSuffix": "Preserve current API response compatibility."
+    },
+    "minSuccessfulWorkers": 1,
+    "selectionMode": "pick_or_synthesize",
+    "verificationCommand": "bun test"
+  },
+  "planmode": false,
+  "review": true,
+  "autoCommit": true,
+  "deleteWorktree": true,
+  "requirements": [],
+  "thinkingLevel": "medium"
+}
+```
+
 ## Plan-to-Task Heuristics
 
 - If the source describes milestones, map each milestone to one or more executable tasks.
@@ -350,6 +444,8 @@ Before finishing, verify:
 - no obvious circular dependency exists
 - statuses are appropriate for the user's intent
 - plan-mode tasks are only used where an approval pause is actually useful
+- `best_of_n` is only used where candidate fan-out/convergence is useful
+- `bestOfNConfig` is valid (workers present, counts > 0, final applier model present, min successful workers <= total workers)
 - ordering in `idx` matches the intended flow
 
 ## What to Tell the User

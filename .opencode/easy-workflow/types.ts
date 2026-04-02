@@ -4,6 +4,42 @@ export type ThinkingLevel = "default" | "low" | "medium" | "high"
 
 export type ExecutionPhase = "not_started" | "plan_complete_waiting_approval" | "implementation_pending" | "implementation_done"
 
+export type ExecutionStrategy = "standard" | "best_of_n"
+
+export type BestOfNSubstage =
+  | "idle"
+  | "workers_running"
+  | "reviewers_running"
+  | "final_apply_running"
+  | "blocked_for_manual_review"
+  | "completed"
+
+export type RunPhase = "worker" | "reviewer" | "final_applier"
+
+export type RunStatus = "pending" | "running" | "done" | "failed" | "skipped"
+
+export type SelectionMode = "pick_best" | "synthesize" | "pick_or_synthesize"
+
+export interface BestOfNSlot {
+  model: string
+  count: number
+  taskSuffix?: string
+}
+
+export interface BestOfNFinalApplier {
+  model: string
+  taskSuffix?: string
+}
+
+export interface BestOfNConfig {
+  workers: BestOfNSlot[]
+  reviewers: BestOfNSlot[]
+  finalApplier: BestOfNFinalApplier
+  minSuccessfulWorkers: number
+  selectionMode: SelectionMode
+  verificationCommand?: string
+}
+
 export interface Task {
   id: string
   name: string
@@ -30,6 +66,62 @@ export interface Task {
   thinkingLevel: ThinkingLevel
   executionPhase: ExecutionPhase
   awaitingPlanApproval: boolean
+  executionStrategy: ExecutionStrategy
+  bestOfNConfig: BestOfNConfig | null
+  bestOfNSubstage: BestOfNSubstage
+}
+
+export interface TaskRun {
+  id: string
+  taskId: string
+  phase: RunPhase
+  slotIndex: number
+  attemptIndex: number
+  model: string
+  taskSuffix: string | null
+  status: RunStatus
+  sessionId: string | null
+  sessionUrl: string | null
+  worktreeDir: string | null
+  summary: string | null
+  errorMessage: string | null
+  candidateId: string | null
+  metadataJson: Record<string, any>
+  createdAt: number
+  updatedAt: number
+  completedAt: number | null
+}
+
+export interface TaskCandidate {
+  id: string
+  taskId: string
+  workerRunId: string
+  status: "available" | "selected" | "rejected"
+  changedFilesJson: string[]
+  diffStatsJson: Record<string, number>
+  verificationJson: Record<string, any>
+  summary: string | null
+  errorMessage: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+export interface ReviewerOutput {
+  status: "pass" | "needs_manual_review"
+  summary: string
+  bestCandidateIds: string[]
+  gaps: string[]
+  recommendedFinalStrategy: SelectionMode
+  recommendedPrompt: string | null
+}
+
+export interface AggregatedReviewResult {
+  candidateVoteCounts: Record<string, number>
+  recurringRisks: string[]
+  recurringGaps: string[]
+  consensusReached: boolean
+  recommendedFinalStrategy: SelectionMode
+  usableResults: ReviewerOutput[]
 }
 
 export interface Options {
@@ -80,6 +172,10 @@ export type WSMessageType =
   | "execution_complete"
   | "agent_output"
   | "error"
+  | "task_run_created"
+  | "task_run_updated"
+  | "task_candidate_created"
+  | "task_candidate_updated"
 
 export interface WSMessage {
   type: WSMessageType

@@ -2,7 +2,7 @@ import { readFileSync, existsSync, appendFileSync, mkdirSync, writeFileSync, unl
 import { join } from "path"
 import { fileURLToPath } from "url"
 import { dirname } from "path"
-import type { Task, Options, ReviewResult, ThinkingLevel } from "./types"
+import type { Task, Options, ReviewResult, ThinkingLevel, BestOfNConfig, BestOfNSlot, TaskRun, TaskCandidate, ReviewerOutput, AggregatedReviewResult, SelectionMode } from "./types"
 import { KanbanDB } from "./db"
 import { KanbanServer } from "./server"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
@@ -13,6 +13,7 @@ const WORKFLOW_ROOT = join(__dirname, "..")
 const TEMPLATE_PATH = join(WORKFLOW_ROOT, "easy-workflow", "workflow.md")
 const AGENTS_DIR = join(WORKFLOW_ROOT, "agents")
 const DEBUG_LOG_PATH = join(WORKFLOW_ROOT, "easy-workflow", "debug.log")
+let debugLogErrorReporter: ((message: string) => void) | null = null
 
 const THINKING_LEVEL_AGENT_MAP: Record<Exclude<ThinkingLevel, "default">, string> = {
   low: "build-fast",
@@ -86,7 +87,9 @@ function appendDebugLog(kind: string, message: string, extra?: Record<string, un
     appendFileSync(DEBUG_LOG_PATH, `[${new Date().toISOString()}] ${kind}: ${message}${payload}\n`, "utf-8")
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.error("[kanban] failed to write debug log:", msg)
+    if (debugLogErrorReporter) {
+      debugLogErrorReporter(`Failed to write debug log: ${msg}`)
+    }
   }
 }
 
@@ -188,6 +191,13 @@ export class Orchestrator {
     this.server = server
     this.serverUrlSource = serverUrl
     this.worktreeDir = worktreeDir
+    debugLogErrorReporter = (message: string) => {
+      this.server.broadcast({ type: "error", payload: { message } })
+    }
+  }
+
+  private emitError(message: string): void {
+    this.server.broadcast({ type: "error", payload: { message } })
   }
 
   private resolveServerUrl(): string {
@@ -424,7 +434,10 @@ export class Orchestrator {
     let resolvedServerUrl = "unresolved"
     try {
       resolvedServerUrl = this.resolveServerUrl()
-    } catch {
+    } catch (resolveErr) {
+      appendDebugLog("warn", "unable to resolve server URL during orchestrator start", {
+        error: resolveErr instanceof Error ? resolveErr.message : String(resolveErr),
+      })
       // Keep unresolved marker; execution will fail with explicit error later.
     }
     appendDebugLog("info", "orchestrator starting", { taskCount: allTasks.length, serverUrl: resolvedServerUrl })
@@ -449,7 +462,10 @@ export class Orchestrator {
       let resolvedServerUrl = "unresolved"
       try {
         resolvedServerUrl = this.resolveServerUrl()
-      } catch {
+      } catch (resolveErr) {
+        appendDebugLog("warn", "unable to resolve server URL while handling execution error", {
+          error: resolveErr instanceof Error ? resolveErr.message : String(resolveErr),
+        })
         // Keep unresolved marker in logs.
       }
       appendDebugLog("error", "orchestrator execution failed", { error: msg, serverUrl: resolvedServerUrl })
@@ -466,6 +482,10 @@ export class Orchestrator {
 
   private async executeTask(task: Task, options: Options) {
     if (this.shouldStop) return
+
+    if (task.executionStrategy === "best_of_n") {
+      return this.executeBestOfNTask(task, options)
+    }
 
     const isPlanImplementationResume = task.planmode && task.executionPhase === "implementation_pending"
 
@@ -746,7 +766,12 @@ export class Orchestrator {
                 stdio: "ignore",
               })
               hasTargetBranch = true
-            } catch {
+            } catch (showRefErr) {
+              appendDebugLog("warn", "target branch lookup failed before fallback", {
+                taskId: task.id,
+                branch: mainBranch,
+                error: showRefErr instanceof Error ? showRefErr.message : String(showRefErr),
+              })
               hasTargetBranch = false
             }
           }
@@ -795,7 +820,11 @@ export class Orchestrator {
                 cwd: worktreeInfo.directory,
                 stdio: "ignore",
               })
-            } catch {
+            } catch (mainMissingErr) {
+              appendDebugLog("warn", "main branch unavailable, trying master fallback", {
+                taskId: task.id,
+                error: mainMissingErr instanceof Error ? mainMissingErr.message : String(mainMissingErr),
+              })
               try {
                 execFileSync("git", ["show-ref", "--verify", "--quiet", "refs/heads/master"], {
                   cwd: worktreeInfo.directory,
@@ -811,7 +840,12 @@ export class Orchestrator {
           appendDebugLog("info", "merge target branch selected", { taskId: task.id, mainBranch })
           try {
             execFileSync("git", ["checkout", mainBranch], { cwd: worktreeInfo.directory, stdio: "ignore" })
-          } catch {
+          } catch (checkoutErr) {
+            appendDebugLog("warn", "branch checkout skipped before merge", {
+              taskId: task.id,
+              branch: mainBranch,
+              error: checkoutErr instanceof Error ? checkoutErr.message : String(checkoutErr),
+            })
             // Branch may be checked out in another worktree.
           }
           execFileSync("git", ["merge", worktreeInfo.branch, "--no-edit"], {
@@ -877,6 +911,965 @@ export class Orchestrator {
       this.shouldStop = true
       throw err
     }
+  }
+
+  private async executeBestOfNTask(task: Task, options: Options) {
+    if (this.shouldStop) return
+    const resolvedServerUrl = this.resolveServerUrl()
+
+    try {
+      if (!task.bestOfNConfig) {
+        throw new Error(`Task ${task.id} has best_of_n execution strategy but no bestOfNConfig`)
+      }
+
+      const config = task.bestOfNConfig
+
+      for (const depId of task.requirements) {
+        const dep = this.db.getTask(depId)
+        if (dep && dep.status !== "done") {
+          const msg = `Dependency "${dep.name}" is not done (status: ${dep.status})`
+          this.db.updateTask(task.id, { status: "failed", errorMessage: msg })
+          const updated = this.db.getTask(task.id)!
+          this.server.broadcast({ type: "task_updated", payload: updated })
+          throw new Error(msg)
+        }
+      }
+
+      this.db.updateTask(task.id, {
+        status: "executing",
+        bestOfNSubstage: "workers_running",
+        errorMessage: null,
+        agentOutput: "",
+      })
+      const currentTask = this.getTaskOrThrow(task.id, "marking best-of-n task as executing", task.name)
+      this.server.broadcast({ type: "task_updated", payload: currentTask })
+
+      appendDebugLog("info", "starting best-of-n execution", { taskId: task.id, config })
+
+      const workerRuns = this.expandBestOfNSlots(config.workers)
+      for (const worker of workerRuns) {
+        if (this.shouldStop) return
+        const run = this.db.createTaskRun({
+          taskId: task.id,
+          phase: "worker",
+          slotIndex: worker.slotIndex,
+          attemptIndex: worker.attemptIndex,
+          model: worker.model,
+          taskSuffix: worker.taskSuffix ?? null,
+          status: "pending",
+        })
+        this.server.broadcast({ type: "task_run_created", payload: run })
+      }
+
+      const runResult = await this.runBestOfNWorkers(task, options, resolvedServerUrl)
+      if (runResult.shouldStop) {
+        this.shouldStop = true
+        return
+      }
+
+      const successfulWorkers = this.db.getTaskRunsByPhase(task.id, "worker").filter(w => w.status === "done")
+      if (successfulWorkers.length < config.minSuccessfulWorkers) {
+        const msg = `Best-of-n failed: only ${successfulWorkers.length} workers succeeded, but ${config.minSuccessfulWorkers} minimum required`
+        this.db.updateTask(task.id, { status: "failed", bestOfNSubstage: "idle", errorMessage: msg })
+        const updated = this.db.getTask(task.id)!
+        this.server.broadcast({ type: "task_updated", payload: updated })
+        this.emitError(`Task "${task.name}" failed: ${msg}`)
+        appendDebugLog("error", "best-of-n workers failed threshold", { taskId: task.id, successful: successfulWorkers.length, required: config.minSuccessfulWorkers })
+        this.shouldStop = true
+        return
+      }
+
+      const candidates = this.db.getTaskCandidates(task.id)
+      appendDebugLog("info", "best-of-n workers completed", { taskId: task.id, successfulWorkers: successfulWorkers.length, candidates: candidates.length })
+
+      let reviewerResult: { halt: boolean; routeToReview?: boolean; error?: string; usableResults: ReviewerOutput[] } = {
+        halt: false,
+        usableResults: [],
+      }
+
+      if (config.reviewers.length > 0) {
+        this.db.updateTask(task.id, { bestOfNSubstage: "reviewers_running" })
+        const reviewerRuns = this.expandBestOfNSlots(config.reviewers)
+        for (const reviewer of reviewerRuns) {
+          if (this.shouldStop) return
+          const run = this.db.createTaskRun({
+            taskId: task.id,
+            phase: "reviewer",
+            slotIndex: reviewer.slotIndex,
+            attemptIndex: reviewer.attemptIndex,
+            model: reviewer.model,
+            taskSuffix: reviewer.taskSuffix ?? null,
+            status: "pending",
+          })
+          this.server.broadcast({ type: "task_run_created", payload: run })
+        }
+
+        reviewerResult = await this.runBestOfNReviewers(task, candidates, options, resolvedServerUrl)
+        if (reviewerResult.halt) {
+          if (reviewerResult.routeToReview) {
+            this.db.updateTask(task.id, { status: "review", bestOfNSubstage: "blocked_for_manual_review", errorMessage: reviewerResult.error ?? null })
+            const updated = this.db.getTask(task.id)!
+            this.server.broadcast({ type: "task_updated", payload: updated })
+            this.emitError(`Task "${task.name}" requires manual review: ${reviewerResult.error ?? "reviewer consensus was insufficient"}`)
+          } else {
+            this.db.updateTask(task.id, { status: "failed", bestOfNSubstage: "idle", errorMessage: reviewerResult.error })
+            const updated = this.db.getTask(task.id)!
+            this.server.broadcast({ type: "task_updated", payload: updated })
+            this.emitError(`Task "${task.name}" failed: ${reviewerResult.error ?? "reviewer phase failed"}`)
+          }
+          this.shouldStop = true
+          return
+        }
+      }
+
+      const aggregatedReview = this.aggregateReviewerResults(reviewerResult.usableResults)
+      const reviewerRequestedManual = reviewerResult.usableResults.some((result) => result.status === "needs_manual_review")
+
+      if (config.reviewers.length > 0 && (reviewerRequestedManual || (!aggregatedReview.consensusReached && config.selectionMode === "pick_best"))) {
+        const reason = reviewerRequestedManual
+          ? "One or more reviewers requested manual review"
+          : "Reviewers did not reach consensus for pick_best mode"
+        this.db.updateTask(task.id, {
+          status: "review",
+          bestOfNSubstage: "blocked_for_manual_review",
+          errorMessage: reason,
+        })
+        const updated = this.db.getTask(task.id)!
+        this.server.broadcast({ type: "task_updated", payload: updated })
+        this.emitError(`Task "${task.name}" requires manual review: ${reason}`)
+        this.shouldStop = true
+        return
+      }
+
+      this.db.updateTask(task.id, { bestOfNSubstage: "final_apply_running" })
+      const finalApplierRun = this.db.createTaskRun({
+        taskId: task.id,
+        phase: "final_applier",
+        slotIndex: 0,
+        attemptIndex: 0,
+        model: config.finalApplier.model,
+        taskSuffix: config.finalApplier.taskSuffix ?? null,
+        status: "pending",
+      })
+      this.server.broadcast({ type: "task_run_created", payload: finalApplierRun })
+
+      const finalResult = await this.runBestOfNFinalApplier(task, candidates, aggregatedReview, config.selectionMode, options, resolvedServerUrl)
+      if (finalResult.failed) {
+        if (finalResult.routeToReview) {
+          this.db.updateTask(task.id, { status: "review", bestOfNSubstage: "blocked_for_manual_review", errorMessage: finalResult.error })
+          const updated = this.db.getTask(task.id)!
+          this.server.broadcast({ type: "task_updated", payload: updated })
+          this.emitError(`Task "${task.name}" requires manual review: ${finalResult.error ?? "final applier outcome was ambiguous"}`)
+        } else {
+          this.db.updateTask(task.id, { status: "failed", bestOfNSubstage: "idle", errorMessage: finalResult.error })
+          const updated = this.db.getTask(task.id)!
+          this.server.broadcast({ type: "task_updated", payload: updated })
+          this.emitError(`Task "${task.name}" failed: ${finalResult.error ?? "final applier failed"}`)
+        }
+        this.shouldStop = true
+        return
+      }
+
+      const now = Math.floor(Date.now() / 1000)
+      this.db.updateTask(task.id, {
+        status: "done",
+        bestOfNSubstage: "completed",
+        completedAt: now,
+      })
+      const doneTask = this.db.getTask(task.id)!
+      this.server.broadcast({ type: "task_updated", payload: doneTask })
+      appendDebugLog("info", "best-of-n task completed", { taskId: task.id })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      appendDebugLog("error", "best-of-n task execution failed", { taskId: task.id, error: msg })
+      const failedTask = this.db.updateTask(task.id, {
+        status: "failed",
+        bestOfNSubstage: "idle",
+        errorMessage: msg,
+      })
+      if (failedTask) {
+        this.server.broadcast({ type: "task_updated", payload: failedTask })
+      }
+      this.emitError(`Task "${task.name}" failed: ${msg}`)
+      this.shouldStop = true
+      throw err
+    }
+  }
+
+  private expandBestOfNSlots(slots: BestOfNSlot[]): { model: string; taskSuffix?: string; slotIndex: number; attemptIndex: number }[] {
+    const expanded: { model: string; taskSuffix?: string; slotIndex: number; attemptIndex: number }[] = []
+    let globalSlotIdx = 0
+    for (const slot of slots) {
+      for (let i = 0; i < slot.count; i++) {
+        expanded.push({
+          model: slot.model,
+          taskSuffix: slot.taskSuffix,
+          slotIndex: globalSlotIdx,
+          attemptIndex: i,
+        })
+        globalSlotIdx++
+      }
+    }
+    return expanded
+  }
+
+  private async runBestOfNWorkers(task: Task, options: Options, serverUrl: string): Promise<{ shouldStop: boolean }> {
+    const workers = this.db.getTaskRunsByPhase(task.id, "worker")
+    const client = this.getClient(undefined, serverUrl)
+
+    const pendingWorkers = workers.filter(w => w.status === "pending")
+    await Promise.all(pendingWorkers.map(async (workerRun) => {
+      if (this.shouldStop) return
+      try {
+        this.db.updateTaskRun(workerRun.id, { status: "running" })
+        this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(workerRun.id) })
+
+        const worktreeInfo = await this.createWorktree(`bon-worker-${workerRun.id}`)
+        if (!worktreeInfo?.directory) {
+          throw new Error(`Worktree creation failed for worker ${workerRun.id}`)
+        }
+
+        this.db.updateTaskRun(workerRun.id, { worktreeDir: worktreeInfo.directory, status: "running" })
+        this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(workerRun.id) })
+
+        const sessionResponse = await client.session.create({ title: `Worker: ${task.name} (slot ${workerRun.slotIndex})` })
+        const session = unwrapResponseDataOrThrow<any>(sessionResponse, "Worker session creation")
+        const sessionId = session?.id
+        if (!sessionId) throw new Error("Failed to create worker session")
+
+        const sessionUrl = buildSessionUrl(serverUrl, this.worktreeDir, sessionId)
+        this.db.updateTaskRun(workerRun.id, { sessionId, sessionUrl })
+        this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(workerRun.id) })
+
+        const workerPrompt = this.buildWorkerPrompt(task.prompt, workerRun.taskSuffix)
+        const model = await this.resolveModelSelection(workerRun.model, client, "Worker")
+
+        appendDebugLog("info", "running best-of-n worker", { taskId: task.id, workerRunId: workerRun.id, model: workerRun.model })
+
+        const promptOpts: any = {
+          sessionID: sessionId,
+          model,
+          parts: [{ type: "text", text: workerPrompt }],
+        }
+        const effectiveThinkingLevel = resolveThinkingLevel(task, options)
+        const executionAgent = mapThinkingLevelToAgent(effectiveThinkingLevel)
+        if (executionAgent) promptOpts.agent = executionAgent
+
+        let result: any
+        try {
+          const response = await client.session.prompt(promptOpts)
+          result = unwrapResponseDataOrThrow<any>(response, "Worker prompt")
+        } catch (promptErr) {
+          throw remapThinkingAgentError(promptErr, executionAgent)
+        }
+
+        const failure = this.extractExecutionFailure(result)
+        if (failure) throw remapThinkingAgentError(new Error(`Worker prompt failed: ${failure}`), executionAgent)
+
+        const output = this.extractTextOutput(result)
+        if (output) {
+          this.db.appendAgentOutput(task.id, `\n[worker-${workerRun.slotIndex}] ${output}\n`)
+          this.server.broadcast({ type: "agent_output", payload: { taskId: task.id, output: `\n[worker-${workerRun.slotIndex}] ${output}\n` } })
+        }
+
+        const verificationJson = await this.runVerificationCommand(
+          task,
+          `worker-${workerRun.slotIndex}`,
+          worktreeInfo.directory,
+          task.bestOfNConfig?.verificationCommand,
+        )
+
+        let candidateInput: ReturnType<Orchestrator["collectCandidateArtifacts"]>
+        try {
+          candidateInput = this.collectCandidateArtifacts(task, workerRun, output, worktreeInfo.directory, verificationJson)
+        } catch (artifactErr) {
+          const artifactErrorMessage = artifactErr instanceof Error ? artifactErr.message : String(artifactErr)
+          appendDebugLog("warn", "failed to collect worker diff artifacts", {
+            taskId: task.id,
+            workerRunId: workerRun.id,
+            error: artifactErrorMessage,
+          })
+          this.emitError(`Could not collect worker diff artifacts for task "${task.name}" (run ${workerRun.id}): ${artifactErrorMessage}`)
+          const fallbackChangedFiles = this.extractChangedFiles(output)
+          candidateInput = {
+            taskId: task.id,
+            workerRunId: workerRun.id,
+            status: "available",
+            changedFiles: fallbackChangedFiles,
+            diffStats: this.computeFallbackDiffStats(fallbackChangedFiles),
+            verificationJson: {
+              ...verificationJson,
+              artifactCollectionError: artifactErrorMessage,
+            },
+            summary: output.substring(0, 1000),
+            errorMessage: null,
+          }
+        }
+
+        const candidate = this.db.createTaskCandidate(candidateInput)
+        this.server.broadcast({ type: "task_candidate_created", payload: candidate })
+
+        const now = Math.floor(Date.now() / 1000)
+        this.db.updateTaskRun(workerRun.id, {
+          status: "done",
+          summary: output.substring(0, 500),
+          candidateId: candidate.id,
+          metadataJson: {
+            verificationJson,
+          },
+          completedAt: now,
+        })
+        this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(workerRun.id) })
+
+        if (task.deleteWorktree !== false && worktreeInfo?.directory) {
+          try {
+            await this.removeWorktree(worktreeInfo.directory)
+          } catch (cleanupErr) {
+            const cleanupMessage = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)
+            appendDebugLog("warn", "worker worktree cleanup failed", { taskId: task.id, workerRunId: workerRun.id, error: cleanupMessage })
+            this.emitError(`Worker cleanup failed for task "${task.name}" (run ${workerRun.id}): ${cleanupMessage}. Worktree preserved at ${worktreeInfo.directory}.`)
+          }
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        appendDebugLog("error", "best-of-n worker failed", { taskId: task.id, workerRunId: workerRun.id, error: msg })
+        const now = Math.floor(Date.now() / 1000)
+        this.db.updateTaskRun(workerRun.id, { status: "failed", errorMessage: msg, completedAt: now })
+        this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(workerRun.id) })
+        this.emitError(`Worker run failed for task "${task.name}" (run ${workerRun.id}): ${msg}`)
+      }
+    }))
+
+    return { shouldStop: this.shouldStop }
+  }
+
+  private buildWorkerPrompt(taskPrompt: string, taskSuffix: string | null): string {
+    let prompt = `You are one candidate implementation worker in a best-of-n workflow.
+Produce the best complete solution you can in this worktree.
+
+Task:
+${taskPrompt}
+`
+    if (taskSuffix) {
+      prompt += `\nAdditional instructions for this worker:
+${taskSuffix}`
+    }
+    return prompt
+  }
+
+  private collectCandidateArtifacts(
+    task: Task,
+    workerRun: TaskRun,
+    output: string,
+    worktreeDir: string,
+    verificationJson: Record<string, any>,
+  ): {
+    taskId: string
+    workerRunId: string
+    status: "available"
+    changedFiles: string[]
+    diffStats: Record<string, number>
+    verificationJson: Record<string, any>
+    summary: string | null
+    errorMessage: string | null
+  } {
+    const artifacts = this.collectWorktreeDiffArtifacts(worktreeDir)
+    const changedFiles = artifacts.changedFiles.length > 0 ? artifacts.changedFiles : this.extractChangedFiles(output)
+    const diffStats = Object.keys(artifacts.diffStats).length > 0
+      ? artifacts.diffStats
+      : this.computeFallbackDiffStats(changedFiles)
+
+    return {
+      taskId: task.id,
+      workerRunId: workerRun.id,
+      status: "available",
+      changedFiles,
+      diffStats,
+      verificationJson,
+      summary: output.substring(0, 1000),
+      errorMessage: null,
+    }
+  }
+
+  private extractChangedFiles(output: string): string[] {
+    const files: string[] = []
+    const patterns = [
+      /^[AMDRC]\s+(.+)$/m,
+      /^[\d]+\s+[\d]+\s+(.+)$/m,
+      /file[s]?:\s*(.+)/gi,
+    ]
+    for (const pattern of patterns) {
+      const matches = output.matchAll(pattern)
+      for (const match of matches) {
+        const file = match[1]?.trim()
+        if (file && !files.includes(file)) {
+          files.push(file)
+        }
+      }
+    }
+    return files
+  }
+
+  private computeFallbackDiffStats(files: string[]): Record<string, number> {
+    const stats: Record<string, number> = {}
+    for (const file of files) {
+      stats[file] = 0
+    }
+    return stats
+  }
+
+  private collectWorktreeDiffArtifacts(worktreeDir: string): { changedFiles: string[]; diffStats: Record<string, number> } {
+    const changedFiles = this.collectChangedFilesFromGit(worktreeDir)
+    const diffStats = this.collectDiffStatsFromGit(worktreeDir)
+    return { changedFiles, diffStats }
+  }
+
+  private collectChangedFilesFromGit(worktreeDir: string): string[] {
+    const result = Bun.spawnSync(["git", "status", "--porcelain"], {
+      cwd: worktreeDir,
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+
+    if (result.exitCode !== 0) {
+      const stderr = result.stderr.toString().trim()
+      throw new Error(`Failed to collect changed files: ${stderr || `git exited with code ${result.exitCode}`}`)
+    }
+
+    const lines = result.stdout.toString().split("\n").map((line) => line.trimEnd()).filter(Boolean)
+    const files: string[] = []
+
+    for (const line of lines) {
+      if (line.length < 3) continue
+      const rawPath = line.slice(3).trim()
+      if (!rawPath) continue
+      const normalizedPath = rawPath.includes(" -> ")
+        ? rawPath.split(" -> ").pop()!.trim()
+        : rawPath
+      if (normalizedPath && !files.includes(normalizedPath)) {
+        files.push(normalizedPath)
+      }
+    }
+
+    return files
+  }
+
+  private collectDiffStatsFromGit(worktreeDir: string): Record<string, number> {
+    const stats = new Map<string, number>()
+    for (const args of [["diff", "--numstat"], ["diff", "--numstat", "--cached"]]) {
+      const result = Bun.spawnSync(["git", ...args], {
+        cwd: worktreeDir,
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+
+      if (result.exitCode !== 0) {
+        const stderr = result.stderr.toString().trim()
+        throw new Error(`Failed to collect diff stats: ${stderr || `git exited with code ${result.exitCode}`}`)
+      }
+
+      const lines = result.stdout.toString().split("\n").map((line) => line.trim()).filter(Boolean)
+      for (const line of lines) {
+        const [insertionsRaw, deletionsRaw, filePath] = line.split("\t")
+        if (!filePath) continue
+        const insertions = Number.isFinite(Number(insertionsRaw)) ? Number(insertionsRaw) : 0
+        const deletions = Number.isFinite(Number(deletionsRaw)) ? Number(deletionsRaw) : 0
+        const total = insertions + deletions
+        stats.set(filePath, (stats.get(filePath) || 0) + total)
+      }
+    }
+
+    return Object.fromEntries(stats.entries())
+  }
+
+  private async runVerificationCommand(
+    task: Task,
+    label: string,
+    worktreeDir: string,
+    verificationCommand?: string,
+  ): Promise<Record<string, any>> {
+    const command = verificationCommand?.trim()
+    if (!command) {
+      return { status: "skipped", reason: "No verification command configured" }
+    }
+
+    appendDebugLog("info", "running verification command", { taskId: task.id, label, command })
+    try {
+      const proc = Bun.spawn(["sh", "-c", command], {
+        cwd: worktreeDir,
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const stdout = await new Response(proc.stdout).text()
+      const stderr = await new Response(proc.stderr).text()
+      const exitCode = await proc.exited
+      const status = exitCode === 0 ? "passed" : "failed"
+      const output = [`\n[verification ${label}] status=${status} exitCode=${exitCode}`]
+      if (stdout.trim()) output.push(`[verification stdout]\n${stdout.trim()}`)
+      if (stderr.trim()) output.push(`[verification stderr]\n${stderr.trim()}`)
+      output.push("")
+      const combinedOutput = `${output.join("\n")}\n`
+      this.db.appendAgentOutput(task.id, combinedOutput)
+      this.server.broadcast({ type: "agent_output", payload: { taskId: task.id, output: combinedOutput } })
+
+      if (exitCode !== 0) {
+        this.emitError(`Verification failed for task "${task.name}" (${label}) with exit code ${exitCode}.`)
+      }
+
+      return {
+        status,
+        exitCode,
+        stdout: stdout.slice(0, 8000),
+        stderr: stderr.slice(0, 8000),
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      this.emitError(`Verification command error for task "${task.name}" (${label}): ${msg}`)
+      return { status: "error", message: msg }
+    }
+  }
+
+  private async runBestOfNReviewers(task: Task, candidates: TaskCandidate[], options: Options, serverUrl: string): Promise<{ halt: boolean; routeToReview?: boolean; error?: string; usableResults: ReviewerOutput[] }> {
+    const reviewers = this.db.getTaskRunsByPhase(task.id, "reviewer")
+    const client = this.getClient(undefined, serverUrl)
+
+    const pendingReviewers = reviewers.filter(r => r.status === "pending")
+    await Promise.all(pendingReviewers.map(async (reviewerRun) => {
+      if (this.shouldStop) return
+      try {
+        this.db.updateTaskRun(reviewerRun.id, { status: "running" })
+        this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(reviewerRun.id) })
+
+        const sessionResponse = await client.session.create({ title: `Reviewer: ${task.name} (slot ${reviewerRun.slotIndex})` })
+        const session = unwrapResponseDataOrThrow<any>(sessionResponse, "Reviewer session creation")
+        const sessionId = session?.id
+        if (!sessionId) throw new Error("Failed to create reviewer session")
+
+        const sessionUrl = buildSessionUrl(serverUrl, this.worktreeDir, sessionId)
+        this.db.updateTaskRun(reviewerRun.id, { sessionId, sessionUrl })
+        this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(reviewerRun.id) })
+
+        const reviewerPrompt = this.buildReviewerPrompt(task.prompt, candidates, reviewerRun.taskSuffix)
+        const model = await this.resolveModelSelection(reviewerRun.model, client, "Reviewer")
+
+        appendDebugLog("info", "running best-of-n reviewer", { taskId: task.id, reviewerRunId: reviewerRun.id, model: reviewerRun.model })
+
+        const response = await client.session.prompt({
+          sessionID: sessionId,
+          model,
+          parts: [{ type: "text", text: reviewerPrompt }],
+        })
+        const result = unwrapResponseDataOrThrow<any>(response, "Reviewer prompt")
+        const failure = this.extractExecutionFailure(result)
+        if (failure) throw new Error(`Reviewer prompt failed: ${failure}`)
+
+        const output = this.extractTextOutput(result)
+        const reviewerOutput = this.parseReviewerOutput(output)
+
+        const now = Math.floor(Date.now() / 1000)
+        this.db.updateTaskRun(reviewerRun.id, {
+          status: "done",
+          summary: output.substring(0, 500),
+          metadataJson: { reviewerOutput },
+          completedAt: now,
+        })
+        this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(reviewerRun.id) })
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        appendDebugLog("error", "best-of-n reviewer failed", { taskId: task.id, reviewerRunId: reviewerRun.id, error: msg })
+        const now = Math.floor(Date.now() / 1000)
+        this.db.updateTaskRun(reviewerRun.id, { status: "failed", errorMessage: msg, completedAt: now })
+        this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(reviewerRun.id) })
+        this.emitError(`Reviewer run failed for task "${task.name}" (run ${reviewerRun.id}): ${msg}`)
+      }
+    }))
+
+    const usableResults = this.collectUsableReviewerResults(task.id)
+    if (usableResults.length === 0) {
+      return { halt: true, routeToReview: true, error: "No usable reviewer results - route to manual review", usableResults }
+    }
+
+    return { halt: false, usableResults }
+  }
+
+  private stringifyVerificationSummary(verificationJson: Record<string, any>): string {
+    if (!verificationJson || typeof verificationJson !== "object") {
+      return "No verification data"
+    }
+    if (typeof verificationJson.status === "string") {
+      const status = verificationJson.status
+      const exitCode = typeof verificationJson.exitCode === "number" ? ` (exit ${verificationJson.exitCode})` : ""
+      return `${status}${exitCode}`
+    }
+    return JSON.stringify(verificationJson)
+  }
+
+  private buildReviewerPrompt(taskPrompt: string, candidates: TaskCandidate[], taskSuffix?: string | null): string {
+    let prompt = `You are a reviewer in a best-of-n workflow.
+Your job is to evaluate the candidate implementations and provide structured guidance.
+
+Original Task:
+${taskPrompt}
+
+Candidate Implementations:
+${candidates.map((c, i) => `
+Candidate ${i + 1} (${c.id}):
+${c.summary || "No summary available"}
+Changed files: ${c.changedFilesJson.join(", ") || "None"}
+Verification: ${this.stringifyVerificationSummary(c.verificationJson)}
+`).join("\n")}
+
+Please provide your review in the following format:
+STATUS: pass | needs_manual_review
+SUMMARY: <short summary of your evaluation>
+BEST_CANDIDATES:
+- <candidate-id-1>
+- <candidate-id-2>
+GAPS:
+- <issue 1>
+- <issue 2>
+RECOMMENDED_FINAL_STRATEGY: pick_best | synthesize
+RECOMMENDED_PROMPT:
+<optional instructions for the final applier>
+`
+    if (taskSuffix?.trim()) {
+      prompt += `\nAdditional instructions for this reviewer:\n${taskSuffix.trim()}\n`
+    }
+    return prompt
+  }
+
+  private parseReviewerOutput(output: string): ReviewerOutput {
+    const statusMatch = output.match(/STATUS:\s*(\w+)/i)
+    const summaryMatch = output.match(/SUMMARY:\s*([\s\S]+?)(?=\nBEST_CANDIDATES:|$)/i)
+    const bestMatch = output.match(/BEST_CANDIDATES:\s*([\s\S]+?)(?=\nGAPS:|$)/i)
+    const gapsMatch = output.match(/GAPS:\s*([\s\S]+?)(?=\nRECOMMENDED_FINAL_STRATEGY:|$)/i)
+    const strategyMatch = output.match(/RECOMMENDED_FINAL_STRATEGY:\s*(\w+)/i)
+    const promptMatch = output.match(/RECOMMENDED_PROMPT:\s*([\s\S]+?)$/i)
+
+    const statusRaw = statusMatch?.[1]?.toLowerCase().trim() || "needs_manual_review"
+    const status: ReviewerOutput["status"] = statusRaw === "pass" ? "pass" : "needs_manual_review"
+
+    const summary = summaryMatch?.[1]?.trim() || "No summary provided"
+
+    const bestText = bestMatch?.[1] || ""
+    const bestCandidateIds = bestText
+      .split("\n")
+      .map(l => l.trim())
+      .filter(l => l.startsWith("- "))
+      .map(l => l.replace(/^-\s*/, "").trim())
+      .filter(l => l.length > 0)
+
+    const gapsText = gapsMatch?.[1] || ""
+    const gaps = gapsText
+      .split("\n")
+      .map(l => l.trim())
+      .filter(l => l.startsWith("- ") || l.startsWith("* "))
+      .map(l => l.replace(/^[-*]\s*/, "").trim())
+      .filter(g => g.length > 0 && g.toLowerCase() !== "none")
+
+    const strategyRaw = strategyMatch?.[1]?.toLowerCase().trim() || "synthesize"
+    const recommendedFinalStrategy: SelectionMode =
+      strategyRaw === "pick_best" ? "pick_best" :
+      strategyRaw === "pick_or_synthesize" ? "pick_or_synthesize" : "synthesize"
+
+    const recommendedPrompt = promptMatch?.[1]?.trim() || null
+
+    return {
+      status,
+      summary,
+      bestCandidateIds,
+      gaps,
+      recommendedFinalStrategy,
+      recommendedPrompt,
+    }
+  }
+
+  private collectUsableReviewerResults(taskId: string): ReviewerOutput[] {
+    const reviewerRuns = this.db.getTaskRunsByPhase(taskId, "reviewer")
+    const usable: ReviewerOutput[] = []
+    for (const run of reviewerRuns) {
+      if (run.status === "done" && run.metadataJson?.reviewerOutput) {
+        usable.push(run.metadataJson.reviewerOutput as ReviewerOutput)
+      }
+    }
+    return usable
+  }
+
+  private aggregateReviewerResults(reviewerOutputs: ReviewerOutput[]): AggregatedReviewResult {
+    const candidateVoteCounts: Record<string, number> = {}
+    const recurringRisks: string[] = []
+    const recurringGaps: string[] = []
+    let consensusReached = false
+    let topVoteCount = 0
+
+    for (const output of reviewerOutputs) {
+      for (const candidateId of output.bestCandidateIds) {
+        candidateVoteCounts[candidateId] = (candidateVoteCounts[candidateId] || 0) + 1
+        if (candidateVoteCounts[candidateId] > topVoteCount) {
+          topVoteCount = candidateVoteCounts[candidateId]
+        }
+      }
+      for (const gap of output.gaps) {
+        if (!recurringGaps.includes(gap)) {
+          recurringGaps.push(gap)
+        }
+      }
+    }
+
+    const totalUsable = reviewerOutputs.length
+    for (const count of Object.values(candidateVoteCounts)) {
+      if (count === totalUsable && totalUsable > 0) {
+        consensusReached = true
+        break
+      }
+    }
+
+    const recommendedFinalStrategy = reviewerOutputs[0]?.recommendedFinalStrategy || "synthesize"
+
+    return {
+      candidateVoteCounts,
+      recurringRisks,
+      recurringGaps,
+      consensusReached,
+      recommendedFinalStrategy,
+      usableResults: reviewerOutputs,
+    }
+  }
+
+  private async runBestOfNFinalApplier(
+    task: Task,
+    candidates: TaskCandidate[],
+    aggregatedReview: AggregatedReviewResult,
+    selectionMode: SelectionMode,
+    options: Options,
+    serverUrl: string
+  ): Promise<{ failed: boolean; routeToReview?: boolean; error?: string }> {
+    const finalApplierRuns = this.db.getTaskRunsByPhase(task.id, "final_applier")
+    const finalApplierRun = finalApplierRuns.find(r => r.status === "pending")
+    if (!finalApplierRun) {
+      return { failed: true, routeToReview: false, error: "No final applier run found" }
+    }
+
+    const client = this.getClient(undefined, serverUrl)
+
+    try {
+      this.db.updateTaskRun(finalApplierRun.id, { status: "running" })
+      this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(finalApplierRun.id) })
+
+      const worktreeInfo = await this.createWorktree(`bon-final-${finalApplierRun.id}`)
+      if (!worktreeInfo?.directory) {
+        throw new Error(`Worktree creation failed for final applier ${finalApplierRun.id}`)
+      }
+
+      this.db.updateTaskRun(finalApplierRun.id, { worktreeDir: worktreeInfo.directory })
+      this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(finalApplierRun.id) })
+
+      const sessionResponse = await client.session.create({ title: `Final Applier: ${task.name}` })
+      const session = unwrapResponseDataOrThrow<any>(sessionResponse, "Final applier session creation")
+      const sessionId = session?.id
+      if (!sessionId) throw new Error("Failed to create final applier session")
+
+      const sessionUrl = buildSessionUrl(serverUrl, this.worktreeDir, sessionId)
+      this.db.updateTaskRun(finalApplierRun.id, { sessionId, sessionUrl })
+      this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(finalApplierRun.id) })
+
+      const finalPrompt = this.buildFinalApplierPrompt(task.prompt, candidates, aggregatedReview, selectionMode, task.bestOfNConfig?.finalApplier?.taskSuffix)
+      const model = await this.resolveModelSelection(finalApplierRun.model, client, "Final Applier")
+
+      appendDebugLog("info", "running best-of-n final applier", { taskId: task.id, finalApplierRunId: finalApplierRun.id, model: finalApplierRun.model })
+
+      const effectiveThinkingLevel = resolveThinkingLevel(task, options)
+      const executionAgent = mapThinkingLevelToAgent(effectiveThinkingLevel)
+
+      const promptOpts: any = {
+        sessionID: sessionId,
+        model,
+        parts: [{ type: "text", text: finalPrompt }],
+      }
+      if (executionAgent) promptOpts.agent = executionAgent
+
+      let result: any
+      try {
+        const response = await client.session.prompt(promptOpts)
+        result = unwrapResponseDataOrThrow<any>(response, "Final applier prompt")
+      } catch (promptErr) {
+        throw remapThinkingAgentError(promptErr, executionAgent)
+      }
+
+      const failure = this.extractExecutionFailure(result)
+      if (failure) throw remapThinkingAgentError(new Error(`Final applier prompt failed: ${failure}`), executionAgent)
+
+      const output = this.extractTextOutput(result)
+      if (output) {
+        this.db.appendAgentOutput(task.id, `\n[final-applier] ${output}\n`)
+        this.server.broadcast({ type: "agent_output", payload: { taskId: task.id, output: `\n[final-applier] ${output}\n` } })
+      }
+
+      const finalVerificationJson = await this.runVerificationCommand(
+        task,
+        "final-applier",
+        worktreeInfo.directory,
+        task.bestOfNConfig?.verificationCommand,
+      )
+
+      appendDebugLog("info", "best-of-n final applier completed, starting merge", { taskId: task.id })
+
+      if (task.autoCommit && worktreeInfo) {
+        try {
+          const baseRef = this.resolveTargetBranch(task, options, worktreeInfo)
+          let commitPromptText = options.commitPrompt.replace(/\{\{base_ref\}\}/g, baseRef)
+          if (!task.deleteWorktree) {
+            commitPromptText += "\n\nImportant: do NOT delete the worktree at the end; keep it for manual follow-up."
+          }
+
+          const commitResponse = await client.session.prompt({
+            sessionID: sessionId,
+            parts: [{ type: "text", text: commitPromptText }],
+          })
+          const commitResult = unwrapResponseDataOrThrow<any>(commitResponse, "Commit prompt")
+          const commitFailure = this.extractExecutionFailure(commitResult)
+          if (commitFailure) throw new Error(`Commit prompt failed: ${commitFailure}`)
+        } catch (e) {
+          const commitErrorMessage = e instanceof Error ? e.message : String(e)
+          appendDebugLog("warn", "commit prompt failed during best-of-n final apply", { taskId: task.id, error: commitErrorMessage })
+          this.db.appendAgentOutput(task.id, `\n[final-applier commit error] ${commitErrorMessage}\n`)
+          this.server.broadcast({ type: "agent_output", payload: { taskId: task.id, output: `\n[final-applier commit error] ${commitErrorMessage}\n` } })
+          this.emitError(`Final applier commit step failed for task "${task.name}": ${commitErrorMessage}`)
+        }
+      }
+
+      if (worktreeInfo) {
+        try {
+          const { execFileSync } = await import("child_process")
+          let mainBranch = this.resolveTargetBranch(task, options, worktreeInfo)
+
+          try {
+            execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${mainBranch}`], {
+              cwd: worktreeInfo.directory,
+              stdio: "ignore",
+            })
+          } catch (branchErr) {
+            const branchErrorMessage = branchErr instanceof Error ? branchErr.message : String(branchErr)
+            appendDebugLog("warn", "final applier target branch not found, falling back to main", {
+              taskId: task.id,
+              attemptedBranch: mainBranch,
+              error: branchErrorMessage,
+            })
+            mainBranch = "main"
+          }
+
+          try {
+            execFileSync("git", ["checkout", mainBranch], { cwd: worktreeInfo.directory, stdio: "ignore" })
+          } catch (checkoutErr) {
+            appendDebugLog("warn", "final applier branch checkout skipped", {
+              taskId: task.id,
+              branch: mainBranch,
+              error: checkoutErr instanceof Error ? checkoutErr.message : String(checkoutErr),
+            })
+          }
+
+          execFileSync("git", ["merge", worktreeInfo.branch, "--no-edit"], {
+            cwd: worktreeInfo.directory,
+            encoding: "utf-8",
+            stdio: "pipe",
+          })
+          appendDebugLog("info", "best-of-n final merge completed", { taskId: task.id, branch: mainBranch })
+        } catch (mergeErr) {
+          const msg = `Merge failed: ${mergeErr instanceof Error ? mergeErr.message : String(mergeErr)}`
+          throw new Error(msg)
+        }
+      }
+
+      if (task.deleteWorktree !== false && worktreeInfo?.directory) {
+        try {
+          await this.removeWorktree(worktreeInfo.directory)
+        } catch (cleanupErr) {
+          const cleanupMessage = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)
+          appendDebugLog("warn", "final applier worktree cleanup failed", { taskId: task.id, error: cleanupMessage })
+          this.emitError(`Final applier cleanup failed for task "${task.name}": ${cleanupMessage}. Worktree preserved at ${worktreeInfo.directory}.`)
+        }
+      }
+
+      const now = Math.floor(Date.now() / 1000)
+      this.db.updateTaskRun(finalApplierRun.id, {
+        status: "done",
+        summary: output.substring(0, 500),
+        metadataJson: {
+          verificationJson: finalVerificationJson,
+        },
+        completedAt: now,
+      })
+      this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(finalApplierRun.id) })
+
+      return { failed: false }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      appendDebugLog("error", "best-of-n final applier failed", { taskId: task.id, finalApplierRunId: finalApplierRun.id, error: msg })
+      const now = Math.floor(Date.now() / 1000)
+      this.db.updateTaskRun(finalApplierRun.id, { status: "failed", errorMessage: msg, completedAt: now })
+      this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(finalApplierRun.id) })
+      this.emitError(`Final applier run failed for task "${task.name}": ${msg}`)
+
+      if (msg.includes("ambiguous") || msg.includes("consensus")) {
+        return { failed: true, routeToReview: true, error: msg }
+      }
+      return { failed: true, routeToReview: false, error: msg }
+    }
+  }
+
+  private buildFinalApplierPrompt(
+    taskPrompt: string,
+    candidates: TaskCandidate[],
+    aggregatedReview: AggregatedReviewResult,
+    selectionMode: SelectionMode,
+    taskSuffix?: string | null
+  ): string {
+    let prompt = `You are the final applier in a best-of-n workflow.
+Your job is to produce the final implementation based on the original task and the evaluated candidates.
+
+Original Task:
+${taskPrompt}
+
+`
+    if (selectionMode === "pick_best") {
+      const topCandidate = Object.entries(aggregatedReview.candidateVoteCounts)
+        .sort(([, a], [, b]) => b - a)[0]
+      if (topCandidate) {
+        const candidate = candidates.find(c => c.id === topCandidate[0])
+        if (candidate) {
+          prompt += `Recommended Best Candidate (${topCandidate[0]}) - vote count: ${topCandidate[1]}:
+${candidate.summary || "No summary available"}
+Changed files: ${candidate.changedFilesJson.join(", ") || "None"}
+`
+        }
+      }
+    } else {
+      prompt += `All Candidate Summaries:\n${candidates.map((c, i) => `${i + 1}. ${c.summary || "No summary"}`).join("\n")}\n`
+    }
+
+    if (aggregatedReview.recurringGaps.length > 0) {
+      prompt += `\nRecurring gaps identified by reviewers:
+${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
+`
+    }
+
+    const recommendedPrompts = aggregatedReview.usableResults
+      .map((result) => result.recommendedPrompt?.trim())
+      .filter((value): value is string => Boolean(value))
+    if (recommendedPrompts.length > 0) {
+      prompt += `\nReviewer recommended prompts:\n${recommendedPrompts.map((value) => `- ${value}`).join("\n")}\n`
+    }
+
+    prompt += `\nReviewer consensus reached: ${aggregatedReview.consensusReached ? "yes" : "no"}\n`
+
+    prompt += `\nSelection Mode: ${selectionMode}
+`
+    if (taskSuffix) {
+      prompt += `\nAdditional instructions for the final applier:\n${taskSuffix}\n`
+    }
+
+    prompt += `\nProduce the final implementation now.`
+    return prompt
   }
 
   private async runReviewLoop(task: Task, sessionId: string, config: ReviewConfig) {
