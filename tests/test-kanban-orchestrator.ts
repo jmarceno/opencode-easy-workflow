@@ -7,15 +7,16 @@
  */
 
 import { createOpencode } from "@opencode-ai/sdk";
-import { existsSync, unlinkSync, readFileSync, rmSync } from "fs";
+import { existsSync, mkdirSync, unlinkSync, readFileSync, rmSync } from "fs";
 import { join } from "path";
-import { KanbanDB } from "./.opencode/easy-workflow/db";
-import { KanbanServer } from "./.opencode/easy-workflow/server";
-import { Orchestrator } from "./.opencode/easy-workflow/orchestrator";
+import { KanbanDB } from "../.opencode/easy-workflow/db";
+import { KanbanServer } from "../.opencode/easy-workflow/server";
+import { Orchestrator } from "../.opencode/easy-workflow/orchestrator";
 
 const TEST_DIR = process.cwd();
 const WORKFLOW_ROOT = join(TEST_DIR, ".opencode", "easy-workflow");
-const DB_PATH = join(WORKFLOW_ROOT, "tasks.db");
+const TEST_ARTIFACTS = join(WORKFLOW_ROOT, "test-artifacts");
+const DB_PATH = join(TEST_ARTIFACTS, "tasks.db");
 const DEBUG_LOG_PATH = join(WORKFLOW_ROOT, "debug.log");
 
 // Test tasks
@@ -231,13 +232,10 @@ async function main() {
   let baselineWorktrees: Set<string> = new Set();
   
   try {
+    mkdirSync(TEST_ARTIFACTS, { recursive: true });
+    
     // Pre-cleanup
     await cleanup();
-    
-    // Clear old debug log
-    if (existsSync(DEBUG_LOG_PATH)) {
-      unlinkSync(DEBUG_LOG_PATH);
-    }
     
     // Start OpenCode server
     console.log("Starting OpenCode server...");
@@ -394,7 +392,7 @@ async function main() {
 }
 
 async function testPlanModeApprovalWorkflow() {
-  console.log("\n\n=== Plan-Mode Approval Workflow Test ===\n");
+console.log("\n\n=== Plan-Mode Approval Workflow Test ===\n");
   console.log("Test: Plan-mode task stops in review awaiting approval, then resumes after approval\n");
   
   let server: { url: string; close(): void } | null = null;
@@ -406,16 +404,12 @@ async function testPlanModeApprovalWorkflow() {
   try {
     await cleanup();
     
-    if (existsSync(DEBUG_LOG_PATH)) {
-      unlinkSync(DEBUG_LOG_PATH);
-    }
-    
     console.log("Starting OpenCode server...");
     const opencode = await createOpencode({ port: 0 });
     server = opencode.server;
     baselineWorktrees = await listGitWorktrees();
     console.log(`Server started at ${server.url}`);
-    
+
     console.log("\nInitializing Kanban components...");
     kanbanDb = new KanbanDB(DB_PATH);
     const kanbanPort = getFreePort();
@@ -602,10 +596,6 @@ async function testPlanModeWithDependencies() {
   
   try {
     await cleanup();
-    
-    if (existsSync(DEBUG_LOG_PATH)) {
-      unlinkSync(DEBUG_LOG_PATH);
-    }
     
     console.log("Starting OpenCode server...");
     const opencode = await createOpencode({ port: 0 });

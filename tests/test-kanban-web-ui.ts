@@ -5,9 +5,9 @@ import { chromium } from "playwright";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { KanbanDB } from "./.opencode/easy-workflow/db";
-import { KanbanServer } from "./.opencode/easy-workflow/server";
-import { Orchestrator } from "./.opencode/easy-workflow/orchestrator";
+import { KanbanDB } from "../.opencode/easy-workflow/db";
+import { KanbanServer } from "../.opencode/easy-workflow/server";
+import { Orchestrator } from "../.opencode/easy-workflow/orchestrator";
 
 async function listGitWorktrees(): Promise<Set<string>> {
   const output = await Bun.$`git worktree list --porcelain`.text();

@@ -3,8 +3,8 @@
 import { mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { KanbanDB } from "./.opencode/easy-workflow/db"
-import { Orchestrator } from "./.opencode/easy-workflow/orchestrator"
+import { KanbanDB } from "../.opencode/easy-workflow/db"
+import { Orchestrator } from "../.opencode/easy-workflow/orchestrator"
 
 function assert(condition: unknown, message: string) {
   if (!condition) throw new Error(message)

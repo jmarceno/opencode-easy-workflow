@@ -3,9 +3,9 @@
 import { mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { KanbanDB } from "./.opencode/easy-workflow/db"
-import { KanbanServer } from "./.opencode/easy-workflow/server"
-import { Orchestrator } from "./.opencode/easy-workflow/orchestrator"
+import { KanbanDB } from "../.opencode/easy-workflow/db"
+import { KanbanServer } from "../.opencode/easy-workflow/server"
+import { Orchestrator } from "../.opencode/easy-workflow/orchestrator"
 
 function assert(condition: unknown, message: string) {
   if (!condition) {
