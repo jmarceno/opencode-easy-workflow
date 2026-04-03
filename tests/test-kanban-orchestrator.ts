@@ -777,11 +777,263 @@ async function testPlanModeWithDependencies() {
   }
 }
 
+async function testPlanModeRevisionLoop() {
+  console.log("\n\n=== Plan-Mode Revision Loop E2E Test ===\n");
+  console.log("Test: Plan → Request Revision → Revised Plan → Approve → Implement\n");
+
+  let server: { url: string; close(): void } | null = null;
+  let kanbanServer: KanbanServer | null = null;
+  let kanbanDb: KanbanDB | null = null;
+  let orchestrator: Orchestrator | null = null;
+  let baselineWorktrees: Set<string> = new Set();
+
+  try {
+    await cleanup();
+
+    console.log("Starting OpenCode server...");
+    const opencode = await createOpencode({ port: 0 });
+    server = opencode.server;
+    baselineWorktrees = await listGitWorktrees();
+    console.log(`Server started at ${server.url}`);
+
+    console.log("\nInitializing Kanban components...");
+    kanbanDb = new KanbanDB(DB_PATH);
+    const kanbanPort = getFreePort();
+    kanbanDb.updateOptions({ port: kanbanPort });
+
+    let isExecuting = false;
+    kanbanServer = new KanbanServer(kanbanDb, {
+      onStart: async () => {
+        isExecuting = true;
+        if (orchestrator) await orchestrator.start();
+        isExecuting = false;
+      },
+      onStop: () => {
+        isExecuting = false;
+        if (orchestrator) orchestrator.stop();
+      },
+      getExecuting: () => isExecuting,
+      getStartError: () => (orchestrator ? orchestrator.preflightStartError() : "Kanban orchestrator is not ready"),
+      getServerUrl: () => server?.url || null,
+    });
+
+    orchestrator = new Orchestrator(kanbanDb, kanbanServer, server.url, TEST_DIR);
+
+    const startedKanbanPort = kanbanServer.start();
+    console.log(`Kanban server started on port: ${startedKanbanPort}`);
+
+    await waitFor(1000);
+
+    // Create plan-mode task
+    console.log("\nCreating Plan-Mode Task...");
+    const planTaskResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(PLAN_TASK),
+    });
+
+    if (!planTaskResponse.ok) {
+      throw new Error(`Failed to create Plan Task: ${planTaskResponse.statusText}`);
+    }
+
+    const planTask = await planTaskResponse.json();
+    console.log(`Created Plan Task: ${planTask.id} - ${planTask.name}`);
+
+    // Phase 1: Run orchestrator → plan generated → task in review
+    console.log("\n=== Phase 1: Initial Planning ===");
+    console.log("Starting execution to generate initial plan...");
+    const startResponse = await fetch(`http://localhost:${startedKanbanPort}/api/start`, {
+      method: "POST",
+    });
+
+    if (!startResponse.ok) {
+      throw new Error(`Failed to start execution: ${await startResponse.text()}`);
+    }
+
+    isExecuting = true;
+
+    const planGenerated = await pollForCondition(() => {
+      const tasksResp = fetch(`http://localhost:${startedKanbanPort}/api/tasks`).then(r => r.json());
+      return tasksResp.then((tasks: any[]) => {
+        const pt = tasks.find((t: any) => t.id === planTask.id);
+        return pt?.status === "review" && pt?.awaitingPlanApproval === true;
+      });
+    }, 60000, 2000);
+
+    await waitFor(2000);
+
+    let tasksResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks`);
+    let tasks = await tasksResponse.json();
+    let foundPlanTask = tasks.find((t: any) => t.id === planTask.id);
+
+    console.log(`Plan Task Status: ${foundPlanTask?.status}`);
+    console.log(`Awaiting Plan Approval: ${foundPlanTask?.awaitingPlanApproval}`);
+    console.log(`Execution Phase: ${foundPlanTask?.executionPhase}`);
+    console.log(`Plan Revision Count: ${foundPlanTask?.planRevisionCount}`);
+
+    if (!planGenerated || foundPlanTask?.status !== "review" || !foundPlanTask?.awaitingPlanApproval) {
+      throw new Error(`Plan task did not enter awaiting approval state. Status: ${foundPlanTask?.status}`);
+    }
+    console.log("✓ Initial plan generated, task in review");
+
+    // Phase 2: Request revision via API
+    console.log("\n=== Phase 2: Requesting Plan Revision ===");
+    const revisionResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks/${planTask.id}/request-plan-revision`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ feedback: "Please add more detail about error handling" }),
+    });
+
+    if (!revisionResponse.ok) {
+      throw new Error(`Failed to request revision: ${await revisionResponse.text()}`);
+    }
+    console.log("Revision requested successfully");
+
+    tasksResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks`);
+    tasks = await tasksResponse.json();
+    foundPlanTask = tasks.find((t: any) => t.id === planTask.id);
+
+    console.log(`After Revision Request — Status: ${foundPlanTask?.status}, Phase: ${foundPlanTask?.executionPhase}, RevCount: ${foundPlanTask?.planRevisionCount}`);
+
+    if (foundPlanTask?.executionPhase !== "plan_revision_pending") {
+      throw new Error(`Expected plan_revision_pending, got ${foundPlanTask?.executionPhase}`);
+    }
+    if (foundPlanTask?.planRevisionCount !== 1) {
+      throw new Error(`Expected planRevisionCount=1, got ${foundPlanTask?.planRevisionCount}`);
+    }
+    console.log("✓ Task transitioned to plan_revision_pending with count=1");
+
+    // Phase 3: Run orchestrator again → revised plan generated → task back in review
+    console.log("\n=== Phase 3: Re-Planning with Feedback ===");
+    isExecuting = true;
+    const startResponse2 = await fetch(`http://localhost:${startedKanbanPort}/api/start`, {
+      method: "POST",
+    });
+
+    if (!startResponse2.ok) {
+      throw new Error(`Failed to restart execution: ${await startResponse2.text()}`);
+    }
+
+    const revisedPlanGenerated = await pollForCondition(() => {
+      const tasksResp = fetch(`http://localhost:${startedKanbanPort}/api/tasks`).then(r => r.json());
+      return tasksResp.then((tasks: any[]) => {
+        const pt = tasks.find((t: any) => t.id === planTask.id);
+        return pt?.status === "review" && pt?.awaitingPlanApproval === true && pt?.executionPhase === "plan_complete_waiting_approval";
+      });
+    }, 60000, 2000);
+
+    await waitFor(2000);
+
+    tasksResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks`);
+    tasks = await tasksResponse.json();
+    foundPlanTask = tasks.find((t: any) => t.id === planTask.id);
+
+    console.log(`After Re-Plan — Status: ${foundPlanTask?.status}, Phase: ${foundPlanTask?.executionPhase}, RevCount: ${foundPlanTask?.planRevisionCount}`);
+
+    if (!revisedPlanGenerated) {
+      throw new Error(`Revised plan was not generated. Status: ${foundPlanTask?.status}, Phase: ${foundPlanTask?.executionPhase}`);
+    }
+    console.log("✓ Revised plan generated, task back in review");
+
+    // Phase 4: Approve via API
+    console.log("\n=== Phase 4: Approving Revised Plan ===");
+    const approveResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks/${planTask.id}/approve-plan`, {
+      method: "POST",
+    });
+
+    if (!approveResponse.ok) {
+      throw new Error(`Failed to approve revised plan: ${await approveResponse.text()}`);
+    }
+    console.log("Revised plan approved");
+
+    await waitFor(1000);
+
+    tasksResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks`);
+    tasks = await tasksResponse.json();
+    foundPlanTask = tasks.find((t: any) => t.id === planTask.id);
+
+    console.log(`After Approval — Status: ${foundPlanTask?.status}, Phase: ${foundPlanTask?.executionPhase}`);
+
+    const approvedForImplementation = foundPlanTask?.executionPhase === "implementation_pending"
+      || foundPlanTask?.executionPhase === "implementation_done";
+    if (!approvedForImplementation) {
+      throw new Error(`Plan approval did not transition to implementation. Phase: ${foundPlanTask?.executionPhase}`);
+    }
+    console.log("✓ Task transitioned to implementation");
+
+    // Phase 5: Run orchestrator → implementation runs → task done
+    console.log("\n=== Phase 5: Implementation ===");
+    isExecuting = true;
+    const startResponse3 = await fetch(`http://localhost:${startedKanbanPort}/api/start`, {
+      method: "POST",
+    });
+
+    if (!startResponse3.ok) {
+      throw new Error(`Failed to start implementation: ${await startResponse3.text()}`);
+    }
+
+    const implementationComplete = await pollForCondition(() => {
+      const tasksResp = fetch(`http://localhost:${startedKanbanPort}/api/tasks`).then(r => r.json());
+      return tasksResp.then((tasks: any[]) => {
+        const pt = tasks.find((t: any) => t.id === planTask.id);
+        return pt?.status === "done";
+      });
+    }, 120000, 2000);
+
+    await waitFor(2000);
+
+    tasksResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks`);
+    tasks = await tasksResponse.json();
+    foundPlanTask = tasks.find((t: any) => t.id === planTask.id);
+
+    console.log(`\n=== Final Results ===`);
+    console.log(`Plan Task Status: ${foundPlanTask?.status}`);
+    console.log(`Execution Phase: ${foundPlanTask?.executionPhase}`);
+    console.log(`Plan Revision Count: ${foundPlanTask?.planRevisionCount}`);
+
+    // Cleanup
+    await cleanup();
+    await cleanupNewWorktrees(baselineWorktrees);
+    kanbanServer.stop();
+    kanbanDb.close();
+    server.close();
+
+    if (!implementationComplete || foundPlanTask?.status !== "done") {
+      console.log("\n✗ TEST FAILED: Plan task did not complete after revision loop");
+      process.exit(1);
+    }
+
+    // Verify file was created
+    const readmePath = join(TEST_DIR, "readme.txt");
+    if (!existsSync(readmePath)) {
+      console.log("\n✗ TEST FAILED: readme.txt was not created during implementation");
+      process.exit(1);
+    }
+
+    const readmeContent = readFileSync(readmePath, "utf-8");
+    console.log(`readme.txt content: ${readmeContent}`);
+
+    console.log("\n✓ TEST PASSED: Full revision loop completed successfully");
+    process.exit(0);
+
+  } catch (error) {
+    console.error("\nTest failed with error:", error);
+    await cleanup();
+    await cleanupNewWorktrees(baselineWorktrees);
+    if (kanbanServer) kanbanServer.stop();
+    if (kanbanDb) kanbanDb.close();
+    if (server) server.close();
+    process.exit(1);
+  }
+}
+
 // Run plan-mode tests if PLAN_MODE_TEST env is set
 if (process.env.PLAN_MODE_TEST === "1") {
   testPlanModeApprovalWorkflow();
 } else if (process.env.PLAN_MODE_TEST === "2") {
   testPlanModeWithDependencies();
+} else if (process.env.PLAN_MODE_TEST === "3") {
+  testPlanModeRevisionLoop();
 } else {
   main();
 }

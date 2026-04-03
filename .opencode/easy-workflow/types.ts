@@ -2,7 +2,7 @@ export type TaskStatus = "template" | "backlog" | "executing" | "review" | "done
 
 export type ThinkingLevel = "default" | "low" | "medium" | "high"
 
-export type ExecutionPhase = "not_started" | "plan_complete_waiting_approval" | "implementation_pending" | "implementation_done"
+export type ExecutionPhase = "not_started" | "plan_complete_waiting_approval" | "plan_revision_pending" | "implementation_pending" | "implementation_done"
 
 export type ExecutionStrategy = "standard" | "best_of_n"
 
@@ -66,6 +66,7 @@ export interface Task {
   thinkingLevel: ThinkingLevel
   executionPhase: ExecutionPhase
   awaitingPlanApproval: boolean
+  planRevisionCount: number
   executionStrategy: ExecutionStrategy
   bestOfNConfig: BestOfNConfig | null
   bestOfNSubstage: BestOfNSubstage
@@ -176,6 +177,7 @@ export type WSMessageType =
   | "task_run_updated"
   | "task_candidate_created"
   | "task_candidate_updated"
+  | "plan_revision_requested"
 
 export interface WSMessage {
   type: WSMessageType

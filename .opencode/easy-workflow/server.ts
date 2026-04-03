@@ -483,6 +483,7 @@ export class KanbanServer {
             name: t.name,
             status: t.status,
             awaitingPlanApproval: t.awaitingPlanApproval,
+            planRevisionCount: t.planRevisionCount,
           }))
 
           return this.json(graph)
@@ -541,6 +542,58 @@ export class KanbanServer {
           status: "backlog",
         })
         const updated = this.db.getTask(taskId)!
+        this.broadcast({ type: "task_updated", payload: updated })
+        if (!this.getExecuting()) {
+          const preflightError = this.getStartError()
+          if (!preflightError) {
+            this.onStart().catch((err) => this.reportExecutionStartFailure(err))
+          }
+        }
+        return this.json({ ok: true })
+      }
+
+      // Request plan revision for planmode task
+      const revisionMatch = method === "POST"
+        ? url.pathname.match(/^\/api\/tasks\/([a-z0-9]+)\/request-plan-revision$/)
+        : null
+      if (revisionMatch) {
+        const taskId = revisionMatch[1]
+        const task = this.db.getTask(taskId)
+        if (!task) {
+          return this.json({ error: "Task not found" }, 404)
+        }
+        if (this.getExecuting()) {
+          return this.json({ error: getExecutionMutationError() }, 409)
+        }
+        if (!task.agentOutput.trim()) {
+          return this.json({ error: "Task has no captured plan output to revise" }, 400)
+        }
+        if (task.status !== "review" || !task.awaitingPlanApproval) {
+          return this.json({ error: "Task is not awaiting plan approval" }, 400)
+        }
+        let feedback: string | undefined
+        try {
+          const body = await req.json()
+          if (body && typeof body.feedback === "string") {
+            const trimmed = body.feedback.trim()
+            if (trimmed) {
+              feedback = trimmed
+            }
+          }
+        } catch {
+          // ignore parse errors
+        }
+        if (!feedback) {
+          return this.json({ error: "Feedback cannot be empty" }, 400)
+        }
+        this.db.appendAgentOutput(taskId, `[user-revision-request] ${feedback}\n`)
+        this.broadcast({ type: "agent_output", payload: { taskId, output: `[user-revision-request] ${feedback}\n` } })
+        this.db.updateTask(taskId, {
+          planRevisionCount: (task.planRevisionCount ?? 0) + 1,
+          executionPhase: "plan_revision_pending",
+        })
+        const updated = this.db.getTask(taskId)!
+        this.broadcast({ type: "plan_revision_requested", payload: updated })
         this.broadcast({ type: "task_updated", payload: updated })
         if (!this.getExecuting()) {
           const preflightError = this.getStartError()

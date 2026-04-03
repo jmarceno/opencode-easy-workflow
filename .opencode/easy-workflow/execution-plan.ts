@@ -7,7 +7,8 @@ export function getExecutableTasks(tasks: Task[]): Task[] {
   for (const task of tasks) {
     const isBacklogTask = task.status === "backlog" && task.executionPhase !== "plan_complete_waiting_approval"
     const isApprovedPlanTask = task.executionPhase === "implementation_pending"
-    if (!isBacklogTask && !isApprovedPlanTask) continue
+    const isRevisionPendingTask = task.executionPhase === "plan_revision_pending"
+    if (!isBacklogTask && !isApprovedPlanTask && !isRevisionPendingTask) continue
     if (seen.has(task.id)) continue
     seen.add(task.id)
     executable.push(task)
@@ -95,6 +96,7 @@ export interface ExecutionGraph {
     name: string
     status: string
     awaitingPlanApproval: boolean
+    planRevisionCount?: number
   }[]
 }
 

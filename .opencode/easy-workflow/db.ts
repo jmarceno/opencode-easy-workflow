@@ -48,6 +48,7 @@ function rowToTask(row: any): Task {
     thinkingLevel: normalizeThinkingLevel(row.thinking_level),
     executionPhase: normalizeExecutionPhase(row.execution_phase),
     awaitingPlanApproval: row.awaiting_plan_approval === 1,
+    planRevisionCount: row.plan_revision_count ?? 0,
     executionStrategy: normalizeExecutionStrategy(row.execution_strategy),
     bestOfNConfig: row.best_of_n_config ? JSON.parse(row.best_of_n_config) : null,
     bestOfNSubstage: normalizeBestOfNSubstage(row.best_of_n_substage),
@@ -67,7 +68,7 @@ function normalizeBestOfNSubstage(value: unknown): BestOfNSubstage {
 }
 
 function normalizeExecutionPhase(value: unknown): ExecutionPhase {
-  const validPhases: ExecutionPhase[] = ["not_started", "plan_complete_waiting_approval", "implementation_pending", "implementation_done"]
+  const validPhases: ExecutionPhase[] = ["not_started", "plan_complete_waiting_approval", "plan_revision_pending", "implementation_pending", "implementation_done"]
   if (validPhases.includes(value as ExecutionPhase)) {
     return value as ExecutionPhase
   }
@@ -116,6 +117,7 @@ export class KanbanDB {
         thinking_level TEXT NOT NULL DEFAULT 'default',
         execution_phase TEXT NOT NULL DEFAULT 'not_started',
         awaiting_plan_approval INTEGER NOT NULL DEFAULT 0,
+        plan_revision_count INTEGER NOT NULL DEFAULT 0,
         execution_strategy TEXT NOT NULL DEFAULT 'standard',
         best_of_n_config TEXT,
         best_of_n_substage TEXT NOT NULL DEFAULT 'idle'
@@ -217,6 +219,11 @@ export class KanbanDB {
     const hasBestOfNSubstage = tableInfo.some((col: any) => col.name === "best_of_n_substage")
     if (!hasBestOfNSubstage) {
       this.db.exec("ALTER TABLE tasks ADD COLUMN best_of_n_substage TEXT NOT NULL DEFAULT 'idle'")
+    }
+
+    const hasPlanRevisionCount = tableInfo.some((col: any) => col.name === "plan_revision_count")
+    if (!hasPlanRevisionCount) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN plan_revision_count INTEGER NOT NULL DEFAULT 0")
     }
 
     const optCount = this.db.query("SELECT COUNT(*) as cnt FROM options").get() as any
@@ -346,6 +353,7 @@ export class KanbanDB {
     thinkingLevel?: ThinkingLevel
     executionPhase?: ExecutionPhase
     awaitingPlanApproval?: boolean
+    planRevisionCount?: number
     executionStrategy?: ExecutionStrategy
     bestOfNConfig?: BestOfNConfig | null
     bestOfNSubstage?: BestOfNSubstage
@@ -356,8 +364,8 @@ export class KanbanDB {
     const now = Math.floor(Date.now() / 1000)
 
     this.db.prepare(`
-      INSERT INTO tasks (id, name, idx, prompt, branch, plan_model, execution_model, planmode, review, auto_commit, delete_worktree, status, requirements, created_at, updated_at, thinking_level, execution_phase, awaiting_plan_approval, execution_strategy, best_of_n_config, best_of_n_substage)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tasks (id, name, idx, prompt, branch, plan_model, execution_model, planmode, review, auto_commit, delete_worktree, status, requirements, created_at, updated_at, thinking_level, execution_phase, awaiting_plan_approval, plan_revision_count, execution_strategy, best_of_n_config, best_of_n_substage)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       data.name,
@@ -377,6 +385,7 @@ export class KanbanDB {
       data.thinkingLevel ?? "default",
       data.executionPhase ?? "not_started",
       data.awaitingPlanApproval ? 1 : 0,
+      data.planRevisionCount ?? 0,
       data.executionStrategy ?? "standard",
       data.bestOfNConfig ? JSON.stringify(data.bestOfNConfig) : null,
       data.bestOfNSubstage ?? "idle",
@@ -408,6 +417,7 @@ export class KanbanDB {
     thinkingLevel: ThinkingLevel
     executionPhase: ExecutionPhase
     awaitingPlanApproval: boolean
+    planRevisionCount: number
     executionStrategy: ExecutionStrategy
     bestOfNConfig: BestOfNConfig | null
     bestOfNSubstage: BestOfNSubstage
@@ -437,6 +447,7 @@ export class KanbanDB {
     if (updates.thinkingLevel !== undefined) { sets.push("thinking_level = ?"); values.push(updates.thinkingLevel) }
     if (updates.executionPhase !== undefined) { sets.push("execution_phase = ?"); values.push(updates.executionPhase) }
     if (updates.awaitingPlanApproval !== undefined) { sets.push("awaiting_plan_approval = ?"); values.push(updates.awaitingPlanApproval ? 1 : 0) }
+    if (updates.planRevisionCount !== undefined) { sets.push("plan_revision_count = ?"); values.push(updates.planRevisionCount) }
     if (updates.executionStrategy !== undefined) { sets.push("execution_strategy = ?"); values.push(updates.executionStrategy) }
     if (updates.bestOfNConfig !== undefined) { sets.push("best_of_n_config = ?"); values.push(updates.bestOfNConfig ? JSON.stringify(updates.bestOfNConfig) : null) }
     if (updates.bestOfNSubstage !== undefined) { sets.push("best_of_n_substage = ?"); values.push(updates.bestOfNSubstage) }
@@ -528,7 +539,7 @@ export class KanbanDB {
       this.db.prepare("DELETE FROM task_runs WHERE task_id = ?").run(task.id)
     }
     this.db.prepare(
-      "UPDATE tasks SET status = 'backlog', session_id = NULL, session_url = NULL, worktree_dir = NULL, agent_output = '', review_count = 0, error_message = NULL, completed_at = NULL, updated_at = unixepoch(), execution_phase = 'not_started', awaiting_plan_approval = 0, best_of_n_substage = 'idle' WHERE status IN ('executing', 'review', 'failed', 'stuck')"
+      "UPDATE tasks SET status = 'backlog', session_id = NULL, session_url = NULL, worktree_dir = NULL, agent_output = '', review_count = 0, error_message = NULL, completed_at = NULL, updated_at = unixepoch(), execution_phase = 'not_started', awaiting_plan_approval = 0, plan_revision_count = 0, best_of_n_substage = 'idle' WHERE status IN ('executing', 'review', 'failed', 'stuck')"
     ).run()
   }
 

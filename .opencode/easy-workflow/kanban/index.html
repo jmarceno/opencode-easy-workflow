@@ -542,6 +542,24 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
   </div>
 </div>
 
+<div class="modal-overlay hidden" id="revisionModal">
+  <div class="modal" style="width:440px;">
+    <div class="modal-header">
+      <h2>Request Plan Changes</h2>
+      <button class="modal-close" onclick="closeRevisionModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div id="revisionModalTaskName" style="margin-bottom:12px;font-size:14px;color:var(--text);"></div>
+      <label for="revisionFeedback" style="display:block;margin-bottom:6px;font-size:13px;color:var(--text-dim);">What should be changed?</label>
+      <textarea id="revisionFeedback" rows="4" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;resize:vertical;box-sizing:border-box;" placeholder="Describe the changes you want in the plan..."></textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeRevisionModal()">Cancel</button>
+      <button class="btn btn-primary" style="background:var(--orange);border-color:var(--orange);" onclick="confirmRequestRevision()">Send Feedback</button>
+    </div>
+  </div>
+</div>
+
 <div class="log-panel">
   <div class="log-header">
     <span>Event Log</span>
@@ -980,6 +998,9 @@ function connectWS() {
         if (t) { t.agentOutput = (t.agentOutput || '') + msg.payload.output; renderBoard() }
         break
       case 'error': showToast(msg.payload.message, 'error'); break
+      case 'plan_revision_requested':
+        loadTasks()
+        break
       case 'task_run_created':
       case 'task_run_updated':
       case 'task_candidate_created':
@@ -1142,6 +1163,15 @@ function renderCard(task, colStatus) {
     approveBtn.style.color = 'var(--green)'
     approveBtn.onclick = () => approvePlan(task.id)
     actions.appendChild(approveBtn)
+
+    const revisionBtn = document.createElement('button')
+    revisionBtn.className = 'action-text'
+    revisionBtn.textContent = 'Request Changes'
+    revisionBtn.title = 'Request Plan Changes'
+    revisionBtn.style.borderColor = 'var(--orange)'
+    revisionBtn.style.color = 'var(--orange)'
+    revisionBtn.onclick = () => openRevisionModal(task.id)
+    actions.appendChild(revisionBtn)
   }
   header.appendChild(actions)
   card.appendChild(header)
@@ -1159,6 +1189,12 @@ function renderCard(task, colStatus) {
     const b = document.createElement('span')
     b.className = 'badge badge-approval'
     b.textContent = 'plan approval pending'
+    meta.appendChild(b)
+  }
+  if (task.planRevisionCount > 0) {
+    const b = document.createElement('span')
+    b.className = 'badge badge-warning'
+    b.textContent = `revision ${task.planRevisionCount}`
     meta.appendChild(b)
   }
   if (task.status === 'template') {
@@ -1282,6 +1318,14 @@ function renderCard(task, colStatus) {
       approvePlanBtn.textContent = 'Approve Plan'
       approvePlanBtn.onclick = () => approvePlan(task.id)
       actionBar.appendChild(approvePlanBtn)
+
+      const requestChangesBtn = document.createElement('button')
+      requestChangesBtn.className = 'btn btn-sm'
+      requestChangesBtn.textContent = 'Request Changes'
+      requestChangesBtn.style.borderColor = 'var(--orange)'
+      requestChangesBtn.style.color = 'var(--orange)'
+      requestChangesBtn.onclick = () => openRevisionModal(task.id)
+      actionBar.appendChild(requestChangesBtn)
     }
 
     const resetBtn = document.createElement('button')
@@ -1701,6 +1745,39 @@ async function approvePlan(id) {
   openApproveModal(id)
 }
 
+let revisionModalTaskId = null
+
+function openRevisionModal(taskId) {
+  const task = allTasks.find(t => t.id === taskId)
+  if (!task) return
+  revisionModalTaskId = taskId
+  document.getElementById('revisionModalTaskName').textContent = task.name
+  document.getElementById('revisionFeedback').value = ''
+  document.getElementById('revisionModal').classList.remove('hidden')
+}
+
+function closeRevisionModal() {
+  document.getElementById('revisionModal').classList.add('hidden')
+  revisionModalTaskId = null
+}
+
+async function confirmRequestRevision() {
+  if (!revisionModalTaskId) return
+  const feedback = document.getElementById('revisionFeedback').value.trim()
+  if (!feedback) {
+    showToast('Feedback cannot be empty', 'error')
+    return
+  }
+  const taskId = revisionModalTaskId
+  closeRevisionModal()
+  try {
+    await api(`/api/tasks/${taskId}/request-plan-revision`, 'POST', { feedback })
+    addLogEntry(`Revision requested for task: ${allTasks.find(t => t.id === taskId)?.name || taskId}`)
+    await loadTasks()
+    showToast('Revision requested', 'success')
+  } catch (e) { showToast('Request revision failed: ' + e.message, 'error') }
+}
+
 // ---- Options ----
 function openOptionsModal() {
   populateBranchSelect('optBranch', allOptions.branch || getFallbackBranch())
@@ -1872,17 +1949,29 @@ function renderGraphModal(graph) {
       
       const name = document.createElement('span')
       name.style.cssText = 'font-size:13px;'
-      name.textContent = task.name
+      name.textContent = task.name + (task.planRevisionCount > 0 ? ` (rev ${task.planRevisionCount})` : '')
       taskInfo.appendChild(name)
       
       taskItem.appendChild(taskInfo)
       
+      const btnGroup = document.createElement('div')
+      btnGroup.style.cssText = 'display:flex;gap:4px;'
+
       const approveBtn = document.createElement('button')
       approveBtn.className = 'btn btn-sm'
       approveBtn.style.cssText = 'border-color:var(--green);color:var(--green);'
       approveBtn.textContent = 'Approve'
       approveBtn.onclick = () => openApproveModal(task.id)
-      taskItem.appendChild(approveBtn)
+      btnGroup.appendChild(approveBtn)
+
+      const revisionBtn = document.createElement('button')
+      revisionBtn.className = 'btn btn-sm'
+      revisionBtn.style.cssText = 'border-color:var(--orange);color:var(--orange);'
+      revisionBtn.textContent = 'Request Changes'
+      revisionBtn.onclick = () => openRevisionModal(task.id)
+      btnGroup.appendChild(revisionBtn)
+
+      taskItem.appendChild(btnGroup)
       
       pendingList.appendChild(taskItem)
     }

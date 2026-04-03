@@ -140,14 +140,14 @@ async function getTaskById(kanbanPort: number, taskId: string): Promise<any | nu
   return tasks.find((task: any) => task.id === taskId) ?? null
 }
 
-async function testBestOfNWithRealCycle() {
-  console.log("=== Best-of-N Real-Cycle E2E Test ===")
+async function testPlanRevisionWithRealCycle() {
+  console.log("=== Plan Revision Real-Cycle E2E Test ===")
 
   const workspaceRoot = process.cwd()
-  const tempDir = mkdtempSync(join(tmpdir(), "easy-workflow-best-of-n-e2e-"))
+  const tempDir = mkdtempSync(join(tmpdir(), "easy-workflow-plan-revision-e2e-"))
   const dbPath = join(tempDir, "tasks.db")
-  const marker = `BEST_OF_N_E2E_${Date.now()}`
-  const outputFile = `best-of-n-e2e-${Date.now()}.txt`
+  const marker = `PLAN_REVISION_E2E_${Date.now()}`
+  const outputFile = `plan-revision-e2e-${Date.now()}.txt`
   const outputPath = join(workspaceRoot, outputFile)
 
   let openCodeServer: { url: string; close(): void } | null = null
@@ -199,83 +199,86 @@ async function testBestOfNWithRealCycle() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        name: "Best-of-N Real Cycle",
+        name: "Plan Revision Real Cycle",
         prompt: [
           `Create a file named ${outputFile} in the repository root.`,
           `The file must contain exactly one line: ${marker}`,
         ].join("\n"),
-        planmode: false,
+        planmode: true,
         review: false,
         autoCommit: false,
+        executionModel: realModel,
+        planModel: realModel,
         branch: targetBranch,
-        executionStrategy: "best_of_n",
-        bestOfNConfig: {
-          workers: [
-            {
-              model: realModel,
-              count: 1,
-              taskSuffix: `Produce ${outputFile} with exact content ${marker}`,
-            },
-          ],
-          reviewers: [],
-          finalApplier: {
-            model: realModel,
-            taskSuffix: `Apply the best solution and ensure ${outputFile} contains only ${marker}`,
-          },
-          minSuccessfulWorkers: 1,
-          selectionMode: "synthesize",
-        },
       }),
     })
 
-    assert(createTaskResponse.ok, `Failed to create best-of-n task: HTTP ${createTaskResponse.status}`)
-    const task = await createTaskResponse.json() as any
+    assert(createTaskResponse.ok, `Failed to create task: HTTP ${createTaskResponse.status}`)
+    const planTask = await createTaskResponse.json() as any
 
     const startResponse = await fetch(`http://127.0.0.1:${startedKanbanPort}/api/start`, { method: "POST" })
-    assert(startResponse.ok, `Failed to start best-of-n execution: HTTP ${startResponse.status}`)
+    assert(startResponse.ok, `Failed to start initial planning: HTTP ${startResponse.status}`)
+
+    const initialPlanReady = await pollForCondition(async () => {
+      const task = await getTaskById(startedKanbanPort, planTask.id)
+      return task?.status === "review"
+        && task?.awaitingPlanApproval === true
+        && task?.executionPhase === "plan_complete_waiting_approval"
+    }, 180000)
+
+    assert(initialPlanReady, "Initial plan was not generated")
+
+    const revisionResponse = await fetch(`http://127.0.0.1:${startedKanbanPort}/api/tasks/${planTask.id}/request-plan-revision`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        feedback: "Please make the plan explicit about exact file name and exact one-line output.",
+      }),
+    })
+    assert(revisionResponse.ok, `Failed to request plan revision: HTTP ${revisionResponse.status}`)
+
+    const revisedPlanReady = await pollForCondition(async () => {
+      const task = await getTaskById(startedKanbanPort, planTask.id)
+      if (!task) return false
+      const planEntries = (task.agentOutput.match(/\[plan\]/g) || []).length
+      return task.status === "review"
+        && task.awaitingPlanApproval === true
+        && task.executionPhase === "plan_complete_waiting_approval"
+        && task.planRevisionCount === 1
+        && planEntries >= 2
+    }, 180000)
+
+    assert(revisedPlanReady, "Revised plan was not generated")
+
+    const approveResponse = await fetch(`http://127.0.0.1:${startedKanbanPort}/api/tasks/${planTask.id}/approve-plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "Proceed with implementation exactly as planned." }),
+    })
+    assert(approveResponse.ok, `Failed to approve revised plan: HTTP ${approveResponse.status}`)
 
     let terminalTask: any | null = null
-    const taskReachedTerminalState = await pollForCondition(async () => {
-      const current = await getTaskById(startedKanbanPort, task.id)
-      terminalTask = current
-      return current?.status === "done" || current?.status === "failed" || current?.status === "stuck"
+    const implementationReachedTerminalState = await pollForCondition(async () => {
+      const task = await getTaskById(startedKanbanPort, planTask.id)
+      terminalTask = task
+      return task?.status === "done" || task?.status === "failed" || task?.status === "stuck"
     }, 600000)
 
-    assert(taskReachedTerminalState, "Best-of-n task did not reach a terminal state")
-    assert(terminalTask?.status === "done", `Best-of-n task ended with status ${terminalTask?.status}: ${terminalTask?.errorMessage ?? "no error message"}`)
+    assert(implementationReachedTerminalState, "Implementation did not reach a terminal state")
+    assert(terminalTask?.status === "done", `Implementation ended with status ${terminalTask?.status}: ${terminalTask?.errorMessage ?? "no error message"}`)
 
-    const finalTask = await getTaskById(startedKanbanPort, task.id)
+    const finalTask = await getTaskById(startedKanbanPort, planTask.id)
     assert(finalTask, "Task not found after completion")
     assert(finalTask.status === "done", `Expected done status, got ${finalTask.status}`)
-    assert(finalTask.bestOfNSubstage === "completed", `Expected completed substage, got ${finalTask.bestOfNSubstage}`)
-    assert(finalTask.agentOutput.includes("[worker-0]"), "Expected worker output in task log")
-    assert(finalTask.agentOutput.includes("[final-applier]"), "Expected final-applier output in task log")
-
-    const runsResponse = await fetch(`http://127.0.0.1:${startedKanbanPort}/api/tasks/${task.id}/runs`)
-    assert(runsResponse.ok, `Failed to fetch task runs: HTTP ${runsResponse.status}`)
-    const runs = await runsResponse.json() as any[]
-    assert(runs.length === 2, `Expected 2 runs (worker + final), got ${runs.length}`)
-    assert(runs.some((run) => run.phase === "worker" && run.status === "done"), "Expected a completed worker run")
-    assert(runs.some((run) => run.phase === "final_applier" && run.status === "done"), "Expected a completed final applier run")
-    assert(runs.every((run) => typeof run.sessionId === "string" && run.sessionId.length > 0), "Expected all runs to have real session IDs")
-
-    const candidatesResponse = await fetch(`http://127.0.0.1:${startedKanbanPort}/api/tasks/${task.id}/candidates`)
-    assert(candidatesResponse.ok, `Failed to fetch candidates: HTTP ${candidatesResponse.status}`)
-    const candidates = await candidatesResponse.json() as any[]
-    assert(candidates.length >= 1, "Expected at least one candidate from worker runs")
-
-    const summaryResponse = await fetch(`http://127.0.0.1:${startedKanbanPort}/api/tasks/${task.id}/best-of-n-summary`)
-    assert(summaryResponse.ok, `Failed to fetch best-of-n summary: HTTP ${summaryResponse.status}`)
-    const summary = await summaryResponse.json() as any
-    assert(summary.workersTotal === 1, `Expected workersTotal=1, got ${summary.workersTotal}`)
-    assert(summary.workersDone === 1, `Expected workersDone=1, got ${summary.workersDone}`)
-    assert(summary.hasFinalApplier === true, "Expected hasFinalApplier=true")
+    assert(finalTask.planRevisionCount === 1, `Expected revision count 1, got ${finalTask.planRevisionCount}`)
+    assert(finalTask.agentOutput.includes("[user-revision-request]"), "Missing user revision marker in agent output")
+    assert(Boolean(finalTask.sessionId), "Expected a real session ID from backend")
 
     assert(existsSync(outputPath), `Expected output file to exist: ${outputFile}`)
     const content = readFileSync(outputPath, "utf-8").trim()
     assert(content === marker, `Unexpected output content. Expected '${marker}', got '${content}'`)
 
-    console.log("✓ Real best-of-n cycle completed with a real LLM backend")
+    console.log("✓ Real plan revision cycle completed with a real LLM backend")
   } finally {
     try {
       if (kanbanServer) kanbanServer.stop()
@@ -294,8 +297,8 @@ async function testBestOfNWithRealCycle() {
 }
 
 async function main() {
-  await testBestOfNWithRealCycle()
-  console.log("\nAll best-of-n tests passed")
+  await testPlanRevisionWithRealCycle()
+  console.log("\nAll plan revision tests passed")
 }
 
 main().catch((err) => {

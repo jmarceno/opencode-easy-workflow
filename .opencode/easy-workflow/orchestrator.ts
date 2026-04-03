@@ -488,6 +488,7 @@ export class Orchestrator {
     }
 
     const isPlanImplementationResume = task.planmode && task.executionPhase === "implementation_pending"
+    const isPlanRevisionResume = task.planmode && task.executionPhase === "plan_revision_pending"
 
     // Validate deps are done
     for (const depId of task.requirements) {
@@ -505,7 +506,7 @@ export class Orchestrator {
     this.db.updateTask(task.id, {
       status: "executing",
       errorMessage: null,
-      ...(isPlanImplementationResume ? {} : { agentOutput: "" }),
+      ...(isPlanImplementationResume || isPlanRevisionResume ? {} : { agentOutput: "" }),
     })
     let currentTask = this.getTaskOrThrow(task.id, "marking the task as executing", task.name)
     let lastKnownTask: Task | null = currentTask
@@ -601,7 +602,7 @@ export class Orchestrator {
 
         const planModelParsed = await this.resolveModelSelection(planModel, client, "Plan")
 
-        if (!isPlanImplementationResume) {
+        if (!isPlanImplementationResume && !isPlanRevisionResume) {
           appendDebugLog("info", "plan mode: sending planning prompt", { taskId: task.id })
           const planResponse = await client.session.prompt({
             sessionID: sessionId,
@@ -643,10 +644,69 @@ export class Orchestrator {
           return
         }
 
+        if (isPlanRevisionResume) {
+          appendDebugLog("info", "plan mode: sending revision prompt", { taskId: task.id })
+          const revisionRequestMatches = [...task.agentOutput.matchAll(/\[user-revision-request\]\s*([\s\S]*?)(?=\n\[|$)/g)]
+          const latestRevisionRequest = revisionRequestMatches.length > 0
+            ? revisionRequestMatches[revisionRequestMatches.length - 1][1].trim()
+            : null
+          const planMatches = [...task.agentOutput.matchAll(/\[plan\]\s*([\s\S]*?)(?=\n\[|$)/g)]
+          const originalPlan = planMatches.length > 0 ? planMatches[planMatches.length - 1][1].trim() : null
+          const revisionPrompt = [
+            "The user has reviewed your plan and requested changes. Revise the plan based on their feedback.",
+            `Original task:\n${task.prompt}`,
+            originalPlan ? `Previous plan:\n${originalPlan}` : "",
+            latestRevisionRequest ? `User feedback:\n${latestRevisionRequest}` : "",
+            "Provide a revised plan that addresses the feedback. Output only the revised plan.",
+          ].filter(Boolean).join("\n\n")
+          const planResponse = await client.session.prompt({
+            sessionID: sessionId,
+            agent: "plan",
+            model: planModelParsed,
+            parts: [{ type: "text", text: revisionPrompt }],
+          })
+          const planResult = unwrapResponseDataOrThrow<any>(planResponse, "Revision prompt")
+          const planFailure = this.extractExecutionFailure(planResult)
+          if (planFailure) throw new Error(`Revision prompt failed: ${planFailure}`)
+          const revisedPlanOutput = this.extractTextOutput(planResult).trim()
+          if (!revisedPlanOutput) {
+            throw new Error("Revision prompt failed: no plan output was captured")
+          }
+          this.db.appendAgentOutput(task.id, `[plan] ${revisedPlanOutput}\n`)
+          this.server.broadcast({ type: "agent_output", payload: { taskId: task.id, output: `[plan] ${revisedPlanOutput}\n` } })
+
+          const shouldDeletePausedWorktree = currentTask.deleteWorktree !== false
+          if (worktreeInfo?.directory && shouldDeletePausedWorktree) {
+            try {
+              await this.removeWorktree(worktreeInfo.directory)
+            } catch (cleanupErr) {
+              appendDebugLog("warn", "plan revision worktree cleanup failed", { taskId: task.id, error: String(cleanupErr) })
+            }
+          }
+
+          this.db.updateTask(task.id, {
+            status: "review",
+            awaitingPlanApproval: true,
+            executionPhase: "plan_complete_waiting_approval",
+            worktreeDir: shouldDeletePausedWorktree ? null : currentTask.worktreeDir,
+          })
+          currentTask = this.getTaskOrThrow(task.id, "saving the revised plan", task.name)
+          lastKnownTask = currentTask
+          this.server.broadcast({ type: "task_updated", payload: currentTask })
+          appendDebugLog("info", "plan mode: revision complete, awaiting approval", { taskId: task.id })
+          return
+        }
+
         appendDebugLog("info", "plan mode: sending execution prompt", { taskId: task.id })
         const approvedPlanContext = task.agentOutput.trim()
         const userApprovalNoteMatch = task.agentOutput.match(/\[user-approval-note\]\s*([\s\S]*?)(?=\n\[|$)/)
         const userApprovalNote = userApprovalNoteMatch ? userApprovalNoteMatch[1].trim() : null
+        const revisionRequestMatches = [...task.agentOutput.matchAll(/\[user-revision-request\]\s*([\s\S]*?)(?=\n\[|$)/g)]
+        const revisionRequests = revisionRequestMatches.map(m => m[1].trim()).filter(Boolean)
+        const allUserGuidance = [
+          ...revisionRequests.map((r, i) => `Revision request ${i + 1}:\n${r}`),
+          userApprovalNote ? `Final approval note:\n${userApprovalNote}` : "",
+        ].filter(Boolean).join("\n\n")
         const execPromptOpts: any = {
           sessionID: sessionId,
           model,
@@ -656,7 +716,7 @@ export class Orchestrator {
               "The user has approved the plan below. Implement it now.",
               `Original task:\n${task.prompt}`,
               approvedPlanContext ? `Approved plan:\n${approvedPlanContext}` : "",
-              userApprovalNote ? `User guidance:\n${userApprovalNote}` : "",
+              allUserGuidance ? `User guidance:\n${allUserGuidance}` : "",
             ].filter(Boolean).join("\n\n"),
           }],
         }
@@ -1297,8 +1357,8 @@ ${taskSuffix}`
   private extractChangedFiles(output: string): string[] {
     const files: string[] = []
     const patterns = [
-      /^[AMDRC]\s+(.+)$/m,
-      /^[\d]+\s+[\d]+\s+(.+)$/m,
+      /^[AMDRC]\s+(.+)$/gm,
+      /^[\d]+\s+[\d]+\s+(.+)$/gm,
       /file[s]?:\s*(.+)/gi,
     ]
     for (const pattern of patterns) {
