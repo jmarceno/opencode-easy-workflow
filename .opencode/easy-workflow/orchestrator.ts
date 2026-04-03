@@ -2052,41 +2052,28 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
         const reviewSession = unwrapResponseDataOrThrow<any>(reviewSessionResponse, "Review session creation")
         const reviewSessionId = reviewSession?.id
 
-        let reviewResult: ReviewResult
-        try {
-          const promptText = [
-            `@${config.reviewAgent}`,
-            "",
-            "Review the current repository state against the task below.",
-            "Use the task goals as the only source of truth.",
-            "Do not rely on prior session history.",
-            "Inspect the current codebase and branch state.",
-            "",
-            `Task: ${task.name}`,
-            `Goals: ${task.prompt}`,
-          ].join("\n")
+        const promptText = [
+          `@${config.reviewAgent}`,
+          "",
+          "Review the current repository state against the task below.",
+          "Use the task goals as the only source of truth.",
+          "Do not rely on prior session history.",
+          "Inspect the current codebase and branch state.",
+          "",
+          `Task: ${task.name}`,
+          `Goals: ${task.prompt}`,
+        ].join("\n")
 
-          const response = await client.session.prompt({
-            sessionID: reviewSessionId,
-            agent: config.reviewAgent,
-            parts: [{ type: "text", text: promptText }],
-          })
+        const response = await client.session.prompt({
+          sessionID: reviewSessionId,
+          agent: config.reviewAgent,
+          parts: [{ type: "text", text: promptText }],
+        })
 
-          const result = unwrapResponseDataOrThrow<any>(response, "Review prompt")
-          const reviewFailure = this.extractExecutionFailure(result)
-          if (reviewFailure) throw new Error(`Review prompt failed: ${reviewFailure}`)
-          reviewResult = this.parseReviewResponse(result)
-        } finally {
-          if (reviewSessionId) {
-            await client.session.delete({ sessionID: reviewSessionId }).catch((deleteErr: unknown) => {
-              appendDebugLog("warn", "review session cleanup failed", {
-                taskId: task.id,
-                reviewSessionId,
-                error: String(deleteErr),
-              })
-            })
-          }
-        }
+        const result = unwrapResponseDataOrThrow<any>(response, "Review prompt")
+        const reviewFailure = this.extractExecutionFailure(result)
+        if (reviewFailure) throw new Error(`Review prompt failed: ${reviewFailure}`)
+        const reviewResult = this.parseReviewResponse(result)
 
         appendDebugLog("info", "review result", {
           taskId: task.id,
