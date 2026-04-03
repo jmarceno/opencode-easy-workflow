@@ -238,6 +238,7 @@ export class KanbanServer {
     })
 
     this.server = server
+    console.log(`[kanban] server started on http://localhost:${server.port}`)
     return server.port
   }
 
