@@ -564,9 +564,12 @@ export class KanbanServer {
               node.estimatedRunCount = expandedWorkers + expandedReviewers + 1
             } else {
               node.expandedWorkerRuns = 1
-              node.expandedReviewerRuns = 0
+              // Standard strategy can still run reviewer passes when "Review" is enabled.
+              // Count at least one reviewer run in the execution graph estimate.
+              const standardReviewerRuns = task?.review ? 1 : 0
+              node.expandedReviewerRuns = standardReviewerRuns
               node.hasFinalApplier = false
-              node.estimatedRunCount = 1
+              node.estimatedRunCount = 1 + standardReviewerRuns
             }
           }
 
