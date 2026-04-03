@@ -1,6 +1,6 @@
 import { createHash } from "crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
+import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 
 // Kanban modules
@@ -86,32 +86,56 @@ const REVIEW_COOLDOWN_MS = 30_000;
 
 // ---- Kanban globals ----
 
-let kanbanDb: KanbanDB | null = null;
-let kanbanServer: KanbanServer | null = null;
-let orchestrator: Orchestrator | null = null;
-
 type KanbanSingletonState = {
   db: KanbanDB | null;
   server: KanbanServer | null;
   orchestrator: Orchestrator | null;
-  ownerDirectory: string | null;
   initPromise: Promise<void> | null;
 };
 
-const KANBAN_SINGLETON_KEY = "__easyWorkflowKanbanSingleton";
+type KanbanSingletonMap = Map<string, KanbanSingletonState>;
 
-function getKanbanSingletonState(): KanbanSingletonState {
-  const runtime = globalThis as typeof globalThis & { [KANBAN_SINGLETON_KEY]?: KanbanSingletonState };
-  if (!runtime[KANBAN_SINGLETON_KEY]) {
-    runtime[KANBAN_SINGLETON_KEY] = {
+const KANBAN_SINGLETON_MAP_KEY = "__easyWorkflowKanbanSingletonByDirectory";
+
+function getKanbanSingletonMap(): KanbanSingletonMap {
+  const runtime = globalThis as typeof globalThis & { [KANBAN_SINGLETON_MAP_KEY]?: KanbanSingletonMap };
+  if (!runtime[KANBAN_SINGLETON_MAP_KEY]) {
+    runtime[KANBAN_SINGLETON_MAP_KEY] = new Map();
+  }
+  return runtime[KANBAN_SINGLETON_MAP_KEY]!;
+}
+
+function getKanbanSingletonState(directory: string): KanbanSingletonState {
+  const map = getKanbanSingletonMap();
+  const key = resolve(directory);
+  const existing = map.get(key);
+  if (existing) {
+    return existing;
+  }
+
+  const created: KanbanSingletonState = {
       db: null,
       server: null,
       orchestrator: null,
-      ownerDirectory: null,
       initPromise: null,
     };
+
+  map.set(key, created);
+  return created;
+}
+
+function getKanbanOwnerDirectory(inputDirectory?: string): string {
+  return resolve(inputDirectory || process.cwd());
+}
+
+function getKanbanServerStatusLine(directory: string, singleton: KanbanSingletonState): string {
+  if (singleton.server) {
+    return `running for ${directory}`;
   }
-  return runtime[KANBAN_SINGLETON_KEY]!;
+  if (singleton.initPromise) {
+    return `initializing for ${directory}`;
+  }
+  return `not initialized for ${directory}`;
 }
 
 // ---- Utility functions ----
@@ -953,10 +977,8 @@ function createStableOpencodeServerUrlResolver(readServerUrl: () => unknown, rea
 
 export const EasyWorkflowPlugin = async (input: any) => {
   const { client, directory } = input;
-  const singleton = getKanbanSingletonState();
-  kanbanDb = singleton.db;
-  kanbanServer = singleton.server;
-  orchestrator = singleton.orchestrator;
+  const ownerDirectory = getKanbanOwnerDirectory(directory);
+  const singleton = getKanbanSingletonState(ownerDirectory);
 
   const getOpencodeServerUrl = createStableOpencodeServerUrlResolver(
     () => input.serverUrl,
@@ -969,19 +991,20 @@ export const EasyWorkflowPlugin = async (input: any) => {
     runsDir: RUNS_DIR,
     agentsDir: AGENTS_DIR,
     opencodeServerUrl,
+    kanbanServerState: getKanbanServerStatusLine(ownerDirectory, singleton),
   });
 
-  // Initialize kanban system (non-blocking, singleton per process)
+  // Initialize kanban system (non-blocking, singleton per directory)
   if (!singleton.server && !singleton.initPromise) {
     singleton.initPromise = (async () => {
-    let nextDb: KanbanDB | null = null;
-    let nextServer: KanbanServer | null = null;
-    let nextOrchestrator: Orchestrator | null = null;
-    try {
-      const dbPath = join(directory || WORKFLOW_ROOT, ".opencode", "easy-workflow", "tasks.db");
-      nextDb = new KanbanDB(dbPath);
+      let nextDb: KanbanDB | null = null;
+      let nextServer: KanbanServer | null = null;
+      let nextOrchestrator: Orchestrator | null = null;
+      try {
+        const dbPath = join(ownerDirectory, ".opencode", "easy-workflow", "tasks.db");
+        nextDb = new KanbanDB(dbPath);
 
-      nextServer = new KanbanServer(nextDb, {
+        nextServer = new KanbanServer(nextDb, {
         onStart: async () => {
           if (nextOrchestrator) await nextOrchestrator.start();
         },
@@ -996,47 +1019,48 @@ export const EasyWorkflowPlugin = async (input: any) => {
         getServerUrl: getOpencodeServerUrl,
       });
 
-      nextOrchestrator = new Orchestrator(
-        nextDb,
-        nextServer,
-        getOpencodeServerUrl,
-        directory || process.cwd(),
-      );
+        nextOrchestrator = new Orchestrator(
+          nextDb,
+          nextServer,
+          getOpencodeServerUrl,
+          ownerDirectory,
+        );
 
-      const port = nextServer.start();
-      kanbanDb = nextDb;
-      kanbanServer = nextServer;
-      orchestrator = nextOrchestrator;
-      singleton.db = nextDb;
-      singleton.server = nextServer;
-      singleton.orchestrator = nextOrchestrator;
-      singleton.ownerDirectory = directory || process.cwd();
-      await log(client, "info", "kanban server started", { port });
-      await showToast(client, `Kanban board: http://localhost:${port}`, "success");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (nextServer) {
-        try {
-          nextServer.stop();
-        } catch (e) {
-          await log(client, "error", "failed to stop server during cleanup", { error: String(e) });
+        const port = nextServer.start();
+        singleton.db = nextDb;
+        singleton.server = nextServer;
+        singleton.orchestrator = nextOrchestrator;
+        await log(client, "info", "kanban server started", { port, ownerDirectory });
+        await showToast(client, `Kanban board: http://localhost:${port}`, "success");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (nextServer) {
+          try {
+            nextServer.stop();
+          } catch (e) {
+            await log(client, "error", "failed to stop server during cleanup", { error: String(e) });
+          }
         }
-      }
-      if (nextDb) {
-        try {
-          nextDb.close();
-        } catch (e) {
-          await log(client, "error", "failed to close database during cleanup", { error: String(e) });
+        if (nextDb) {
+          try {
+            nextDb.close();
+          } catch (e) {
+            await log(client, "error", "failed to close database during cleanup", { error: String(e) });
+          }
         }
+        await log(client, "error", "kanban initialization failed", { error: msg });
+      } finally {
+        singleton.initPromise = null;
       }
-      await log(client, "error", "kanban initialization failed", { error: msg });
-    } finally {
-      singleton.initPromise = null;
-    }
-  })();
+    })();
   } else if (singleton.server) {
     await log(client, "info", "kanban initialization skipped; already running", {
-      ownerDirectory: singleton.ownerDirectory,
+      ownerDirectory,
+      port: singleton.db?.getOptions().port,
+    });
+  } else if (singleton.initPromise) {
+    await log(client, "info", "kanban initialization skipped; already initializing", {
+      ownerDirectory,
     });
   }
 
