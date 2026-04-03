@@ -45,12 +45,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 .card { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; cursor: default; transition: border-color .15s; min-width: 0; }
 .card:hover { border-color: var(--text-dim); }
 .card.dragging { opacity: .5; }
-.card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .card-title { font-size: 14px; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); text-decoration: none; }
 .card-title.has-session { color: var(--accent); cursor: pointer; }
 .card-title.has-session:hover { text-decoration: underline; }
-.card-idx { font-size: 11px; background: var(--surface); border-radius: 4px; padding: 2px 6px; margin-left: 8px; color: var(--text-dim); flex-shrink: 0; }
-.card-actions { display: flex; gap: 4px; margin-left: 8px; }
+.card-idx { font-size: 11px; background: var(--surface); border-radius: 4px; padding: 2px 6px; color: var(--text-dim); flex-shrink: 0; }
+.card-actions { display: flex; gap: 4px; justify-content: flex-end; margin-top: 4px; }
 .card-actions button { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 16px; padding: 4px 6px; border-radius: 4px; }
 .card-actions button:hover { color: var(--text); background: var(--surface); }
 .card-actions button.action-text { font-size: 11px; border: 1px solid var(--border); background: var(--surface); padding: 2px 8px; }
@@ -1238,8 +1238,8 @@ function renderCard(task, colStatus) {
     actions.appendChild(startBtn)
   }
 
-  header.appendChild(actions)
   card.appendChild(header)
+  card.appendChild(actions)
 
   // Meta badges
   const meta = document.createElement('div')
