@@ -133,6 +133,8 @@ export interface Options {
   reviewModel: string
   command: string
   parallelTasks: number
+  autoDeleteNormalSessions: boolean
+  autoDeleteReviewSessions: boolean
   port: number
   thinkingLevel: ThinkingLevel
 }

@@ -12,8 +12,21 @@ const DEFAULT_OPTIONS: Options = {
   reviewModel: "minimax/MiniMax-M2.7",
   command: "",
   parallelTasks: 1,
+  autoDeleteNormalSessions: false,
+  autoDeleteReviewSessions: false,
   port: 3789,
   thinkingLevel: "default",
+}
+
+function normalizeOptionBoolean(value: unknown, fallback = false): boolean {
+  if (typeof value === "boolean") return value
+  if (typeof value === "number") return value !== 0
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === "1" || normalized === "true") return true
+    if (normalized === "0" || normalized === "false") return false
+  }
+  return fallback
 }
 
 function normalizeThinkingLevel(value: unknown): ThinkingLevel {
@@ -239,6 +252,8 @@ export class KanbanDB {
       insert.run("review_model", DEFAULT_OPTIONS.reviewModel)
       insert.run("command", DEFAULT_OPTIONS.command)
       insert.run("parallel_tasks", String(DEFAULT_OPTIONS.parallelTasks))
+      insert.run("auto_delete_normal_sessions", String(DEFAULT_OPTIONS.autoDeleteNormalSessions))
+      insert.run("auto_delete_review_sessions", String(DEFAULT_OPTIONS.autoDeleteReviewSessions))
       insert.run("port", String(DEFAULT_OPTIONS.port))
       insert.run("thinking_level", DEFAULT_OPTIONS.thinkingLevel)
     }
@@ -251,6 +266,16 @@ export class KanbanDB {
     const hasReviewModelKey = this.db.prepare("SELECT COUNT(*) as cnt FROM options WHERE key = 'review_model'").get() as any
     if (hasReviewModelKey.cnt === 0) {
       this.db.prepare("INSERT OR IGNORE INTO options (key, value) VALUES ('review_model', ?)").run(DEFAULT_OPTIONS.reviewModel)
+    }
+
+    const hasAutoDeleteNormalSessionsKey = this.db.prepare("SELECT COUNT(*) as cnt FROM options WHERE key = 'auto_delete_normal_sessions'").get() as any
+    if (hasAutoDeleteNormalSessionsKey.cnt === 0) {
+      this.db.prepare("INSERT OR IGNORE INTO options (key, value) VALUES ('auto_delete_normal_sessions', 'false')").run()
+    }
+
+    const hasAutoDeleteReviewSessionsKey = this.db.prepare("SELECT COUNT(*) as cnt FROM options WHERE key = 'auto_delete_review_sessions'").get() as any
+    if (hasAutoDeleteReviewSessionsKey.cnt === 0) {
+      this.db.prepare("INSERT OR IGNORE INTO options (key, value) VALUES ('auto_delete_review_sessions', 'false')").run()
     }
   }
 
@@ -534,6 +559,8 @@ export class KanbanDB {
       reviewModel: opts.review_model ?? DEFAULT_OPTIONS.reviewModel,
       command: opts.command ?? DEFAULT_OPTIONS.command,
       parallelTasks: parseInt(opts.parallel_tasks ?? "1", 10) || 1,
+      autoDeleteNormalSessions: normalizeOptionBoolean(opts.auto_delete_normal_sessions, DEFAULT_OPTIONS.autoDeleteNormalSessions),
+      autoDeleteReviewSessions: normalizeOptionBoolean(opts.auto_delete_review_sessions, DEFAULT_OPTIONS.autoDeleteReviewSessions),
       port: parseInt(opts.port ?? "3789", 10) || 3789,
       thinkingLevel: normalizeThinkingLevel(opts.thinking_level) ?? DEFAULT_OPTIONS.thinkingLevel,
     }
@@ -551,6 +578,8 @@ export class KanbanDB {
     if (partial.reviewModel !== undefined) upsert.run("review_model", partial.reviewModel)
     if (partial.command !== undefined) upsert.run("command", partial.command)
     if (partial.parallelTasks !== undefined) upsert.run("parallel_tasks", String(partial.parallelTasks))
+    if (partial.autoDeleteNormalSessions !== undefined) upsert.run("auto_delete_normal_sessions", String(partial.autoDeleteNormalSessions))
+    if (partial.autoDeleteReviewSessions !== undefined) upsert.run("auto_delete_review_sessions", String(partial.autoDeleteReviewSessions))
     if (partial.port !== undefined) upsert.run("port", String(partial.port))
     if (partial.thinkingLevel !== undefined) upsert.run("thinking_level", partial.thinkingLevel)
 

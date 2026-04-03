@@ -17,6 +17,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 /* Top bar */
 .topbar { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 12px 24px; background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 100; }
 .topbar h1 { font-size: 18px; font-weight: 600; order: 2; }
+.topbar-title { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 240px; }
+.topbar-title h1 { order: 0; }
+.shortcut-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; color: var(--text-dim); font-size: 11px; }
+.shortcut-item { display: inline-flex; align-items: center; gap: 4px; }
+.shortcut-key { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace; color: var(--text); font-weight: 700; border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; background: var(--surface2); }
 .btn { padding: 6px 16px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface2); color: var(--text); cursor: pointer; font-size: 13px; font-weight: 500; transition: all .15s; }
 .btn:hover { border-color: var(--text-dim); }
 .btn-primary { background: var(--green); border-color: var(--green); color: #fff; }
@@ -206,6 +211,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 .model-search { margin-bottom: 6px; }
 
 @media (max-width: 980px) {
+  .topbar { flex-wrap: wrap; gap: 10px; padding: 10px 12px; }
+  .topbar-title { order: 3; width: 100%; }
   .board { grid-template-columns: 1fr; overflow-y: auto; }
   .log-panel { height: 160px; }
 }
@@ -215,14 +222,22 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 
 <div class="topbar">
   <button class="btn btn-primary" id="startBtn" onclick="toggleExecution()">Start</button>
-  <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-dim);cursor:pointer;">
-    <input type="checkbox" id="showGraphChk" style="accent-color:var(--accent);width:15px;height:15px;">
-    Show execution graph
-  </label>
-  <h1>Easy Workflow Kanban</h1>
+  <div class="topbar-title">
+    <h1>Easy Workflow Kanban</h1>
+    <div class="shortcut-list" aria-label="Keyboard shortcuts">
+      <span class="shortcut-item"><span class="shortcut-key">T</span> Create a new template</span>
+      <span class="shortcut-item"><span class="shortcut-key">B</span> Create a new backlog task</span>
+      <span class="shortcut-item"><span class="shortcut-key">S</span> Start all tasks (when idle)</span>
+      <span class="shortcut-item"><span class="shortcut-key">D</span> Delete all done tasks</span>
+    </div>
+  </div>
   <div style="display:flex;align-items:center;gap:8px;">
     <div class="conn-status disconnected" id="connStatus"></div>
     <button class="btn" onclick="openOptionsModal()">Options</button>
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-dim);cursor:pointer;">
+      <input type="checkbox" id="showGraphChk" style="accent-color:var(--accent);width:15px;height:15px;">
+      Show execution graph
+    </label>
   </div>
 </div>
 
@@ -503,6 +518,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
           <button class="help-btn" type="button" title="Maximum number of tasks the workflow should execute at the same time." aria-label="Parallel tasks help">?</button>
         </div>
         <input type="number" id="optParallel" min="1" max="10" value="1">
+      </div>
+      <div class="form-group">
+        <div class="label-row">
+          <label>Session Cleanup (global)</label>
+          <button class="help-btn" type="button" title="Automatically delete OpenCode sessions after task/review runs finish. Enable only if you do not need session history for debugging." aria-label="Session cleanup help">?</button>
+        </div>
+        <div class="checkbox-group">
+          <label title="Delete normal execution sessions for tasks, worker runs, and final applier runs after they finish."><input type="checkbox" id="optAutoDeleteNormalSessions"> Auto-delete normal sessions</label>
+          <label title="Delete review sessions after each review pass (review loop + best-of-n reviewers)."><input type="checkbox" id="optAutoDeleteReviewSessions"> Auto-delete review sessions</label>
+        </div>
       </div>
       <div class="form-group">
         <div class="label-row">
@@ -1931,6 +1956,8 @@ function openOptionsModal() {
   resetModelSelectWithSearch('optReviewModel', 'optReviewModelSearch', allOptions.reviewModel || 'default')
   document.getElementById('optCommand').value = allOptions.command || ''
   document.getElementById('optParallel').value = allOptions.parallelTasks || 1
+  document.getElementById('optAutoDeleteNormalSessions').checked = !!allOptions.autoDeleteNormalSessions
+  document.getElementById('optAutoDeleteReviewSessions').checked = !!allOptions.autoDeleteReviewSessions
   document.getElementById('optThinkingLevel').value = allOptions.thinkingLevel || 'default'
   document.getElementById('optionsModal').classList.remove('hidden')
 }
@@ -1955,6 +1982,8 @@ async function saveOptions() {
       reviewModel: document.getElementById('optReviewModel').value,
       command: document.getElementById('optCommand').value,
       parallelTasks: parseInt(document.getElementById('optParallel').value, 10) || 1,
+      autoDeleteNormalSessions: document.getElementById('optAutoDeleteNormalSessions').checked,
+      autoDeleteReviewSessions: document.getElementById('optAutoDeleteReviewSessions').checked,
       thinkingLevel: document.getElementById('optThinkingLevel').value || 'default',
     })
     closeOptionsModal()

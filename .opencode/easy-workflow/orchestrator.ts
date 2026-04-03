@@ -227,6 +227,28 @@ export class Orchestrator {
     return createV2Client(serverUrl || this.resolveServerUrl(), directory || this.worktreeDir)
   }
 
+  private async tryDeleteSession(
+    client: any,
+    sessionId: string | null,
+    context: "normal" | "review",
+    metadata: Record<string, unknown>,
+  ): Promise<boolean> {
+    if (!sessionId) return false
+    try {
+      await client.session.delete({ path: { id: sessionId } })
+      appendDebugLog("info", "session auto-deleted", { context, sessionId, ...metadata })
+      return true
+    } catch (err) {
+      appendDebugLog("warn", "session auto-delete failed", {
+        context,
+        sessionId,
+        error: err instanceof Error ? err.message : String(err),
+        ...metadata,
+      })
+      return false
+    }
+  }
+
   preflightStartError(taskId?: string): string | null {
     if (this.running) {
       return "Already executing"
@@ -855,7 +877,7 @@ export class Orchestrator {
       // 6. Review loop
       if (currentTask.review) {
         const reviewConfig = loadReviewConfig()
-        await this.runReviewLoop(currentTask, sessionId, reviewConfig)
+        await this.runReviewLoop(currentTask, sessionId, reviewConfig, options)
         currentTask = this.getTaskOrThrow(task.id, "refreshing task state after review", task.name)
         lastKnownTask = currentTask
         if (currentTask.status === "stuck") {
@@ -1056,6 +1078,16 @@ export class Orchestrator {
       }
 
       throw err
+    } finally {
+      if (options.autoDeleteNormalSessions && sessionId) {
+        const deleted = await this.tryDeleteSession(client, sessionId, "normal", { taskId: task.id, taskName: task.name })
+        if (deleted) {
+          const clearedTask = this.db.updateTask(task.id, { sessionId: null, sessionUrl: null })
+          if (clearedTask) {
+            this.server.broadcast({ type: "task_updated", payload: clearedTask })
+          }
+        }
+      }
     }
   }
 
@@ -1266,6 +1298,7 @@ export class Orchestrator {
     const pendingWorkers = workers.filter(w => w.status === "pending")
     await Promise.all(pendingWorkers.map(async (workerRun) => {
       if (this.shouldStop) return
+      let sessionId: string | null = null
       try {
         this.db.updateTaskRun(workerRun.id, { status: "running" })
         this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(workerRun.id) })
@@ -1280,7 +1313,7 @@ export class Orchestrator {
 
         const sessionResponse = await client.session.create({ title: `Worker: ${task.name} (slot ${workerRun.slotIndex})` })
         const session = unwrapResponseDataOrThrow<any>(sessionResponse, "Worker session creation")
-        const sessionId = session?.id
+        sessionId = session?.id
         if (!sessionId) throw new Error("Failed to create worker session")
 
         const sessionUrl = buildSessionUrl(serverUrl, this.worktreeDir, sessionId)
@@ -1383,6 +1416,14 @@ export class Orchestrator {
         this.db.updateTaskRun(workerRun.id, { status: "failed", errorMessage: msg, completedAt: now })
         this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(workerRun.id) })
         this.emitError(`Worker run failed for task "${task.name}" (run ${workerRun.id}): ${msg}`)
+      } finally {
+        if (options.autoDeleteNormalSessions && sessionId) {
+          const deleted = await this.tryDeleteSession(client, sessionId, "normal", { taskId: task.id, taskRunId: workerRun.id, phase: "worker" })
+          if (deleted) {
+            this.db.updateTaskRun(workerRun.id, { sessionId: null, sessionUrl: null })
+            this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(workerRun.id) })
+          }
+        }
       }
     }))
 
@@ -1582,13 +1623,14 @@ ${taskSuffix}`
     const pendingReviewers = reviewers.filter(r => r.status === "pending")
     await Promise.all(pendingReviewers.map(async (reviewerRun) => {
       if (this.shouldStop) return
+      let sessionId: string | null = null
       try {
         this.db.updateTaskRun(reviewerRun.id, { status: "running" })
         this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(reviewerRun.id) })
 
         const sessionResponse = await client.session.create({ title: `Reviewer: ${task.name} (slot ${reviewerRun.slotIndex})` })
         const session = unwrapResponseDataOrThrow<any>(sessionResponse, "Reviewer session creation")
-        const sessionId = session?.id
+        sessionId = session?.id
         if (!sessionId) throw new Error("Failed to create reviewer session")
 
         const sessionUrl = buildSessionUrl(serverUrl, this.worktreeDir, sessionId)
@@ -1627,6 +1669,14 @@ ${taskSuffix}`
         this.db.updateTaskRun(reviewerRun.id, { status: "failed", errorMessage: msg, completedAt: now })
         this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(reviewerRun.id) })
         this.emitError(`Reviewer run failed for task "${task.name}" (run ${reviewerRun.id}): ${msg}`)
+      } finally {
+        if (options.autoDeleteReviewSessions && sessionId) {
+          const deleted = await this.tryDeleteSession(client, sessionId, "review", { taskId: task.id, taskRunId: reviewerRun.id, phase: "reviewer" })
+          if (deleted) {
+            this.db.updateTaskRun(reviewerRun.id, { sessionId: null, sessionUrl: null })
+            this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(reviewerRun.id) })
+          }
+        }
       }
     }))
 
@@ -1797,6 +1847,7 @@ RECOMMENDED_PROMPT:
     }
 
     const client = this.getClient(undefined, serverUrl)
+    let sessionId: string | null = null
 
     try {
       this.db.updateTaskRun(finalApplierRun.id, { status: "running" })
@@ -1812,7 +1863,7 @@ RECOMMENDED_PROMPT:
 
       const sessionResponse = await client.session.create({ title: `Final Applier: ${task.name}` })
       const session = unwrapResponseDataOrThrow<any>(sessionResponse, "Final applier session creation")
-      const sessionId = session?.id
+      sessionId = session?.id
       if (!sessionId) throw new Error("Failed to create final applier session")
 
       const sessionUrl = buildSessionUrl(serverUrl, this.worktreeDir, sessionId)
@@ -1960,6 +2011,14 @@ RECOMMENDED_PROMPT:
         return { failed: true, routeToReview: true, error: msg }
       }
       return { failed: true, routeToReview: false, error: msg }
+    } finally {
+      if (options.autoDeleteNormalSessions && sessionId) {
+        const deleted = await this.tryDeleteSession(client, sessionId, "normal", { taskId: task.id, taskRunId: finalApplierRun.id, phase: "final_applier" })
+        if (deleted) {
+          this.db.updateTaskRun(finalApplierRun.id, { sessionId: null, sessionUrl: null })
+          this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(finalApplierRun.id) })
+        }
+      }
     }
   }
 
@@ -2018,7 +2077,7 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
     return prompt
   }
 
-  private async runReviewLoop(task: Task, sessionId: string, config: ReviewConfig) {
+  private async runReviewLoop(task: Task, sessionId: string, config: ReviewConfig, options: Options) {
     if (!config.reviewAgent) {
       appendDebugLog("warn", "no review agent configured, skipping review", { taskId: task.id })
       return
@@ -2045,94 +2104,101 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
 
         appendDebugLog("info", "running review", { taskId: task.id, reviewCount, maxRuns })
 
-        // Run review in a scratch session
-        const reviewSessionResponse = await client.session.create({
-          title: `Review: ${task.name}`,
-        })
-        const reviewSession = unwrapResponseDataOrThrow<any>(reviewSessionResponse, "Review session creation")
-        const reviewSessionId = reviewSession?.id
-
-        const promptText = [
-          `@${config.reviewAgent}`,
-          "",
-          "Review the current repository state against the task below.",
-          "Use the task goals as the only source of truth.",
-          "Do not rely on prior session history.",
-          "Inspect the current codebase and branch state.",
-          "",
-          `Task: ${task.name}`,
-          `Goals: ${task.prompt}`,
-        ].join("\n")
-
-        const response = await client.session.prompt({
-          sessionID: reviewSessionId,
-          agent: config.reviewAgent,
-          parts: [{ type: "text", text: promptText }],
-        })
-
-        const result = unwrapResponseDataOrThrow<any>(response, "Review prompt")
-        const reviewFailure = this.extractExecutionFailure(result)
-        if (reviewFailure) throw new Error(`Review prompt failed: ${reviewFailure}`)
-        const reviewResult = this.parseReviewResponse(result)
-
-        appendDebugLog("info", "review result", {
-          taskId: task.id,
-          status: reviewResult.status,
-          gaps: reviewResult.gaps,
-        })
-
-        if (reviewResult.status === "pass") {
-          // Review passed
-          this.db.updateTask(task.id, { status: "executing", reviewCount })
-          const updated = this.db.getTask(task.id)!
-          this.server.broadcast({ type: "task_updated", payload: updated })
-          return
-        }
-
-        if (reviewResult.status === "blocked") {
-          // Review blocked
-          this.db.updateTask(task.id, {
-            status: "stuck",
-            reviewCount,
-            errorMessage: `Review blocked: ${reviewResult.summary}`,
+        let reviewSessionId: string | null = null
+        try {
+          // Run review in a scratch session
+          const reviewSessionResponse = await client.session.create({
+            title: `Review: ${task.name}`,
           })
-          const updated = this.db.getTask(task.id)!
-          this.server.broadcast({ type: "task_updated", payload: updated })
-          return
-        }
+          const reviewSession = unwrapResponseDataOrThrow<any>(reviewSessionResponse, "Review session creation")
+          reviewSessionId = reviewSession?.id
 
-        // gaps_found - try to fix
-        reviewCount++
-        this.db.updateTask(task.id, { reviewCount })
+          const promptText = [
+            `@${config.reviewAgent}`,
+            "",
+            "Review the current repository state against the task below.",
+            "Use the task goals as the only source of truth.",
+            "Do not rely on prior session history.",
+            "Inspect the current codebase and branch state.",
+            "",
+            `Task: ${task.name}`,
+            `Goals: ${task.prompt}`,
+          ].join("\n")
 
-        if (reviewCount >= maxRuns) {
-          // Max reviews reached - stuck
-          this.db.updateTask(task.id, {
-            status: "stuck",
-            reviewCount,
-            errorMessage: `Max reviews (${maxRuns}) reached. Gaps: ${reviewResult.gaps.join("; ")}`,
+          const response = await client.session.prompt({
+            sessionID: reviewSessionId,
+            agent: config.reviewAgent,
+            parts: [{ type: "text", text: promptText }],
           })
-          const updated = this.db.getTask(task.id)!
-          this.server.broadcast({ type: "task_updated", payload: updated })
-          return
-        }
 
-        // Send fix prompt to the task session
-        const fixPrompt = reviewResult.recommendedPrompt
-          || `Fix the following issues found during review:\n${reviewResult.gaps.map(g => `- ${g}`).join("\n")}`
+          const result = unwrapResponseDataOrThrow<any>(response, "Review prompt")
+          const reviewFailure = this.extractExecutionFailure(result)
+          if (reviewFailure) throw new Error(`Review prompt failed: ${reviewFailure}`)
+          const reviewResult = this.parseReviewResponse(result)
 
-        appendDebugLog("info", "sending fix prompt after review", { taskId: task.id, reviewCount })
-        const fixResponse = await client.session.prompt({
-          sessionID: sessionId,
-          parts: [{ type: "text", text: fixPrompt }],
-        })
-        const fixResult = unwrapResponseDataOrThrow<any>(fixResponse, "Review fix prompt")
-        const fixFailure = this.extractExecutionFailure(fixResult)
-        if (fixFailure) throw new Error(`Review fix prompt failed: ${fixFailure}`)
-        const fixOutput = this.extractTextOutput(fixResult)
-        if (fixOutput) {
-          this.db.appendAgentOutput(task.id, `\n[review-fix-${reviewCount}] ${fixOutput}\n`)
-          this.server.broadcast({ type: "agent_output", payload: { taskId: task.id, output: `\n[review-fix-${reviewCount}] ${fixOutput}\n` } })
+          appendDebugLog("info", "review result", {
+            taskId: task.id,
+            status: reviewResult.status,
+            gaps: reviewResult.gaps,
+          })
+
+          if (reviewResult.status === "pass") {
+            // Review passed
+            this.db.updateTask(task.id, { status: "executing", reviewCount })
+            const updated = this.db.getTask(task.id)!
+            this.server.broadcast({ type: "task_updated", payload: updated })
+            return
+          }
+
+          if (reviewResult.status === "blocked") {
+            // Review blocked
+            this.db.updateTask(task.id, {
+              status: "stuck",
+              reviewCount,
+              errorMessage: `Review blocked: ${reviewResult.summary}`,
+            })
+            const updated = this.db.getTask(task.id)!
+            this.server.broadcast({ type: "task_updated", payload: updated })
+            return
+          }
+
+          // gaps_found - try to fix
+          reviewCount++
+          this.db.updateTask(task.id, { reviewCount })
+
+          if (reviewCount >= maxRuns) {
+            // Max reviews reached - stuck
+            this.db.updateTask(task.id, {
+              status: "stuck",
+              reviewCount,
+              errorMessage: `Max reviews (${maxRuns}) reached. Gaps: ${reviewResult.gaps.join("; ")}`,
+            })
+            const updated = this.db.getTask(task.id)!
+            this.server.broadcast({ type: "task_updated", payload: updated })
+            return
+          }
+
+          // Send fix prompt to the task session
+          const fixPrompt = reviewResult.recommendedPrompt
+            || `Fix the following issues found during review:\n${reviewResult.gaps.map(g => `- ${g}`).join("\n")}`
+
+          appendDebugLog("info", "sending fix prompt after review", { taskId: task.id, reviewCount })
+          const fixResponse = await client.session.prompt({
+            sessionID: sessionId,
+            parts: [{ type: "text", text: fixPrompt }],
+          })
+          const fixResult = unwrapResponseDataOrThrow<any>(fixResponse, "Review fix prompt")
+          const fixFailure = this.extractExecutionFailure(fixResult)
+          if (fixFailure) throw new Error(`Review fix prompt failed: ${fixFailure}`)
+          const fixOutput = this.extractTextOutput(fixResult)
+          if (fixOutput) {
+            this.db.appendAgentOutput(task.id, `\n[review-fix-${reviewCount}] ${fixOutput}\n`)
+            this.server.broadcast({ type: "agent_output", payload: { taskId: task.id, output: `\n[review-fix-${reviewCount}] ${fixOutput}\n` } })
+          }
+        } finally {
+          if (options.autoDeleteReviewSessions && reviewSessionId) {
+            await this.tryDeleteSession(client, reviewSessionId, "review", { taskId: task.id, taskName: task.name, phase: "review_loop" })
+          }
         }
       }
     } finally {

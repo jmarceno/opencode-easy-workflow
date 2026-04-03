@@ -45,6 +45,10 @@ function isSelectionMode(value: unknown): value is SelectionMode {
   return value === "pick_best" || value === "synthesize" || value === "pick_or_synthesize"
 }
 
+function isBoolean(value: unknown): value is boolean {
+  return typeof value === "boolean"
+}
+
 function validateBestOfNConfig(config: unknown): { valid: boolean; error?: string } {
   if (!config || typeof config !== "object") {
     return { valid: false, error: "bestOfNConfig must be an object" }
@@ -481,6 +485,12 @@ export class KanbanServer {
         const body = await req.json()
         if (body?.thinkingLevel !== undefined && !isThinkingLevel(body.thinkingLevel)) {
           return this.json({ error: "Invalid thinkingLevel. Allowed values: default, low, medium, high" }, 400)
+        }
+        if (body?.autoDeleteNormalSessions !== undefined && !isBoolean(body.autoDeleteNormalSessions)) {
+          return this.json({ error: "Invalid autoDeleteNormalSessions. Expected boolean." }, 400)
+        }
+        if (body?.autoDeleteReviewSessions !== undefined && !isBoolean(body.autoDeleteReviewSessions)) {
+          return this.json({ error: "Invalid autoDeleteReviewSessions. Expected boolean." }, 400)
         }
         if (body?.reviewModel !== undefined) {
           if (typeof body.reviewModel !== "string" || !body.reviewModel.trim() || body.reviewModel === "default") {
