@@ -12,7 +12,7 @@
   --green: #238636; --green-hover: #2ea043; --yellow: #d29922; --red: #da3633;
   --orange: #db6d28; --radius: 8px; --shadow: 0 2px 8px rgba(0,0,0,.3); --log-panel-height: 180px;
 }
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 
 /* Top bar */
 .topbar { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 12px 24px; background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 100; }
@@ -28,8 +28,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 .btn-sm { padding: 3px 10px; font-size: 12px; }
 
 /* Board */
-.board { display: grid; grid-template-columns: repeat(5, minmax(200px, 1fr)); gap: 12px; padding: 16px; flex: 1; min-height: 0; overflow-x: auto; }
-.column { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); display: flex; flex-direction: column; min-height: 200px; }
+.board { display: grid; grid-template-columns: repeat(5, minmax(200px, 1fr)); grid-template-rows: minmax(0, 1fr); gap: 12px; padding: 16px; flex: 1; min-height: 0; min-width: 0; max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+.column { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .column-header { padding: 12px 16px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--text-dim); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .column-header .count { background: var(--surface2); border-radius: 12px; padding: 2px 8px; font-size: 11px; }
 .column-header-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -38,7 +38,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 .column[data-status="executing"] .column-header { background: rgba(35,134,54,.14); color: #7ee787; }
 .column[data-status="review"] .column-header { background: rgba(139,92,246,.14); color: #c4b5fd; }
 .column[data-status="done"] .column-header { background: rgba(56,189,248,.14); color: #7dd3fc; }
-.column-body { flex: 1; padding: 8px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
+.column-body { flex: 1; min-height: 0; padding: 8px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
 .column-body.drag-over { background: rgba(47,125,247,.08); }
 
 /* Cards */
