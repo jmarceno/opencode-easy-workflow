@@ -560,6 +560,23 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
   </div>
 </div>
 
+<div class="modal-overlay hidden" id="startSingleModal">
+  <div class="modal" style="width:440px;">
+    <div class="modal-header">
+      <h2>Start Single Task</h2>
+      <button class="modal-close" onclick="closeStartSingleModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div id="startSingleTaskName" style="margin-bottom:12px;font-size:14px;color:var(--text);"></div>
+      <div id="startSingleDeps" style="font-size:13px;color:var(--text-dim);"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeStartSingleModal()">Cancel</button>
+      <button class="btn btn-primary" id="startSingleConfirmBtn" onclick="confirmStartSingle()">Start Task</button>
+    </div>
+  </div>
+</div>
+
 <div class="log-panel">
   <div class="log-header">
     <span>Event Log</span>
@@ -1173,6 +1190,17 @@ function renderCard(task, colStatus) {
     revisionBtn.onclick = () => openRevisionModal(task.id)
     actions.appendChild(revisionBtn)
   }
+
+  // Start single task button for backlog tasks
+  if (task.status === 'backlog' && !isExecuting) {
+    const startBtn = document.createElement('button')
+    startBtn.textContent = '\u25B6'
+    startBtn.title = 'Start this task and its dependencies'
+    startBtn.style.color = 'var(--green)'
+    startBtn.onclick = () => openStartSingleModal(task.id, task.name)
+    actions.appendChild(startBtn)
+  }
+
   header.appendChild(actions)
   card.appendChild(header)
 
@@ -1776,6 +1804,46 @@ async function confirmRequestRevision() {
     await loadTasks()
     showToast('Revision requested', 'success')
   } catch (e) { showToast('Request revision failed: ' + e.message, 'error') }
+}
+
+// ---- Start Single Task ----
+let startSingleModalTaskId = null
+
+function openStartSingleModal(taskId, taskName) {
+  startSingleModalTaskId = taskId
+  const task = allTasks.find(t => t.id === taskId)
+  if (!task) return
+  document.getElementById('startSingleTaskName').textContent = `Start "${taskName}" and its dependency chain?`
+
+  const depIds = task.requirements.filter(depId => allTasks.some(t => t.id === depId && (t.status === 'backlog' || t.executionPhase === 'implementation_pending' || t.executionPhase === 'plan_revision_pending')))
+  const depNames = depIds.map(depId => allTasks.find(t => t.id === depId)?.name).filter(Boolean)
+
+  const depsEl = document.getElementById('startSingleDeps')
+  if (depNames.length > 0) {
+    depsEl.textContent = `Dependencies to run: ${depNames.join(', ')}`
+  } else {
+    depsEl.textContent = 'No dependencies to run.'
+  }
+
+  document.getElementById('startSingleConfirmBtn').textContent = `Start Task`
+  document.getElementById('startSingleModal').classList.remove('hidden')
+}
+
+function closeStartSingleModal() {
+  document.getElementById('startSingleModal').classList.add('hidden')
+  startSingleModalTaskId = null
+}
+
+async function confirmStartSingle() {
+  if (!startSingleModalTaskId) return
+  const taskId = startSingleModalTaskId
+  closeStartSingleModal()
+  try {
+    await api(`/api/tasks/${taskId}/start`, 'POST')
+    addLogEntry(`Started single task: ${allTasks.find(t => t.id === taskId)?.name || taskId}`)
+    await loadTasks()
+    showToast('Task started', 'success')
+  } catch (e) { showToast('Start task failed: ' + e.message, 'error') }
 }
 
 // ---- Options ----

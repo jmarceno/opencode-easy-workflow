@@ -5,16 +5,95 @@ export function getExecutableTasks(tasks: Task[]): Task[] {
   const executable: Task[] = []
 
   for (const task of tasks) {
-    const isBacklogTask = task.status === "backlog" && task.executionPhase !== "plan_complete_waiting_approval"
-    const isApprovedPlanTask = task.executionPhase === "implementation_pending"
-    const isRevisionPendingTask = task.executionPhase === "plan_revision_pending"
-    if (!isBacklogTask && !isApprovedPlanTask && !isRevisionPendingTask) continue
+    if (!isTaskExecutable(task)) continue
     if (seen.has(task.id)) continue
     seen.add(task.id)
     executable.push(task)
   }
 
   return executable
+}
+
+export function isTaskExecutable(task: Task): boolean {
+  const isBacklogTask = task.status === "backlog" && task.executionPhase !== "plan_complete_waiting_approval"
+  const isApprovedPlanTask = task.executionPhase === "implementation_pending"
+  const isRevisionPendingTask = task.executionPhase === "plan_revision_pending"
+  return isBacklogTask || isApprovedPlanTask || isRevisionPendingTask
+}
+
+function collectTaskAndDependencyIds(taskId: string, taskMap: Map<string, Task>): string[] {
+  const visited = new Set<string>()
+  const visiting = new Set<string>()
+  const ordered: string[] = []
+
+  const visit = (id: string, chain: string[]) => {
+    if (visiting.has(id)) {
+      const cycleStart = chain.indexOf(id)
+      const cycleIds = cycleStart >= 0 ? [...chain.slice(cycleStart), id] : [...chain, id]
+      const cycleNames = cycleIds.map((cycleId) => taskMap.get(cycleId)?.name ?? cycleId)
+      throw new Error(`Circular dependency detected: ${cycleNames.join(" -> ")}`)
+    }
+
+    if (visited.has(id)) return
+
+    const task = taskMap.get(id)
+    if (!task) {
+      throw new Error(`Task not found: ${id}`)
+    }
+
+    visiting.add(id)
+    for (const depId of task.requirements) {
+      if (!taskMap.has(depId)) {
+        throw new Error(`Task \"${task.name}\" depends on missing task \"${depId}\"`)
+      }
+      visit(depId, [...chain, id])
+    }
+    visiting.delete(id)
+    visited.add(id)
+    ordered.push(id)
+  }
+
+  visit(taskId, [])
+  return ordered
+}
+
+export function resolveExecutionTasks(tasks: Task[], taskId?: string): Task[] {
+  if (!taskId) return getExecutableTasks(tasks)
+
+  const taskMap = new Map<string, Task>()
+  for (const task of tasks) taskMap.set(task.id, task)
+
+  const targetTask = taskMap.get(taskId)
+  if (!targetTask) {
+    throw new Error(`Task not found: ${taskId}`)
+  }
+
+  const candidateIds = collectTaskAndDependencyIds(taskId, taskMap)
+  const executionTasks: Task[] = []
+
+  for (const candidateId of candidateIds) {
+    const candidate = taskMap.get(candidateId)!
+    if (candidate.status === "done") continue
+
+    if (!isTaskExecutable(candidate)) {
+      if (candidate.id === taskId) {
+        throw new Error(
+          `Task \"${candidate.name}\" is not runnable from status \"${candidate.status}\" (phase: ${candidate.executionPhase})`,
+        )
+      }
+      throw new Error(
+        `Dependency \"${candidate.name}\" is not done and cannot run from status \"${candidate.status}\" (phase: ${candidate.executionPhase})`,
+      )
+    }
+
+    executionTasks.push(candidate)
+  }
+
+  if (executionTasks.length === 0) {
+    throw new Error(`Task \"${targetTask.name}\" and its dependencies are already done`)
+  }
+
+  return executionTasks
 }
 
 export function resolveBatches(tasks: Task[], parallelLimit: number): Task[][] {
@@ -98,6 +177,10 @@ export interface ExecutionGraph {
     awaitingPlanApproval: boolean
     planRevisionCount?: number
   }[]
+}
+
+export function resolveDependencyChain(targetTaskId: string, allTasks: Task[]): Task[] {
+  return resolveExecutionTasks(allTasks, targetTaskId)
 }
 
 export function buildExecutionGraph(tasks: Task[], parallelLimit: number): ExecutionGraph {

@@ -16,8 +16,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const KANBAN_HTML = readFileSync(join(__dirname, "kanban", "index.html"), "utf-8")
 
 type StartFn = () => Promise<void>
+type StartSingleFn = (taskId: string) => Promise<void>
 type StopFn = () => void
-type StartPreflightFn = () => string | null
+type StartPreflightFn = (taskId?: string) => string | null
 type ServerUrlFn = () => string | null
 
 function createV2Client(baseUrl: string, directory?: string) {
@@ -167,6 +168,7 @@ export class KanbanServer {
   private clients: Set<any> = new Set()
   private server: ReturnType<typeof Bun.serve> | null = null
   private onStart: StartFn
+  private onStartSingle: StartSingleFn
   private onStop: StopFn
   private getExecuting: () => boolean
   private getStartError: StartPreflightFn
@@ -174,10 +176,11 @@ export class KanbanServer {
 
   constructor(
     db: KanbanDB,
-    opts: { onStart: StartFn; onStop: StopFn; getExecuting: () => boolean; getStartError?: StartPreflightFn; getServerUrl?: ServerUrlFn }
+    opts: { onStart: StartFn; onStartSingle: StartSingleFn; onStop: StopFn; getExecuting: () => boolean; getStartError?: StartPreflightFn; getServerUrl?: ServerUrlFn }
   ) {
     this.db = db
     this.onStart = opts.onStart
+    this.onStartSingle = opts.onStartSingle
     this.onStop = opts.onStop
     this.getExecuting = opts.getExecuting
     this.getStartError = opts.getStartError || (() => null)
@@ -200,6 +203,17 @@ export class KanbanServer {
     const msg = err instanceof Error ? err.message : String(err)
     this.broadcast({ type: "error", payload: { message: `Execution failed: ${msg}` } })
     this.broadcast({ type: "execution_stopped", payload: {} })
+  }
+
+  private classifyStartError(message: string): number {
+    const normalized = message.toLowerCase()
+    if (normalized.includes("task not found") || normalized.includes("missing task")) {
+      return 404
+    }
+    if (normalized.includes("opencode server url")) {
+      return 500
+    }
+    return 400
   }
 
   start(): number {
@@ -440,12 +454,9 @@ export class KanbanServer {
         if (this.getExecuting()) {
           return this.json({ error: "Already executing" }, 409)
         }
-        if (!hasExecutableTasks(this.db)) {
-          return this.json({ error: "No tasks in backlog" }, 400)
-        }
         const preflightError = this.getStartError()
         if (preflightError) {
-          return this.json({ error: preflightError }, 500)
+          return this.json({ error: preflightError }, this.classifyStartError(preflightError))
         }
         this.onStart().catch((err) => this.reportExecutionStartFailure(err))
         return this.json({ ok: true })
@@ -495,6 +506,32 @@ export class KanbanServer {
 
       if (method === "POST" && url.pathname === "/api/stop") {
         this.onStop()
+        return this.json({ ok: true })
+      }
+
+      const startSingleMatch = method === "POST"
+        ? url.pathname.match(/^\/api\/tasks\/([a-z0-9]+)\/start$/)
+        : null
+      if (startSingleMatch) {
+        if (this.getExecuting()) {
+          return this.json({ error: "Already executing" }, 409)
+        }
+        const taskId = startSingleMatch[1]
+        const task = this.db.getTask(taskId)
+        if (!task) {
+          return this.json({ error: "Task not found" }, 404)
+        }
+        const isBacklogTask = task.status === "backlog" && task.executionPhase !== "plan_complete_waiting_approval"
+        const isApprovedPlanTask = task.executionPhase === "implementation_pending"
+        const isRevisionPendingTask = task.executionPhase === "plan_revision_pending"
+        if (!isBacklogTask && !isApprovedPlanTask && !isRevisionPendingTask) {
+          return this.json({ error: "Task is not executable" }, 400)
+        }
+        const preflightError = this.getStartError(taskId)
+        if (preflightError) {
+          return this.json({ error: preflightError }, this.classifyStartError(preflightError))
+        }
+        this.onStartSingle(taskId).catch((err) => this.reportExecutionStartFailure(err))
         return this.json({ ok: true })
       }
 

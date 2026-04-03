@@ -6,7 +6,7 @@ import type { Task, Options, ReviewResult, ThinkingLevel, BestOfNConfig, BestOfN
 import { KanbanDB } from "./db"
 import { KanbanServer } from "./server"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
-import { getExecutableTasks, resolveBatches } from "./execution-plan"
+import { resolveExecutionTasks, resolveBatches } from "./execution-plan"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const WORKFLOW_ROOT = join(__dirname, "..")
@@ -227,12 +227,19 @@ export class Orchestrator {
     return createV2Client(serverUrl || this.resolveServerUrl(), directory || this.worktreeDir)
   }
 
-  preflightStartError(): string | null {
+  preflightStartError(taskId?: string): string | null {
     if (this.running) {
       return "Already executing"
     }
 
-    if (getExecutableTasks(this.db.getTasks()).length === 0) {
+    let executionTasks: Task[] = []
+    try {
+      executionTasks = resolveExecutionTasks(this.db.getTasks(), taskId)
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err)
+    }
+
+    if (executionTasks.length === 0) {
       return "No tasks in backlog"
     }
 
@@ -422,7 +429,7 @@ export class Orchestrator {
       throw new Error(preflightError)
     }
 
-    const allTasks = getExecutableTasks(this.db.getTasks())
+    const allTasks = resolveExecutionTasks(this.db.getTasks())
 
     if (allTasks.length === 0) {
       throw new Error("No tasks in backlog")
@@ -478,6 +485,70 @@ export class Orchestrator {
 
   stop() {
     this.shouldStop = true
+  }
+
+  async startSingle(taskId: string) {
+    if (this.running) return
+
+    const preflightError = this.preflightStartError(taskId)
+    if (preflightError) {
+      throw new Error(preflightError)
+    }
+
+    const dependencyTasks = resolveExecutionTasks(this.db.getTasks(), taskId)
+    const targetTask = this.db.getTask(taskId)
+    if (!targetTask) {
+      throw new Error(`Task "${taskId}" not found`)
+    }
+
+    this.running = true
+    this.shouldStop = false
+    this.providerCatalog = null
+    let resolvedServerUrl = "unresolved"
+    try {
+      resolvedServerUrl = this.resolveServerUrl()
+    } catch (resolveErr) {
+      appendDebugLog("warn", "unable to resolve server URL during orchestrator start", {
+        error: resolveErr instanceof Error ? resolveErr.message : String(resolveErr),
+      })
+    }
+    appendDebugLog("info", "orchestrator starting single task", {
+      targetTaskId: taskId,
+      targetTaskName: targetTask.name,
+      dependencyCount: dependencyTasks.length,
+      serverUrl: resolvedServerUrl,
+    })
+    this.server.broadcast({ type: "execution_started", payload: {} })
+
+    try {
+      const options = this.db.getOptions()
+      const batches = resolveBatches(dependencyTasks, options.parallelTasks)
+
+      for (const batch of batches) {
+        if (this.shouldStop) break
+
+        await Promise.all(batch.map(t => this.executeTask(t, options)))
+
+        if (this.shouldStop) break
+      }
+
+      this.server.broadcast({ type: "execution_complete", payload: {} })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      let resolvedServerUrl = "unresolved"
+      try {
+        resolvedServerUrl = this.resolveServerUrl()
+      } catch (resolveErr) {
+        appendDebugLog("warn", "unable to resolve server URL while handling execution error", {
+          error: resolveErr instanceof Error ? resolveErr.message : String(resolveErr),
+        })
+      }
+      appendDebugLog("error", "orchestrator execution failed", { error: msg, serverUrl: resolvedServerUrl })
+      this.server.broadcast({ type: "error", payload: { message: msg } })
+    } finally {
+      this.running = false
+      this.server.broadcast({ type: "execution_stopped", payload: {} })
+    }
   }
 
   private async executeTask(task: Task, options: Options) {
@@ -556,8 +627,9 @@ export class Orchestrator {
           }
         } catch (cmdErr) {
           const msg = cmdErr instanceof Error ? cmdErr.message : String(cmdErr)
-          appendDebugLog("warn", "pre-execution command failed", { taskId: task.id, error: msg })
+          appendDebugLog("error", "pre-execution command failed", { taskId: task.id, error: msg })
           this.db.appendAgentOutput(task.id, `[command error] ${msg}\n`)
+          throw new Error(`Pre-execution command failed: ${msg}`)
         }
       }
 
@@ -807,9 +879,11 @@ export class Orchestrator {
           }
           appendDebugLog("info", "commit prompt completed", { taskId: task.id })
         } catch (e) {
-          appendDebugLog("warn", "commit prompt failed", { taskId: task.id, error: String(e) })
-          this.db.appendAgentOutput(task.id, `\n[commit error] ${String(e)}\n`)
-          this.server.broadcast({ type: "agent_output", payload: { taskId: task.id, output: `\n[commit error] ${String(e)}\n` } })
+          const message = e instanceof Error ? e.message : String(e)
+          appendDebugLog("error", "commit prompt failed", { taskId: task.id, error: message })
+          this.db.appendAgentOutput(task.id, `\n[commit error] ${message}\n`)
+          this.server.broadcast({ type: "agent_output", payload: { taskId: task.id, output: `\n[commit error] ${message}\n` } })
+          throw new Error(`Commit prompt failed: ${message}`)
         }
       }
 
@@ -1794,10 +1868,10 @@ RECOMMENDED_PROMPT:
           if (commitFailure) throw new Error(`Commit prompt failed: ${commitFailure}`)
         } catch (e) {
           const commitErrorMessage = e instanceof Error ? e.message : String(e)
-          appendDebugLog("warn", "commit prompt failed during best-of-n final apply", { taskId: task.id, error: commitErrorMessage })
+          appendDebugLog("error", "commit prompt failed during best-of-n final apply", { taskId: task.id, error: commitErrorMessage })
           this.db.appendAgentOutput(task.id, `\n[final-applier commit error] ${commitErrorMessage}\n`)
           this.server.broadcast({ type: "agent_output", payload: { taskId: task.id, output: `\n[final-applier commit error] ${commitErrorMessage}\n` } })
-          this.emitError(`Final applier commit step failed for task "${task.name}": ${commitErrorMessage}`)
+          throw new Error(`Final applier commit step failed for task "${task.name}": ${commitErrorMessage}`)
         }
       }
 

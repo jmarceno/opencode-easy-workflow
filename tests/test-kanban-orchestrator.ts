@@ -70,6 +70,9 @@ const TEST_FILES = [
   join(TEST_DIR, "goodbye.txt"),
   join(TEST_DIR, "readme.txt"),
   join(TEST_DIR, "deps.txt"),
+  join(TEST_DIR, "single-start-dependency.txt"),
+  join(TEST_DIR, "single-start-target.txt"),
+  join(TEST_DIR, "single-start-unrelated.txt"),
 ];
 
 async function listGitWorktrees(): Promise<Set<string>> {
@@ -1027,8 +1030,196 @@ async function testPlanModeRevisionLoop() {
   }
 }
 
+async function testSingleTaskStartWithDependencies() {
+  console.log("\n\n=== Single Task Start With Dependencies Test ===\n");
+  console.log("Test: Start one task and run only its unresolved dependencies\n");
+
+  let server: { url: string; close(): void } | null = null;
+  let kanbanServer: KanbanServer | null = null;
+  let kanbanDb: KanbanDB | null = null;
+  let orchestrator: Orchestrator | null = null;
+  let baselineWorktrees: Set<string> = new Set();
+
+  try {
+    await cleanup();
+
+    if (existsSync(DEBUG_LOG_PATH)) {
+      unlinkSync(DEBUG_LOG_PATH);
+    }
+
+    console.log("Starting OpenCode server...");
+    const opencode = await createOpencode({ port: 0 });
+    server = opencode.server;
+    baselineWorktrees = await listGitWorktrees();
+    console.log(`Server started at ${server.url}`);
+
+    console.log("\nInitializing Kanban components...");
+    kanbanDb = new KanbanDB(DB_PATH);
+    const kanbanPort = getFreePort();
+    kanbanDb.updateOptions({ port: kanbanPort, parallelTasks: 2 });
+
+    let isExecuting = false;
+    kanbanServer = new KanbanServer(kanbanDb, {
+      onStart: async () => {
+        isExecuting = true;
+        if (orchestrator) await orchestrator.start();
+        isExecuting = false;
+      },
+      onStartSingle: async (taskId: string) => {
+        isExecuting = true;
+        if (orchestrator) await orchestrator.startSingle(taskId);
+        isExecuting = false;
+      },
+      onStop: () => {
+        isExecuting = false;
+        if (orchestrator) orchestrator.stop();
+      },
+      getExecuting: () => isExecuting,
+      getStartError: (taskId?: string) => (orchestrator ? orchestrator.preflightStartError(taskId) : "Kanban orchestrator is not ready"),
+      getServerUrl: () => server?.url || null,
+    });
+
+    orchestrator = new Orchestrator(kanbanDb, kanbanServer, server.url, TEST_DIR);
+
+    const startedKanbanPort = kanbanServer.start();
+    console.log(`Kanban server started on port: ${startedKanbanPort}`);
+
+    await waitFor(1000);
+
+    const dependencyTaskPayload = {
+      name: "Single Start Dependency Task",
+      prompt: "Create a file named single-start-dependency.txt in the root directory with the exact content 'single-start dependency'.",
+      branch: "master",
+      planModel: "default",
+      executionModel: "minimax/minimax-m2.7",
+      planmode: false,
+      review: false,
+      autoCommit: false,
+      requirements: [],
+    };
+
+    const dependencyResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(dependencyTaskPayload),
+    });
+    if (!dependencyResponse.ok) {
+      throw new Error(`Failed to create dependency task: ${dependencyResponse.statusText}`);
+    }
+    const dependencyTask = await dependencyResponse.json();
+
+    const targetTaskPayload = {
+      name: "Single Start Target Task",
+      prompt: "Create a file named single-start-target.txt in the root directory with the exact content 'single-start target'.",
+      branch: "master",
+      planModel: "default",
+      executionModel: "minimax/minimax-m2.7",
+      planmode: false,
+      review: false,
+      autoCommit: false,
+      requirements: [dependencyTask.id],
+    };
+
+    const targetResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(targetTaskPayload),
+    });
+    if (!targetResponse.ok) {
+      throw new Error(`Failed to create target task: ${targetResponse.statusText}`);
+    }
+    const targetTask = await targetResponse.json();
+
+    const unrelatedTaskPayload = {
+      name: "Single Start Unrelated Task",
+      prompt: "Create a file named single-start-unrelated.txt in the root directory with the exact content 'single-start unrelated'.",
+      branch: "master",
+      planModel: "default",
+      executionModel: "minimax/minimax-m2.7",
+      planmode: false,
+      review: false,
+      autoCommit: false,
+      requirements: [],
+    };
+
+    const unrelatedResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(unrelatedTaskPayload),
+    });
+    if (!unrelatedResponse.ok) {
+      throw new Error(`Failed to create unrelated task: ${unrelatedResponse.statusText}`);
+    }
+    const unrelatedTask = await unrelatedResponse.json();
+
+    const startSelectedResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks/${targetTask.id}/start`, {
+      method: "POST",
+    });
+    if (!startSelectedResponse.ok) {
+      const error = await startSelectedResponse.text();
+      throw new Error(`Failed to start selected task execution: ${error}`);
+    }
+
+    const reachedExpectedState = await pollForCondition(() => {
+      const tasksResp = fetch(`http://localhost:${startedKanbanPort}/api/tasks`).then((r) => r.json()).catch(() => []);
+      return tasksResp.then((tasks: any[]) => {
+        const dep = tasks.find((t: any) => t.id === dependencyTask.id);
+        const target = tasks.find((t: any) => t.id === targetTask.id);
+        const unrelated = tasks.find((t: any) => t.id === unrelatedTask.id);
+        const expected = dep?.status === "done" && target?.status === "done" && unrelated?.status === "backlog";
+        const failed = dep?.status === "failed" || target?.status === "failed" || unrelated?.status === "failed";
+        return expected || failed;
+      });
+    }, 180000, 2000);
+
+    await waitFor(2000);
+
+    const tasksResponse = await fetch(`http://localhost:${startedKanbanPort}/api/tasks`);
+    const tasks = await tasksResponse.json();
+
+    const depTask = tasks.find((t: any) => t.id === dependencyTask.id);
+    const selectedTask = tasks.find((t: any) => t.id === targetTask.id);
+    const unrelated = tasks.find((t: any) => t.id === unrelatedTask.id);
+
+    const depFilePath = join(TEST_DIR, "single-start-dependency.txt");
+    const targetFilePath = join(TEST_DIR, "single-start-target.txt");
+    const unrelatedFilePath = join(TEST_DIR, "single-start-unrelated.txt");
+
+    const dependencyRan = depTask?.status === "done" && existsSync(depFilePath);
+    const targetRan = selectedTask?.status === "done" && existsSync(targetFilePath);
+    const unrelatedSkipped = unrelated?.status === "backlog" && !existsSync(unrelatedFilePath);
+    const dependencyBeforeTarget = typeof depTask?.completedAt === "number"
+      && typeof selectedTask?.completedAt === "number"
+      && depTask.completedAt <= selectedTask.completedAt;
+
+    await cleanup();
+    await cleanupNewWorktrees(baselineWorktrees);
+    kanbanServer.stop();
+    kanbanDb.close();
+    server.close();
+
+    if (!reachedExpectedState || !dependencyRan || !targetRan || !unrelatedSkipped || !dependencyBeforeTarget) {
+      console.log("\n✗ TEST FAILED");
+      process.exit(1);
+    }
+
+    console.log("\n✓ TEST PASSED");
+    process.exit(0);
+  } catch (error) {
+    console.error("\nTest failed with error:", error);
+    await cleanup();
+    await cleanupNewWorktrees(baselineWorktrees);
+    if (kanbanServer) kanbanServer.stop();
+    if (kanbanDb) kanbanDb.close();
+    if (server) server.close();
+    process.exit(1);
+  }
+}
+
 // Run plan-mode tests if PLAN_MODE_TEST env is set
-if (process.env.PLAN_MODE_TEST === "1") {
+if (process.env.SINGLE_TASK_START_TEST === "1") {
+  testSingleTaskStartWithDependencies();
+} else if (process.env.PLAN_MODE_TEST === "1") {
   testPlanModeApprovalWorkflow();
 } else if (process.env.PLAN_MODE_TEST === "2") {
   testPlanModeWithDependencies();
