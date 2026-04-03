@@ -1,4 +1,4 @@
-import { readFileSync } from "fs"
+import { existsSync, readFileSync, writeFileSync } from "fs"
 import { join } from "path"
 import { fileURLToPath } from "url"
 import { dirname } from "path"
@@ -13,7 +13,9 @@ const MAX_EXPANDED_REVIEWER_RUNS = 4
 const MAX_TOTAL_INTERNAL_RUNS = 12
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
+const WORKFLOW_ROOT = join(__dirname, "..")
 const KANBAN_HTML = readFileSync(join(__dirname, "kanban", "index.html"), "utf-8")
+const REVIEW_AGENT_PATH = join(WORKFLOW_ROOT, "agents", "workflow-review.md")
 
 type StartFn = () => Promise<void>
 type StartSingleFn = (taskId: string) => Promise<void>
@@ -151,6 +153,39 @@ function normalizeDefaultModelMap(catalog: any): Record<string, string> {
   return defaults
 }
 
+function parseModelSelection(value: string): { providerID: string; modelID: string } | null {
+  const trimmed = value.trim()
+  const separatorIndex = trimmed.indexOf("/")
+  if (separatorIndex <= 0 || separatorIndex === trimmed.length - 1) return null
+  const providerID = trimmed.slice(0, separatorIndex).trim()
+  const modelID = trimmed.slice(separatorIndex + 1).trim()
+  return providerID && modelID ? { providerID, modelID } : null
+}
+
+function resolveCatalogModel(rawModel: string, catalog: any, context: string): string {
+  const parsed = parseModelSelection(rawModel)
+  if (!parsed) {
+    throw new Error(`${context} model is invalid: ${rawModel}. Expected format provider/model.`)
+  }
+
+  const providers = Array.isArray(catalog?.providers) ? catalog.providers : []
+  const provider = providers.find((p: any) => typeof p?.id === "string" && p.id.toLowerCase() === parsed.providerID.toLowerCase())
+  if (!provider) {
+    const availableProviders = providers.map((p: any) => p?.id).filter(Boolean).join(", ") || "none"
+    throw new Error(`${context} model provider not found: ${parsed.providerID}. Available providers: ${availableProviders}`)
+  }
+
+  const modelIds = Object.keys(provider.models || {})
+  const exact = modelIds.find((m) => m === parsed.modelID)
+  const insensitive = exact ?? modelIds.find((m) => m.toLowerCase() === parsed.modelID.toLowerCase())
+  if (!insensitive) {
+    const suggestions = modelIds.slice(0, 8).join(", ") || "none"
+    throw new Error(`${context} model not found: ${provider.id}/${parsed.modelID}. Available models: ${suggestions}`)
+  }
+
+  return `${provider.id}/${insensitive}`
+}
+
 function hasExecutableTasks(db: KanbanDB): boolean {
   return db.getTasks().some((task) => {
     const isBacklogTask = task.status === "backlog" && task.executionPhase !== "plan_complete_waiting_approval"
@@ -252,6 +287,35 @@ export class KanbanServer {
       status,
       headers: { "Content-Type": "application/json" },
     })
+  }
+
+  private updateReviewAgentModel(model: string): void {
+    if (!existsSync(REVIEW_AGENT_PATH)) {
+      throw new Error(`Review agent file not found at ${REVIEW_AGENT_PATH}`)
+    }
+
+    const content = readFileSync(REVIEW_AGENT_PATH, "utf-8")
+    const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/)
+    if (!frontmatterMatch) {
+      throw new Error(`Review agent file is missing frontmatter: ${REVIEW_AGENT_PATH}`)
+    }
+
+    const [, frontmatterText, body] = frontmatterMatch
+    const lines = frontmatterText.split("\n")
+    let replaced = false
+    for (let i = 0; i < lines.length; i++) {
+      if (/^\s*model\s*:/.test(lines[i])) {
+        lines[i] = `model: ${model}`
+        replaced = true
+        break
+      }
+    }
+
+    if (!replaced) {
+      lines.push(`model: ${model}`)
+    }
+
+    writeFileSync(REVIEW_AGENT_PATH, `---\n${lines.join("\n")}\n---\n${body}`, "utf-8")
   }
 
   private getGitBranches(): { branches: string[]; current: string | null; error?: string } {
@@ -417,6 +481,23 @@ export class KanbanServer {
         const body = await req.json()
         if (body?.thinkingLevel !== undefined && !isThinkingLevel(body.thinkingLevel)) {
           return this.json({ error: "Invalid thinkingLevel. Allowed values: default, low, medium, high" }, 400)
+        }
+        if (body?.reviewModel !== undefined) {
+          if (typeof body.reviewModel !== "string" || !body.reviewModel.trim() || body.reviewModel === "default") {
+            return this.json({ error: "Invalid reviewModel. Select a concrete provider/model value." }, 400)
+          }
+
+          const serverUrl = this.getServerUrl()
+          if (!serverUrl) {
+            return this.json({ error: "OpenCode server URL is not configured" }, 500)
+          }
+
+          const client = createV2Client(serverUrl)
+          const providersResponse = await client.config.providers()
+          const catalog = providersResponse?.data ?? providersResponse
+          const canonicalReviewModel = resolveCatalogModel(body.reviewModel, catalog, "Review")
+          body.reviewModel = canonicalReviewModel
+          this.updateReviewAgentModel(canonicalReviewModel)
         }
         const options = this.db.updateOptions(body)
         this.broadcast({ type: "options_updated", payload: options })

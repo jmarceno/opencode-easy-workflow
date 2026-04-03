@@ -9,6 +9,7 @@ const DEFAULT_OPTIONS: Options = {
   branch: "main",
   planModel: "default",
   executionModel: "default",
+  reviewModel: "minimax/MiniMax-M2.7",
   command: "",
   parallelTasks: 1,
   port: 3789,
@@ -235,6 +236,7 @@ export class KanbanDB {
       insert.run("branch", DEFAULT_OPTIONS.branch)
       insert.run("plan_model", DEFAULT_OPTIONS.planModel)
       insert.run("execution_model", DEFAULT_OPTIONS.executionModel)
+      insert.run("review_model", DEFAULT_OPTIONS.reviewModel)
       insert.run("command", DEFAULT_OPTIONS.command)
       insert.run("parallel_tasks", String(DEFAULT_OPTIONS.parallelTasks))
       insert.run("port", String(DEFAULT_OPTIONS.port))
@@ -244,6 +246,11 @@ export class KanbanDB {
     const hasThinkingLevelKey = this.db.prepare("SELECT COUNT(*) as cnt FROM options WHERE key = 'thinking_level'").get() as any
     if (hasThinkingLevelKey.cnt === 0) {
       this.db.prepare("INSERT OR IGNORE INTO options (key, value) VALUES ('thinking_level', 'default')").run()
+    }
+
+    const hasReviewModelKey = this.db.prepare("SELECT COUNT(*) as cnt FROM options WHERE key = 'review_model'").get() as any
+    if (hasReviewModelKey.cnt === 0) {
+      this.db.prepare("INSERT OR IGNORE INTO options (key, value) VALUES ('review_model', ?)").run(DEFAULT_OPTIONS.reviewModel)
     }
   }
 
@@ -320,6 +327,22 @@ export class KanbanDB {
           SELECT 1 FROM task_candidates
           WHERE task_id = tasks.id
         )
+    `).run()
+
+    this.db.prepare(`
+      UPDATE tasks
+      SET
+        status = 'done',
+        completed_at = COALESCE(completed_at, unixepoch()),
+        error_message = NULL,
+        updated_at = unixepoch()
+      WHERE status = 'review'
+        AND execution_strategy = 'standard'
+        AND planmode = 0
+        AND awaiting_plan_approval = 0
+        AND execution_phase = 'not_started'
+        AND review_count = 0
+        AND trim(COALESCE(agent_output, '')) <> ''
     `).run()
   }
 
@@ -508,6 +531,7 @@ export class KanbanDB {
       branch: opts.branch ?? DEFAULT_OPTIONS.branch,
       planModel: opts.plan_model ?? DEFAULT_OPTIONS.planModel,
       executionModel: opts.execution_model ?? DEFAULT_OPTIONS.executionModel,
+      reviewModel: opts.review_model ?? DEFAULT_OPTIONS.reviewModel,
       command: opts.command ?? DEFAULT_OPTIONS.command,
       parallelTasks: parseInt(opts.parallel_tasks ?? "1", 10) || 1,
       port: parseInt(opts.port ?? "3789", 10) || 3789,
@@ -524,6 +548,7 @@ export class KanbanDB {
     if (partial.branch !== undefined) upsert.run("branch", partial.branch)
     if (partial.planModel !== undefined) upsert.run("plan_model", partial.planModel)
     if (partial.executionModel !== undefined) upsert.run("execution_model", partial.executionModel)
+    if (partial.reviewModel !== undefined) upsert.run("review_model", partial.reviewModel)
     if (partial.command !== undefined) upsert.run("command", partial.command)
     if (partial.parallelTasks !== undefined) upsert.run("parallel_tasks", String(partial.parallelTasks))
     if (partial.port !== undefined) upsert.run("port", String(partial.port))

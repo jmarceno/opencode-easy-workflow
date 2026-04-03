@@ -9,6 +9,16 @@ import { KanbanDB } from "../.opencode/easy-workflow/db";
 import { KanbanServer } from "../.opencode/easy-workflow/server";
 import { Orchestrator } from "../.opencode/easy-workflow/orchestrator";
 
+const CLEANUP_TEST_ARTIFACTS = process.env.EWF_CLEANUP_TEST_ARTIFACTS === "1";
+
+function cleanupTempDir(tempDir: string): void {
+  if (!CLEANUP_TEST_ARTIFACTS) {
+    console.log(`Preserving test database: ${join(tempDir, "tasks.db")} (set EWF_CLEANUP_TEST_ARTIFACTS=1 to remove it)`);
+    return;
+  }
+  rmSync(tempDir, { recursive: true, force: true });
+}
+
 async function listGitWorktrees(): Promise<Set<string>> {
   const output = await Bun.$`git worktree list --porcelain`.text();
   const paths = new Set<string>();
@@ -413,7 +423,7 @@ async function main() {
     if (kanbanDb) kanbanDb.close();
     if (opencode) opencode.server.close();
     await cleanupNewWorktrees(baselineWorktrees);
-    rmSync(tempDir, { recursive: true, force: true });
+    cleanupTempDir(tempDir);
   }
 }
 
@@ -644,7 +654,7 @@ async function testPlanModeApprovalUI() {
     if (kanbanDb) kanbanDb.close();
     if (opencode) opencode.server.close();
     await cleanupNewWorktrees(baselineWorktrees);
-    rmSync(tempDir, { recursive: true, force: true });
+    cleanupTempDir(tempDir);
   }
 }
 

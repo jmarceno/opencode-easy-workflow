@@ -130,6 +130,7 @@ export interface Options {
   branch: string
   planModel: string
   executionModel: string
+  reviewModel: string
   command: string
   parallelTasks: number
   port: number

@@ -458,7 +458,14 @@ export class Orchestrator {
         if (this.shouldStop) break
 
         // Execute tasks in this batch (respecting parallel limit already applied)
-        await Promise.all(batch.map(t => this.executeTask(t, options)))
+        const settled = await Promise.allSettled(batch.map(t => this.executeTask(t, options)))
+        const rejected = settled.filter((result): result is PromiseRejectedResult => result.status === "rejected")
+        if (rejected.length > 0) {
+          this.shouldStop = true
+          const firstReason = rejected[0].reason
+          const message = firstReason instanceof Error ? firstReason.message : String(firstReason)
+          throw new Error(message)
+        }
 
         if (this.shouldStop) break
       }
@@ -527,7 +534,14 @@ export class Orchestrator {
       for (const batch of batches) {
         if (this.shouldStop) break
 
-        await Promise.all(batch.map(t => this.executeTask(t, options)))
+        const settled = await Promise.allSettled(batch.map(t => this.executeTask(t, options)))
+        const rejected = settled.filter((result): result is PromiseRejectedResult => result.status === "rejected")
+        if (rejected.length > 0) {
+          this.shouldStop = true
+          const firstReason = rejected[0].reason
+          const message = firstReason instanceof Error ? firstReason.message : String(firstReason)
+          throw new Error(message)
+        }
 
         if (this.shouldStop) break
       }
@@ -838,8 +852,6 @@ export class Orchestrator {
       // Refresh task state
       currentTask = this.getTaskOrThrow(task.id, "refreshing task state after execution", task.name)
       lastKnownTask = currentTask
-      if (this.shouldStop) return
-
       // 6. Review loop
       if (currentTask.review) {
         const reviewConfig = loadReviewConfig()
@@ -852,8 +864,6 @@ export class Orchestrator {
           return
         }
       }
-
-      if (this.shouldStop) return
 
       // 7. Commit via agent prompt (if enabled)
       if (currentTask.autoCommit && worktreeInfo) {
@@ -1045,7 +1055,6 @@ export class Orchestrator {
         }
       }
 
-      this.shouldStop = true
       throw err
     }
   }
@@ -2028,7 +2037,7 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
     try {
       writeFileSync(reviewFilePath, reviewContent, "utf-8")
 
-      while (reviewCount < maxRuns && !this.shouldStop) {
+      while (reviewCount < maxRuns) {
         // Move to review column
         this.db.updateTask(task.id, { status: "review", reviewCount })
         const reviewTask = this.db.getTask(task.id)!

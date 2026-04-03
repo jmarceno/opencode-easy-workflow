@@ -8,6 +8,8 @@ import { KanbanDB } from "../.opencode/easy-workflow/db"
 import { Orchestrator } from "../.opencode/easy-workflow/orchestrator"
 import { KanbanServer } from "../.opencode/easy-workflow/server"
 
+const CLEANUP_TEST_ARTIFACTS = process.env.EWF_CLEANUP_TEST_ARTIFACTS === "1"
+
 function assert(condition: unknown, message: string) {
   if (!condition) throw new Error(message)
 }
@@ -70,6 +72,14 @@ function cleanupOutputFile(path: string) {
   if (existsSync(path)) {
     unlinkSync(path)
   }
+}
+
+function cleanupTempDir(tempDir: string) {
+  if (!CLEANUP_TEST_ARTIFACTS) {
+    console.log(`Preserving test database: ${join(tempDir, "tasks.db")} (set EWF_CLEANUP_TEST_ARTIFACTS=1 to remove it)`)
+    return
+  }
+  rmSync(tempDir, { recursive: true, force: true })
 }
 
 async function resolveRealModel(kanbanPort: number): Promise<string> {
@@ -292,7 +302,7 @@ async function testPlanRevisionWithRealCycle() {
 
     await cleanupNewWorktrees(baselineWorktrees)
     cleanupOutputFile(outputPath)
-    rmSync(tempDir, { recursive: true, force: true })
+    cleanupTempDir(tempDir)
   }
 }
 

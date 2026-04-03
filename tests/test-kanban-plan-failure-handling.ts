@@ -6,6 +6,16 @@ import { join } from "path"
 import { KanbanDB } from "../.opencode/easy-workflow/db"
 import { Orchestrator } from "../.opencode/easy-workflow/orchestrator"
 
+const CLEANUP_TEST_ARTIFACTS = process.env.EWF_CLEANUP_TEST_ARTIFACTS === "1"
+
+function cleanupTempDir(tempDir: string) {
+  if (!CLEANUP_TEST_ARTIFACTS) {
+    console.log(`Preserving test database: ${join(tempDir, "tasks.db")} (set EWF_CLEANUP_TEST_ARTIFACTS=1 to remove it)`)
+    return
+  }
+  rmSync(tempDir, { recursive: true, force: true })
+}
+
 function assert(condition: unknown, message: string) {
   if (!condition) throw new Error(message)
 }
@@ -41,7 +51,7 @@ async function testInvalidApprovalStateIsRepairedOnLoad() {
     console.log("✓ invalid plan approval state is repaired on load")
   } finally {
     repairedDb.close()
-    rmSync(tempDir, { recursive: true, force: true })
+    cleanupTempDir(tempDir)
   }
 }
 
@@ -95,7 +105,7 @@ async function testPlanModeCreditErrorFailsTask() {
     console.log("✓ plan-mode credit errors are treated as failures")
   } finally {
     db.close()
-    rmSync(tempDir, { recursive: true, force: true })
+    cleanupTempDir(tempDir)
   }
 }
 
@@ -139,7 +149,7 @@ async function testPlanModeEmptyOutputFailsTask() {
     console.log("✓ empty plan output is treated as a failure")
   } finally {
     db.close()
-    rmSync(tempDir, { recursive: true, force: true })
+    cleanupTempDir(tempDir)
   }
 }
 

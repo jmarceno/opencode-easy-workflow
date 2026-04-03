@@ -472,6 +472,14 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
       </div>
       <div class="form-group">
         <div class="label-row">
+          <label for="optReviewModel">Review Model</label>
+          <button class="help-btn" type="button" title="Model used by the workflow-review agent. Saving this writes the selected model into .opencode/agents/workflow-review.md." aria-label="Review model help">?</button>
+        </div>
+        <input type="text" id="optReviewModelSearch" class="model-search" placeholder="Filter models...">
+        <select id="optReviewModel"></select>
+      </div>
+      <div class="form-group">
+        <div class="label-row">
           <label for="optThinkingLevel">Thinking Level (global default)</label>
           <button class="help-btn" type="button" title="Default reasoning effort for new tasks. Higher levels are better for harder work but can be slower." aria-label="Global thinking level help">?</button>
         </div>
@@ -612,6 +620,7 @@ const MODEL_SELECT_FILTERS = [
   { selectId: 'taskExecModel', searchId: 'taskExecModelSearch' },
   { selectId: 'optPlanModel', searchId: 'optPlanModelSearch' },
   { selectId: 'optExecModel', searchId: 'optExecModelSearch' },
+  { selectId: 'optReviewModel', searchId: 'optReviewModelSearch' },
   { selectId: 'bonFinalApplierModel', searchId: 'bonFinalApplierModelSearch' },
 ]
 
@@ -1048,6 +1057,14 @@ function hasPlanOutput(task) {
   return !!(task.agentOutput && task.agentOutput.trim())
 }
 
+function isAnomalousReviewTask(task) {
+  return task.status === 'review'
+    && task.awaitingPlanApproval !== true
+    && task.planmode !== true
+    && task.executionStrategy !== 'best_of_n'
+    && hasPlanOutput(task)
+}
+
 // ---- Rendering ----
 function renderBoard() {
   const groups = { template: [], backlog: [], executing: [], review: [], done: [] }
@@ -1200,6 +1217,15 @@ function renderCard(task, colStatus) {
     revisionBtn.style.color = 'var(--orange)'
     revisionBtn.onclick = () => openRevisionModal(task.id)
     actions.appendChild(revisionBtn)
+  }
+
+  if (!isTaskMutationLocked(task) && isAnomalousReviewTask(task)) {
+    const doneBtn = document.createElement('button')
+    doneBtn.textContent = '\u2713'
+    doneBtn.title = 'Mark as Done'
+    doneBtn.style.color = 'var(--green)'
+    doneBtn.onclick = () => markReviewDone(task.id)
+    actions.appendChild(doneBtn)
   }
 
   // Start single task button for backlog tasks
@@ -1365,6 +1391,14 @@ function renderCard(task, colStatus) {
       requestChangesBtn.style.color = 'var(--orange)'
       requestChangesBtn.onclick = () => openRevisionModal(task.id)
       actionBar.appendChild(requestChangesBtn)
+    }
+
+    if (task.status === 'review' && isAnomalousReviewTask(task)) {
+      const doneBtn = document.createElement('button')
+      doneBtn.className = 'btn btn-sm btn-primary'
+      doneBtn.textContent = 'Mark Done'
+      doneBtn.onclick = () => markReviewDone(task.id)
+      actionBar.appendChild(doneBtn)
     }
 
     const resetBtn = document.createElement('button')
@@ -1745,6 +1779,20 @@ async function markStuckDone(id) {
   } catch (e) { showToast('Failed: ' + e.message, 'error') }
 }
 
+async function markReviewDone(id) {
+  if (!confirm('Mark this review task as done? Use this when implementation succeeded but task is stuck in review.')) return
+  try {
+    await api(`/api/tasks/${id}`, 'PATCH', {
+      status: 'done',
+      completedAt: Math.floor(Date.now() / 1000),
+      errorMessage: null,
+      awaitingPlanApproval: false,
+    })
+    await loadTasks()
+    showToast('Task marked as done', 'success')
+  } catch (e) { showToast('Failed: ' + e.message, 'error') }
+}
+
 async function resetTask(id) {
   if (!confirm('Reset this task to backlog? This will clear its output, reviews, and error state.')) return
   try {
@@ -1880,6 +1928,7 @@ function openOptionsModal() {
   document.getElementById('optBranch').value = allOptions.branch || getFallbackBranch()
   resetModelSelectWithSearch('optPlanModel', 'optPlanModelSearch', allOptions.planModel || 'default')
   resetModelSelectWithSearch('optExecModel', 'optExecModelSearch', allOptions.executionModel || 'default')
+  resetModelSelectWithSearch('optReviewModel', 'optReviewModelSearch', allOptions.reviewModel || 'default')
   document.getElementById('optCommand').value = allOptions.command || ''
   document.getElementById('optParallel').value = allOptions.parallelTasks || 1
   document.getElementById('optThinkingLevel').value = allOptions.thinkingLevel || 'default'
@@ -1903,6 +1952,7 @@ async function saveOptions() {
       branch,
       planModel: document.getElementById('optPlanModel').value,
       executionModel: document.getElementById('optExecModel').value,
+      reviewModel: document.getElementById('optReviewModel').value,
       command: document.getElementById('optCommand').value,
       parallelTasks: parseInt(document.getElementById('optParallel').value, 10) || 1,
       thinkingLevel: document.getElementById('optThinkingLevel').value || 'default',

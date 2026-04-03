@@ -18,6 +18,7 @@ const WORKFLOW_ROOT = join(TEST_DIR, ".opencode", "easy-workflow");
 const TEST_ARTIFACTS = join(WORKFLOW_ROOT, "test-artifacts");
 const DB_PATH = join(TEST_ARTIFACTS, "tasks.db");
 const DEBUG_LOG_PATH = join(WORKFLOW_ROOT, "debug.log");
+const CLEANUP_TEST_ARTIFACTS = process.env.EWF_CLEANUP_TEST_ARTIFACTS === "1";
 
 // Test tasks
 const TASK_A = {
@@ -110,19 +111,8 @@ async function cleanup() {
     }
   }
   
-  // Clean database
-  if (existsSync(DB_PATH)) {
-    try {
-      const db = new KanbanDB(DB_PATH);
-      const tasks = db.getTasks();
-      for (const task of tasks) {
-        db.deleteTask(task.id);
-      }
-      db.close();
-      console.log("Cleaned up test tasks from database");
-    } catch (e) {
-      console.log("Note: Could not clean database (may not exist yet)");
-    }
+  if (!CLEANUP_TEST_ARTIFACTS) {
+    console.log(`Preserving test database: ${DB_PATH} (set EWF_CLEANUP_TEST_ARTIFACTS=1 to remove it)`);
   }
 }
 
