@@ -912,6 +912,23 @@ sl-tooltip {
         </div>
         <sl-textarea id="optCommitPrompt" style="min-height:180px;font-family:monospace;font-size:12px" placeholder="Instructions for committing changes..."></sl-textarea>
       </div>
+      <div class="form-group telegram-section">
+        <div class="label-row">
+          <label>Telegram Notifications</label>
+          <sl-icon-button class="help-btn" type="button" title="Send a Telegram message when a task changes state. Leave both fields empty to disable notifications." aria-label="Telegram notifications help" name="question-circle"></sl-icon-button>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div>
+            <label for="optTelegramBotToken" style="display:block;font-size:12px;color:var(--text-dim);margin-bottom:4px;">Bot Token</label>
+            <sl-input type="password" id="optTelegramBotToken" placeholder="123456789:ABCdefGhIJKlmNoPQRsTUVwxYZ" style="width:100%;"></sl-input>
+          </div>
+          <div>
+            <label for="optTelegramChatId" style="display:block;font-size:12px;color:var(--text-dim);margin-bottom:4px;">Chat ID</label>
+            <sl-input type="text" id="optTelegramChatId" placeholder="-1001234567890 or @channel_name" style="width:100%;"></sl-input>
+          </div>
+        </div>
+        <div id="telegramTestStatus" style="font-size:12px;margin-top:6px;display:none;"></div>
+      </div>
     </div>
     <div class="modal-footer">
       <sl-button onclick="closeOptionsModal()">Cancel</sl-button>
@@ -2463,6 +2480,10 @@ function openOptionsModal() {
   document.getElementById('optAutoDeleteNormalSessions').checked = !!allOptions.autoDeleteNormalSessions
   document.getElementById('optAutoDeleteReviewSessions').checked = !!allOptions.autoDeleteReviewSessions
   document.getElementById('optThinkingLevel').value = allOptions.thinkingLevel || 'default'
+  document.getElementById('optTelegramBotToken').value = allOptions.telegramBotToken || ''
+  document.getElementById('optTelegramChatId').value = allOptions.telegramChatId || ''
+  const telegramTestStatus = document.getElementById('telegramTestStatus')
+  telegramTestStatus.style.display = 'none'
   document.getElementById('optionsModal').classList.remove('hidden')
 }
 
@@ -2489,6 +2510,8 @@ async function saveOptions() {
       autoDeleteNormalSessions: document.getElementById('optAutoDeleteNormalSessions').checked,
       autoDeleteReviewSessions: document.getElementById('optAutoDeleteReviewSessions').checked,
       thinkingLevel: document.getElementById('optThinkingLevel').value || 'default',
+      telegramBotToken: document.getElementById('optTelegramBotToken').value || '',
+      telegramChatId: document.getElementById('optTelegramChatId').value || '',
     })
     closeOptionsModal()
     await loadOptions()

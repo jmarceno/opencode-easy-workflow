@@ -8,6 +8,7 @@ import { KanbanDB } from "./db"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
 import { buildExecutionGraph, getExecutableTasks, isTaskExecutable } from "./execution-plan"
 import { chooseDeterministicRepairAction, getLatestTaggedOutput, getPlanExecutionEligibility, hasCapturedPlanOutput, isTaskAwaitingPlanApproval, type TaskRepairAction } from "./task-state"
+import { sendTelegramNotification } from "./telegram"
 
 const MAX_EXPANDED_WORKER_RUNS = 8
 const MAX_EXPANDED_REVIEWER_RUNS = 4
@@ -240,6 +241,23 @@ export class KanbanServer {
     this.getExecuting = opts.getExecuting
     this.getStartError = opts.getStartError || (() => null)
     this.getServerUrl = opts.getServerUrl || (() => null)
+
+    // Register Telegram notification listener for task status changes
+    this.db.setTaskStatusChangeListener((taskId: string, oldStatus: string, newStatus: string) => {
+      const task = this.db.getTask(taskId)
+      if (!task) return
+      const opts = this.db.getOptions()
+      if (!opts.telegramBotToken || !opts.telegramChatId) return
+      sendTelegramNotification(
+        { botToken: opts.telegramBotToken, chatId: opts.telegramChatId },
+        task.name,
+        oldStatus,
+        newStatus,
+        (msg: string) => console.debug(msg)
+      ).catch((err: unknown) => {
+        console.error("[telegram] notification failed:", err)
+      })
+    })
   }
 
   broadcast(msg: WSMessage) {
@@ -690,6 +708,12 @@ export class KanbanServer {
           const canonicalReviewModel = resolveCatalogModel(body.reviewModel, catalog, "Review")
           body.reviewModel = canonicalReviewModel
           this.updateReviewAgentModel(canonicalReviewModel)
+        }
+        if (body?.telegramBotToken !== undefined && typeof body.telegramBotToken !== "string") {
+          return this.json({ error: "Invalid telegramBotToken. Expected a string." }, 400)
+        }
+        if (body?.telegramChatId !== undefined && typeof body.telegramChatId !== "string") {
+          return this.json({ error: "Invalid telegramChatId. Expected a string." }, 400)
         }
         const options = this.db.updateOptions(body)
         this.broadcast({ type: "options_updated", payload: options })
