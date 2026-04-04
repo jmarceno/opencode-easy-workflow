@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Easy Workflow Kanban</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.20.1/cdn/themes/dark.css" />
+<script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.20.1/cdn/shoelace-autoloader.js"></script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
@@ -11,6 +13,96 @@
   --text: #e6edf3; --text-dim: #8b949e; --accent: #2f81f7; --accent-hover: #388bfd;
   --green: #238636; --green-hover: #2ea043; --yellow: #d29922; --red: #da3633;
   --orange: #db6d28; --radius: 8px; --shadow: 0 2px 8px rgba(0,0,0,.3); --log-panel-height: 180px;
+}
+
+/* Shoelace Theme Overrides - GitHub Dark Palette */
+sl-button, sl-icon-button, sl-input, sl-select, sl-textarea, sl-checkbox, sl-switch, sl-dialog, sl-badge, sl-tag, sl-spinner, sl-progress-bar, sl-progress-ring, sl-tab-group, sl-tab {
+  --sl-color-primary-50: #79c0ff;
+  --sl-color-primary-100: #6eb5f5;
+  --sl-color-primary-200: #5eaae9;
+  --sl-color-primary-300: #4e90db;
+  --sl-color-primary-400: #3f7ecc;
+  --sl-color-primary-500: #2f81f7;
+  --sl-color-primary-600: #1f6feb;
+  --sl-color-primary-700: #1a5fd4;
+  --sl-color-primary-800: #154fbd;
+  --sl-color-primary-900: #103fa6;
+  --sl-color-primary-font: #ffffff;
+
+  --sl-color-success-50: #7ee787;
+  --sl-color-success-100: #6fd97c;
+  --sl-color-success-200: #60cb71;
+  --sl-color-success-300: #52bd66;
+  --sl-color-success-400: #43af5b;
+  --sl-color-success-500: #238636;
+  --sl-color-success-600: #1e7730;
+  --sl-color-success-700: #19682a;
+  --sl-color-success-800: #145924;
+  --sl-color-success-900: #0f4a1e;
+  --sl-color-success-font: #ffffff;
+
+  --sl-color-warning-50: #f2cc60;
+  --sl-color-warning-100: #e6c455;
+  --sl-color-warning-200: #dabc4a;
+  --sl-color-warning-300: #ceb43f;
+  --sl-color-warning-400: #c2ac34;
+  --sl-color-warning-500: #d29922;
+  --sl-color-warning-600: #c78d1e;
+  --sl-color-warning-700: #bc811a;
+  --sl-color-warning-800: #b17516;
+  --sl-color-warning-900: #a66912;
+  --sl-color-warning-font: #000000;
+
+  --sl-color-danger-50: #ff7b72;
+  --sl-color-danger-100: #f26b62;
+  --sl-color-danger-200: #e65b52;
+  --sl-color-danger-300: #da4b42;
+  --sl-color-danger-400: #ce3b32;
+  --sl-color-danger-500: #da3633;
+  --sl-color-danger-600: #c4302d;
+  --sl-color-danger-700: #b82a27;
+  --sl-color-danger-800: #ac2421;
+  --sl-color-danger-900: #a01e1b;
+  --sl-color-danger-font: #ffffff;
+
+  --sl-color-neutral-0: #e6edf3;
+  --sl-color-neutral-50: #8b949e;
+  --sl-color-neutral-100: #7d868f;
+  --sl-color-neutral-200: #6f767f;
+  --sl-color-neutral-300: #616870;
+  --sl-color-neutral-400: #535a61;
+  --sl-color-neutral-500: #454b52;
+  --sl-color-neutral-600: #383d43;
+  --sl-color-neutral-700: #2a2f34;
+  --sl-color-neutral-800: #21262d;
+  --sl-color-neutral-900: #161b22;
+  --sl-color-neutral-950: #0d1117;
+  --sl-color-neutral-font: #e6edf3;
+
+  --sl-color-neutral-1000: #161b22;
+  --sl-color-neutral-1100: #21262d;
+  --sl-color-neutral-1200: #30363d;
+
+  --sl-color-text: #e6edf3;
+  --sl-color-text-muted: #8b949e;
+  --sl-color-bg: #0d1117;
+  --sl-color-bg-subtle: #161b22;
+  --sl-color-bg-default: #21262d;
+  --sl-color-bg-hover: #30363d;
+  --sl-color-bg-active: #454b52;
+
+  --sl-panel-background-color: #161b22;
+  --sl-panel-border-color: #30363d;
+  --sl-input-background-color: #0d1117;
+  --sl-input-border-color: #30363d;
+  --sl-input-border-radius-medium: 8px;
+  --sl-input-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --sl-input-height-medium: 38px;
+  --sl-select-background-color: #0d1117;
+  --sl-select-border-color: #30363d;
+  --sl-button-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --sl-button-border-radius-medium: 8px;
+  --sl-dialog-backdrop-background-color: rgba(0,0,0,.6);
 }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 
@@ -31,6 +123,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 .btn-danger { background: var(--red); border-color: var(--red); color: #fff; }
 .btn-danger:hover { background: #b62324; }
 .btn-sm { padding: 3px 10px; font-size: 12px; }
+sl-button.btn { display: inline-flex; align-items: center; justify-content: center; }
 
 /* Board */
 .board { display: grid; grid-template-columns: repeat(5, minmax(200px, 1fr)); grid-template-rows: minmax(0, 1fr); gap: 12px; padding: 16px; flex: 1; min-height: 0; min-width: 0; max-width: 100%; overflow-x: auto; overflow-y: hidden; }
@@ -63,7 +156,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 .card-meta { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
 .card-inline-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .card-note { font-size: 12px; color: var(--red); margin-top: 8px; }
-.badge { font-size: 11px; padding: 2px 6px; border-radius: 4px; background: var(--surface); color: var(--text-dim); }
+.badge { font-size: 11px; padding: 2px 6px; border-radius: 4px; background: var(--surface); color: var(--text-dim); display: inline-flex; align-items: center; gap: 4px; }
 .badge-dep { background: rgba(47,125,247,.15); color: var(--accent); }
 .badge-review { background: rgba(210,153,34,.15); color: var(--yellow); }
 .badge-stuck { background: rgba(218,54,51,.15); color: var(--red); }
@@ -75,6 +168,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 .badge-reviewers { background: rgba(136,98,246,.15); color: #8b5cf6; }
 .badge-final { background: rgba(35,134,54,.15); color: #7ee787; }
 .badge-warning { background: rgba(210,153,34,.15); color: var(--yellow); }
+sl-badge.badge { font-size: 11px; --sl-font-size-small: 11px; }
 
 /* Best-of-n config section */
 .bon-config-section { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin-top: 12px; background: var(--bg); }
@@ -124,6 +218,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 
 /* Executing spinner */
 .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--text-dim); border-top-color: var(--accent); border-radius: 50%; animation: spin .6s linear infinite; margin-right: 6px; }
+.spinner sl-spinner { --indicator-width: 2px; --track-width: 2px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* Attention icon */
@@ -143,10 +238,18 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; width: 520px; max-height: 85vh; overflow-y: auto; box-shadow: var(--shadow); }
 .modal-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
 .modal-header h2 { font-size: 16px; font-weight: 600; }
-.modal-close { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 18px; }
-.modal-close:hover { color: var(--text); }
+.modal-close { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 18px; padding: 4px; border-radius: 4px; }
+.modal-close:hover { color: var(--text); background: var(--surface2); }
 .modal-body { padding: 20px; }
 .modal-footer { padding: 12px 20px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 8px; }
+sl-dialog::part(base) { --width: 520px; }
+sl-dialog::part(panel) { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); }
+sl-dialog::part(header) { background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 20px; }
+sl-dialog::part(title) { font-size: 16px; font-weight: 600; color: var(--text); }
+sl-dialog::part(body) { padding: 20px; color: var(--text); }
+sl-dialog::part(footer) { padding: 12px 20px; border-top: 1px solid var(--border); }
+sl-dialog::part(close-button) { color: var(--text-dim); }
+sl-dialog::part(close-button):hover { color: var(--text); background: var(--surface2); }
 
 /* Form */
 .form-group { margin-bottom: 14px; }
@@ -169,6 +272,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
   line-height: 1;
   flex-shrink: 0;
 }
+.help-btn sl-icon { font-size: 11px; }
 .help-btn:hover { color: var(--text); border-color: var(--accent); }
 .form-group input[type="text"],
 .form-group input[type="number"],
@@ -180,6 +284,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 .checkbox-group { display: flex; gap: 16px; flex-wrap: wrap; }
 .checkbox-group label { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; color: var(--text); }
 .checkbox-group input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; }
+.form-group sl-input, .form-group sl-select, .form-group sl-textarea { width: 100%; }
 
 /* Multi-select for requirements */
 .req-list { max-height: 150px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); padding: 6px; }
@@ -223,7 +328,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 <body>
 
 <div class="topbar">
-  <button class="btn btn-primary" id="startBtn" onclick="toggleExecution()">Start</button>
+  <sl-button variant="success" id="startBtn" onclick="toggleExecution()">Start</sl-button>
   <div class="topbar-title">
     <h1>Easy Workflow Kanban</h1>
     <div class="shortcut-list" aria-label="Keyboard shortcuts">
@@ -235,9 +340,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
   </div>
   <div style="display:flex;align-items:center;gap:8px;">
     <div class="conn-status disconnected" id="connStatus"></div>
-    <button class="btn" onclick="openOptionsModal()">Options</button>
+    <sl-button onclick="openOptionsModal()">Options</sl-button>
     <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-dim);cursor:pointer;">
-      <input type="checkbox" id="showGraphChk" style="accent-color:var(--accent);width:15px;height:15px;">
+      <sl-checkbox id="showGraphChk"></sl-checkbox>
       Show execution graph
     </label>
   </div>
@@ -248,7 +353,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
     <div class="column-header">
       <div class="column-header-main">
         <span>Templates</span>
-        <button class="help-btn" type="button" title="Reusable task blueprints. Keep common prompts and settings here, then deploy them into the backlog when you need a new task." aria-label="Templates column help">?</button>
+        <sl-icon-button class="help-btn" type="button" title="Reusable task blueprints. Keep common prompts and settings here, then deploy them into the backlog when you need a new task." aria-label="Templates column help" name="question-circle"></sl-icon-button>
       </div>
       <span class="count" id="count-template">0</span>
     </div>
@@ -260,7 +365,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
     <div class="column-header">
       <div class="column-header-main">
         <span>Backlog</span>
-        <button class="help-btn" type="button" title="Ready-to-run tasks waiting for execution. Add, edit, reorder, and set dependencies here before starting work." aria-label="Backlog column help">?</button>
+        <sl-icon-button class="help-btn" type="button" title="Ready-to-run tasks waiting for execution. Add, edit, reorder, and set dependencies here before starting work." aria-label="Backlog column help" name="question-circle"></sl-icon-button>
       </div>
       <span class="count" id="count-backlog">0</span>
     </div>
@@ -272,7 +377,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
     <div class="column-header">
       <div class="column-header-main">
         <span>Executing</span>
-        <button class="help-btn" type="button" title="Tasks currently being worked on by the agent. Use this column to monitor active runs and open their live sessions." aria-label="Executing column help">?</button>
+        <sl-icon-button class="help-btn" type="button" title="Tasks currently being worked on by the agent. Use this column to monitor active runs and open their live sessions." aria-label="Executing column help" name="question-circle"></sl-icon-button>
       </div>
       <span class="count" id="count-executing">0</span>
     </div>
@@ -282,7 +387,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
     <div class="column-header">
       <div class="column-header-main">
         <span>Review</span>
-        <button class="help-btn" type="button" title="Tasks that need human attention. Review outputs here, approve plans, or inspect stuck and failed work before deciding the next step." aria-label="Review column help">?</button>
+        <sl-icon-button class="help-btn" type="button" title="Tasks that need human attention. Review outputs here, approve plans, or inspect stuck and failed work before deciding the next step." aria-label="Review column help" name="question-circle"></sl-icon-button>
       </div>
       <span class="count" id="count-review">0</span>
     </div>
@@ -292,7 +397,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
     <div class="column-header">
       <div class="column-header-main">
         <span>Done</span>
-        <button class="help-btn" type="button" title="Completed tasks. Use this column as the final state once the work and any needed review are finished." aria-label="Done column help">?</button>
+        <sl-icon-button class="help-btn" type="button" title="Completed tasks. Use this column as the final state once the work and any needed review are finished." aria-label="Done column help" name="question-circle"></sl-icon-button>
       </div>
       <span class="count" id="count-done">0</span>
     </div>
@@ -305,29 +410,29 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
   <div class="modal">
     <div class="modal-header">
       <h2 id="taskModalTitle">Add Task</h2>
-      <button class="modal-close" onclick="closeTaskModal()">&times;</button>
+      <sl-icon-button class="modal-close" onclick="closeTaskModal()" name="x"></sl-icon-button>
     </div>
     <div class="modal-body">
       <input type="hidden" id="taskId">
       <div class="form-group">
         <div class="label-row">
           <label for="taskName">Name</label>
-          <button class="help-btn" type="button" title="Short task title shown on the card. Make it specific enough to identify the work at a glance." aria-label="Task name help">?</button>
+          <sl-icon-button class="help-btn" type="button" title="Short task title shown on the card. Make it specific enough to identify the work at a glance." aria-label="Task name help" name="question-circle"></sl-icon-button>
         </div>
-        <input type="text" id="taskName" placeholder="Task name">
+        <sl-input type="text" id="taskName" placeholder="Task name"></sl-input>
       </div>
       <div class="form-group">
         <div class="label-row">
           <label for="taskPrompt">Prompt</label>
-          <button class="help-btn" type="button" title="The main instructions for the agent. Describe the change, bug, or outcome you want it to produce." aria-label="Task prompt help">?</button>
+          <sl-icon-button class="help-btn" type="button" title="The main instructions for the agent. Describe the change, bug, or outcome you want it to produce." aria-label="Task prompt help" name="question-circle"></sl-icon-button>
         </div>
-        <textarea id="taskPrompt" placeholder="What should this task do?"></textarea>
+        <sl-textarea id="taskPrompt" placeholder="What should this task do?"></sl-textarea>
       </div>
       <div class="form-row">
         <div class="form-group" x-data="modelPicker('taskPlanModel')" x-init="attach()">
           <div class="label-row">
             <label for="taskPlanModel">Plan Model</label>
-            <button class="help-btn" type="button" title="Model used for planning steps before implementation. Use this when you want a specific model to reason about the approach first." aria-label="Task plan model help">?</button>
+            <sl-icon-button class="help-btn" type="button" title="Model used for planning steps before implementation. Use this when you want a specific model to reason about the approach first." aria-label="Task plan model help" name="question-circle"></sl-icon-button>
           </div>
           <input type="text" id="taskPlanModel" class="model-search" placeholder="Type model name..." list="taskPlanModel-suggestions" x-model="query" @focus="refreshSuggestions()" @input="refreshSuggestions()" @blur="commit()">
           <datalist id="taskPlanModel-suggestions">
@@ -339,7 +444,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
         <div class="form-group" x-data="modelPicker('taskExecModel')" x-init="attach()">
           <div class="label-row">
             <label for="taskExecModel">Execution Model</label>
-            <button class="help-btn" type="button" title="Model used for the actual implementation work. Set this when execution should run on a different model than planning." aria-label="Task execution model help">?</button>
+            <sl-icon-button class="help-btn" type="button" title="Model used for the actual implementation work. Set this when execution should run on a different model than planning." aria-label="Task execution model help" name="question-circle"></sl-icon-button>
           </div>
           <input type="text" id="taskExecModel" class="model-search" placeholder="Type model name..." list="taskExecModel-suggestions" x-model="query" @focus="refreshSuggestions()" @input="refreshSuggestions()" @blur="commit()">
           <datalist id="taskExecModel-suggestions">
@@ -352,24 +457,24 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
       <div class="form-group">
         <div class="label-row">
           <label for="taskThinkingLevel">Thinking Level</label>
-          <button class="help-btn" type="button" title="Controls how much reasoning effort the agent should spend. Higher levels can improve harder tasks but usually take longer." aria-label="Task thinking level help">?</button>
+          <sl-icon-button class="help-btn" type="button" title="Controls how much reasoning effort the agent should spend. Higher levels can improve harder tasks but usually take longer." aria-label="Task thinking level help" name="question-circle"></sl-icon-button>
         </div>
-        <select id="taskThinkingLevel">
-          <option value="default">Default</option>
-          <option value="low">Low</option>
-          <option value="medium">Medium</option>
-          <option value="high">High</option>
-        </select>
+        <sl-select id="taskThinkingLevel">
+          <sl-option value="default">Default</sl-option>
+          <sl-option value="low">Low</sl-option>
+          <sl-option value="medium">Medium</sl-option>
+          <sl-option value="high">High</sl-option>
+        </sl-select>
       </div>
       <div class="form-group">
         <div class="label-row">
           <label for="taskExecutionStrategy">Execution Strategy</label>
-          <button class="help-btn" type="button" title="Standard runs a single execution. Best of N runs multiple candidates in parallel and picks or synthesizes the best result." aria-label="Execution strategy help">?</button>
+          <sl-icon-button class="help-btn" type="button" title="Standard runs a single execution. Best of N runs multiple candidates in parallel and picks or synthesizes the best result." aria-label="Execution strategy help" name="question-circle"></sl-icon-button>
         </div>
-        <select id="taskExecutionStrategy">
-          <option value="standard">Standard</option>
-          <option value="best_of_n">Best of N</option>
-        </select>
+        <sl-select id="taskExecutionStrategy">
+          <sl-option value="standard">Standard</sl-option>
+          <sl-option value="best_of_n">Best of N</sl-option>
+        </sl-select>
       </div>
       <div class="bon-config-section" id="bonConfigSection" style="display:none;">
         <h4>Best of N Configuration</h4>
@@ -407,7 +512,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
           <div class="label-row">
             <label for="bonFinalApplierSuffix">Final Applier Suffix (optional)</label>
           </div>
-          <textarea id="bonFinalApplierSuffix" placeholder="Additional instructions for the final applier..."></textarea>
+          <sl-textarea id="bonFinalApplierSuffix" placeholder="Additional instructions for the final applier..."></sl-textarea>
         </div>
         
         <div class="form-row">
@@ -415,17 +520,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
             <div class="label-row">
               <label for="bonSelectionMode">Selection Mode</label>
             </div>
-            <select id="bonSelectionMode">
-              <option value="pick_best">Pick Best</option>
-              <option value="synthesize">Synthesize</option>
-              <option value="pick_or_synthesize">Pick or Synthesize</option>
-            </select>
+            <sl-select id="bonSelectionMode">
+              <sl-option value="pick_best">Pick Best</sl-option>
+              <sl-option value="synthesize">Synthesize</sl-option>
+              <sl-option value="pick_or_synthesize">Pick or Synthesize</sl-option>
+            </sl-select>
           </div>
           <div class="form-group">
             <div class="label-row">
               <label for="bonMinSuccessful">Min Successful Workers</label>
             </div>
-            <input type="number" id="bonMinSuccessful" min="1" max="8" value="1">
+            <sl-input type="number" id="bonMinSuccessful" min="1" max="8" value="1"></sl-input>
           </div>
         </div>
         
@@ -433,35 +538,35 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
           <div class="label-row">
             <label for="bonVerificationCmd">Verification Command (optional)</label>
           </div>
-          <input type="text" id="bonVerificationCmd" placeholder="e.g. npm test">
+          <sl-input type="text" id="bonVerificationCmd" placeholder="e.g. npm test"></sl-input>
         </div>
       </div>
       <div class="form-group">
         <div class="label-row">
           <label for="taskBranch">Branch</label>
-          <button class="help-btn" type="button" title="Git branch the task should run against. Pick the branch where changes should be created or reviewed." aria-label="Task branch help">?</button>
+          <sl-icon-button class="help-btn" type="button" title="Git branch the task should run against. Pick the branch where changes should be created or reviewed." aria-label="Task branch help" name="question-circle"></sl-icon-button>
         </div>
-        <select id="taskBranch"></select>
+        <sl-select id="taskBranch"></sl-select>
       </div>
       <div class="form-group">
         <div class="checkbox-group">
-          <label title="Create a plan first and wait for approval before full execution continues."><input type="checkbox" id="taskPlanmode"> Plan Mode</label>
-          <label title="Run an automated review pass after execution so the task can be checked before completion."><input type="checkbox" id="taskReview" checked> Review</label>
-          <label title="Allow the workflow to create a git commit automatically when the task finishes successfully."><input type="checkbox" id="taskAutoCommit" checked> Auto-commit</label>
-          <label title="Remove the temporary worktree after the task finishes. Disable this if you want to inspect files afterward."><input type="checkbox" id="taskDeleteWorktree" checked> Delete Worktree</label>
+          <label title="Create a plan first and wait for approval before full execution continues."><sl-checkbox id="taskPlanmode"> Plan Mode</sl-checkbox></label>
+          <label title="Run an automated review pass after execution so the task can be checked before completion."><sl-checkbox id="taskReview" checked> Review</sl-checkbox></label>
+          <label title="Allow the workflow to create a git commit automatically when the task finishes successfully."><sl-checkbox id="taskAutoCommit" checked> Auto-commit</sl-checkbox></label>
+          <label title="Remove the temporary worktree after the task finishes. Disable this if you want to inspect files afterward."><sl-checkbox id="taskDeleteWorktree" checked> Delete Worktree</sl-checkbox></label>
         </div>
       </div>
       <div class="form-group">
         <div class="label-row">
           <label for="taskReqs">Requirements (dependencies)</label>
-          <button class="help-btn" type="button" title="Tasks that must be completed before this one should run. Use dependencies to enforce execution order." aria-label="Task requirements help">?</button>
+          <sl-icon-button class="help-btn" type="button" title="Tasks that must be completed before this one should run. Use dependencies to enforce execution order." aria-label="Task requirements help" name="question-circle"></sl-icon-button>
         </div>
         <div class="req-list" id="taskReqs"></div>
       </div>
     </div>
     <div class="modal-footer">
-      <button class="btn" onclick="closeTaskModal()">Cancel</button>
-      <button class="btn btn-primary" id="taskSaveBtn" onclick="saveTask()">Save</button>
+      <sl-button onclick="closeTaskModal()">Cancel</sl-button>
+      <sl-button variant="success" id="taskSaveBtn" onclick="saveTask()">Save</sl-button>
     </div>
   </div>
 </div>
@@ -471,21 +576,21 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
   <div class="modal">
     <div class="modal-header">
       <h2>Options</h2>
-      <button class="modal-close" onclick="closeOptionsModal()">&times;</button>
+      <sl-icon-button class="modal-close" onclick="closeOptionsModal()" name="x"></sl-icon-button>
     </div>
     <div class="modal-body">
       <div class="form-group">
         <div class="label-row">
           <label for="optBranch">Default Branch</label>
-          <button class="help-btn" type="button" title="Default git branch for new tasks when a task-specific branch is not selected." aria-label="Default branch help">?</button>
+          <sl-icon-button class="help-btn" type="button" title="Default git branch for new tasks when a task-specific branch is not selected." aria-label="Default branch help" name="question-circle"></sl-icon-button>
         </div>
-        <select id="optBranch"></select>
+        <sl-select id="optBranch"></sl-select>
       </div>
       <div class="form-row">
         <div class="form-group" x-data="modelPicker('optPlanModel')" x-init="attach()">
           <div class="label-row">
             <label for="optPlanModel">Plan Model (global)</label>
-            <button class="help-btn" type="button" title="Default planning model for new tasks. Individual tasks can override this value." aria-label="Global plan model help">?</button>
+            <sl-icon-button class="help-btn" type="button" title="Default planning model for new tasks. Individual tasks can override this value." aria-label="Global plan model help" name="question-circle"></sl-icon-button>
           </div>
           <input type="text" id="optPlanModel" class="model-search" placeholder="Type model name..." list="optPlanModel-suggestions" x-model="query" @focus="refreshSuggestions()" @input="refreshSuggestions()" @blur="commit()">
           <datalist id="optPlanModel-suggestions">
@@ -497,7 +602,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
         <div class="form-group" x-data="modelPicker('optExecModel')" x-init="attach()">
           <div class="label-row">
             <label for="optExecModel">Execution Model (global)</label>
-            <button class="help-btn" type="button" title="Default execution model for new tasks. Individual tasks can override this value." aria-label="Global execution model help">?</button>
+            <sl-icon-button class="help-btn" type="button" title="Default execution model for new tasks. Individual tasks can override this value." aria-label="Global execution model help" name="question-circle"></sl-icon-button>
           </div>
           <input type="text" id="optExecModel" class="model-search" placeholder="Type model name..." list="optExecModel-suggestions" x-model="query" @focus="refreshSuggestions()" @input="refreshSuggestions()" @blur="commit()">
           <datalist id="optExecModel-suggestions">
@@ -510,7 +615,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
       <div class="form-group" x-data="modelPicker('optReviewModel')" x-init="attach()">
         <div class="label-row">
           <label for="optReviewModel">Review Model</label>
-          <button class="help-btn" type="button" title="Model used by the workflow-review agent. Saving this writes the selected model into .opencode/agents/workflow-review.md." aria-label="Review model help">?</button>
+          <sl-icon-button class="help-btn" type="button" title="Model used by the workflow-review agent. Saving this writes the selected model into .opencode/agents/workflow-review.md." aria-label="Review model help" name="question-circle"></sl-icon-button>
         </div>
         <input type="text" id="optReviewModel" class="model-search" placeholder="Type model name..." list="optReviewModel-suggestions" x-model="query" @focus="refreshSuggestions()" @input="refreshSuggestions()" @blur="commit()">
         <datalist id="optReviewModel-suggestions">
@@ -522,50 +627,50 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
       <div class="form-group">
         <div class="label-row">
           <label for="optThinkingLevel">Thinking Level (global default)</label>
-          <button class="help-btn" type="button" title="Default reasoning effort for new tasks. Higher levels are better for harder work but can be slower." aria-label="Global thinking level help">?</button>
+          <sl-icon-button class="help-btn" type="button" title="Default reasoning effort for new tasks. Higher levels are better for harder work but can be slower." aria-label="Global thinking level help" name="question-circle"></sl-icon-button>
         </div>
-        <select id="optThinkingLevel">
-          <option value="default">Default</option>
-          <option value="low">Low</option>
-          <option value="medium">Medium</option>
-          <option value="high">High</option>
-        </select>
+        <sl-select id="optThinkingLevel">
+          <sl-option value="default">Default</sl-option>
+          <sl-option value="low">Low</sl-option>
+          <sl-option value="medium">Medium</sl-option>
+          <sl-option value="high">High</sl-option>
+        </sl-select>
       </div>
       <div class="form-group">
         <div class="label-row">
           <label for="optCommand">Pre-execution Command</label>
-          <button class="help-btn" type="button" title="Command to run before task execution begins, such as installing dependencies or preparing the workspace." aria-label="Pre-execution command help">?</button>
+          <sl-icon-button class="help-btn" type="button" title="Command to run before task execution begins, such as installing dependencies or preparing the workspace." aria-label="Pre-execution command help" name="question-circle"></sl-icon-button>
         </div>
-        <input type="text" id="optCommand" placeholder="e.g. npm install">
+        <sl-input type="text" id="optCommand" placeholder="e.g. npm install"></sl-input>
       </div>
       <div class="form-group">
         <div class="label-row">
           <label for="optParallel">Parallel Tasks</label>
-          <button class="help-btn" type="button" title="Maximum number of tasks the workflow should execute at the same time." aria-label="Parallel tasks help">?</button>
+          <sl-icon-button class="help-btn" type="button" title="Maximum number of tasks the workflow should execute at the same time." aria-label="Parallel tasks help" name="question-circle"></sl-icon-button>
         </div>
-        <input type="number" id="optParallel" min="1" max="10" value="1">
+        <sl-input type="number" id="optParallel" min="1" max="10" value="1"></sl-input>
       </div>
       <div class="form-group">
         <div class="label-row">
           <label>Session Cleanup (global)</label>
-          <button class="help-btn" type="button" title="Automatically delete OpenCode sessions after task/review runs finish. Enable only if you do not need session history for debugging." aria-label="Session cleanup help">?</button>
+          <sl-icon-button class="help-btn" type="button" title="Automatically delete OpenCode sessions after task/review runs finish. Enable only if you do not need session history for debugging." aria-label="Session cleanup help" name="question-circle"></sl-icon-button>
         </div>
         <div class="checkbox-group">
-          <label title="Delete normal execution sessions for tasks, worker runs, and final applier runs after they finish."><input type="checkbox" id="optAutoDeleteNormalSessions"> Auto-delete normal sessions</label>
-          <label title="Delete review sessions after each review pass (review loop + best-of-n reviewers)."><input type="checkbox" id="optAutoDeleteReviewSessions"> Auto-delete review sessions</label>
+          <label title="Delete normal execution sessions for tasks, worker runs, and final applier runs after they finish."><sl-checkbox id="optAutoDeleteNormalSessions"> Auto-delete normal sessions</sl-checkbox></label>
+          <label title="Delete review sessions after each review pass (review loop + best-of-n reviewers)."><sl-checkbox id="optAutoDeleteReviewSessions"> Auto-delete review sessions</sl-checkbox></label>
         </div>
       </div>
       <div class="form-group">
         <div class="label-row">
           <label for="optCommitPrompt">Commit Prompt <span style="font-weight:normal;color:var(--text-dim)">({{base_ref}} will be replaced at runtime)</span></label>
-          <button class="help-btn" type="button" title="Instructions used when the workflow asks the agent to prepare a git commit. Use {{base_ref}} anywhere you want the current base branch inserted automatically." aria-label="Commit prompt help">?</button>
+          <sl-icon-button class="help-btn" type="button" title="Instructions used when the workflow asks the agent to prepare a git commit. Use {{base_ref}} anywhere you want the current base branch inserted automatically." aria-label="Commit prompt help" name="question-circle"></sl-icon-button>
         </div>
-        <textarea id="optCommitPrompt" style="min-height:300px;font-family:monospace;font-size:12px" placeholder="Instructions for committing changes..."></textarea>
+        <sl-textarea id="optCommitPrompt" style="min-height:300px;font-family:monospace;font-size:12px" placeholder="Instructions for committing changes..."></sl-textarea>
       </div>
     </div>
     <div class="modal-footer">
-      <button class="btn" onclick="closeOptionsModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="saveOptions()">Save</button>
+      <sl-button onclick="closeOptionsModal()">Cancel</sl-button>
+      <sl-button variant="success" onclick="saveOptions()">Save</sl-button>
     </div>
   </div>
 </div>
@@ -575,14 +680,14 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
   <div class="modal" style="width:600px;">
     <div class="modal-header">
       <h2>Execution Graph Preview</h2>
-      <button class="modal-close" onclick="closeGraphModal()">&times;</button>
+      <sl-icon-button class="modal-close" onclick="closeGraphModal()" name="x"></sl-icon-button>
     </div>
     <div class="modal-body" id="graphModalBody">
       <div id="graphContent"></div>
     </div>
     <div class="modal-footer">
-      <button class="btn" onclick="closeGraphModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="confirmExecution()">Confirm &amp; Start</button>
+      <sl-button onclick="closeGraphModal()">Cancel</sl-button>
+      <sl-button variant="success" onclick="confirmExecution()">Confirm &amp; Start</sl-button>
     </div>
   </div>
 </div>
@@ -591,16 +696,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
   <div class="modal" style="width:440px;">
     <div class="modal-header">
       <h2 id="approveModalTitle">Approve Plan</h2>
-      <button class="modal-close" onclick="closeApproveModal()">&times;</button>
+      <sl-icon-button class="modal-close" onclick="closeApproveModal()" name="x"></sl-icon-button>
     </div>
     <div class="modal-body">
       <div id="approveModalTaskName" style="margin-bottom:12px;font-size:14px;color:var(--text);"></div>
       <label for="approveMessage" style="display:block;margin-bottom:6px;font-size:13px;color:var(--text-dim);">Message to agent (optional)</label>
-      <textarea id="approveMessage" rows="3" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;resize:vertical;box-sizing:border-box;" placeholder="Add guidance or feedback for the agent..."></textarea>
+      <sl-textarea id="approveMessage" rows="3" placeholder="Add guidance or feedback for the agent..."></sl-textarea>
     </div>
     <div class="modal-footer">
-      <button class="btn" onclick="closeApproveModal()">Cancel</button>
-      <button class="btn btn-primary" id="approveConfirmBtn" onclick="confirmApprovePlan()">Approve and Run</button>
+      <sl-button onclick="closeApproveModal()">Cancel</sl-button>
+      <sl-button variant="success" id="approveConfirmBtn" onclick="confirmApprovePlan()">Approve and Run</sl-button>
     </div>
   </div>
 </div>
@@ -609,16 +714,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
   <div class="modal" style="width:440px;">
     <div class="modal-header">
       <h2>Request Plan Changes</h2>
-      <button class="modal-close" onclick="closeRevisionModal()">&times;</button>
+      <sl-icon-button class="modal-close" onclick="closeRevisionModal()" name="x"></sl-icon-button>
     </div>
     <div class="modal-body">
       <div id="revisionModalTaskName" style="margin-bottom:12px;font-size:14px;color:var(--text);"></div>
       <label for="revisionFeedback" style="display:block;margin-bottom:6px;font-size:13px;color:var(--text-dim);">What should be changed?</label>
-      <textarea id="revisionFeedback" rows="4" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;resize:vertical;box-sizing:border-box;" placeholder="Describe the changes you want in the plan..."></textarea>
+      <sl-textarea id="revisionFeedback" rows="4" placeholder="Describe the changes you want in the plan..."></sl-textarea>
     </div>
     <div class="modal-footer">
-      <button class="btn" onclick="closeRevisionModal()">Cancel</button>
-      <button class="btn btn-primary" style="background:var(--orange);border-color:var(--orange);" onclick="confirmRequestRevision()">Send Feedback</button>
+      <sl-button onclick="closeRevisionModal()">Cancel</sl-button>
+      <sl-button variant="warning" onclick="confirmRequestRevision()">Send Feedback</sl-button>
     </div>
   </div>
 </div>
@@ -627,15 +732,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
   <div class="modal" style="width:440px;">
     <div class="modal-header">
       <h2>Start Single Task</h2>
-      <button class="modal-close" onclick="closeStartSingleModal()">&times;</button>
+      <sl-icon-button class="modal-close" onclick="closeStartSingleModal()" name="x"></sl-icon-button>
     </div>
     <div class="modal-body">
       <div id="startSingleTaskName" style="margin-bottom:12px;font-size:14px;color:var(--text);"></div>
       <div id="startSingleDeps" style="font-size:13px;color:var(--text-dim);"></div>
     </div>
     <div class="modal-footer">
-      <button class="btn" onclick="closeStartSingleModal()">Cancel</button>
-      <button class="btn btn-primary" id="startSingleConfirmBtn" onclick="confirmStartSingle()">Start Task</button>
+      <sl-button onclick="closeStartSingleModal()">Cancel</sl-button>
+      <sl-button variant="success" id="startSingleConfirmBtn" onclick="confirmStartSingle()">Start Task</sl-button>
     </div>
   </div>
 </div>
@@ -643,7 +748,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 <div class="log-panel">
   <div class="log-header">
     <span>Event Log</span>
-    <button class="btn btn-sm" onclick="clearLogs()">Clear</button>
+    <sl-button size="small" onclick="clearLogs()">Clear</sl-button>
   </div>
   <div class="log-body" id="eventLog"></div>
 </div>
@@ -1110,7 +1215,7 @@ function connectWS() {
 function updateStartBtn() {
   const btn = document.getElementById('startBtn')
   btn.textContent = isExecuting ? 'Stop' : 'Start'
-  btn.className = isExecuting ? 'btn btn-primary running' : 'btn btn-primary'
+  btn.variant = isExecuting ? 'danger' : 'success'
 }
 
 function isTaskMutationLocked(task) {
@@ -2268,13 +2373,13 @@ async function openBestOfNDetailModal(taskId) {
       <div class="modal" style="width:700px;max-height:85vh;">
         <div class="modal-header">
           <h2>Best-of-N Details</h2>
-          <button class="modal-close" onclick="closeBonDetailModal()">&times;</button>
+          <sl-icon-button class="modal-close" onclick="closeBonDetailModal()" name="x"></sl-icon-button>
         </div>
         <div class="modal-body" id="bonDetailBody">
           <div id="bonDetailContent"></div>
         </div>
         <div class="modal-footer">
-          <button class="btn" onclick="closeBonDetailModal()">Close</button>
+          <sl-button onclick="closeBonDetailModal()">Close</sl-button>
         </div>
       </div>
     `
