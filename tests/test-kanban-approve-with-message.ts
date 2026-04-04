@@ -39,6 +39,7 @@ async function testApprovePlanWithMessage() {
   let broadcastMessages: any[] = []
   const server = new KanbanServer(db, {
     onStart: async () => {},
+    onStartSingle: async () => {},
     onStop: () => {},
     getExecuting: () => false,
     getStartError: () => null,
@@ -116,6 +117,7 @@ async function testApprovePlanWithoutMessage() {
   let broadcastMessages: any[] = []
   const server = new KanbanServer(db, {
     onStart: async () => {},
+    onStartSingle: async () => {},
     onStop: () => {},
     getExecuting: () => false,
     getStartError: () => null,
@@ -181,6 +183,7 @@ async function testApprovePlanWithEmptyMessage() {
 
   const server = new KanbanServer(db, {
     onStart: async () => {},
+    onStartSingle: async () => {},
     onStop: () => {},
     getExecuting: () => false,
     getStartError: () => null,
@@ -244,6 +247,7 @@ async function testApprovePlanWithExistingApprovalNote() {
 
   const server = new KanbanServer(db, {
     onStart: async () => {},
+    onStartSingle: async () => {},
     onStop: () => {},
     getExecuting: () => false,
     getStartError: () => null,
@@ -285,11 +289,129 @@ async function testApprovePlanWithExistingApprovalNote() {
   }
 }
 
+async function testApprovePlanRejectsNonPlanOutput() {
+  const tempDir = mkdtempSync(join(tmpdir(), "easy-workflow-approve-invalid-output-"))
+  const dbPath = join(tempDir, "tasks.db")
+  const db = new KanbanDB(dbPath)
+  const portProbe = Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response("ok")
+    },
+  })
+  const port = portProbe.port
+  portProbe.stop()
+  db.updateOptions({ port })
+
+  const server = new KanbanServer(db, {
+    onStart: async () => {},
+    onStartSingle: async () => {},
+    onStop: () => {},
+    getExecuting: () => false,
+    getStartError: () => null,
+    getServerUrl: () => `http://127.0.0.1:${port}`,
+  })
+
+  server.start()
+
+  try {
+    const planTask = db.createTask({
+      name: "Invalid Plan Output Task",
+      prompt: "Test prompt",
+      planmode: true,
+      review: false,
+      autoCommit: false,
+      status: "review",
+      executionPhase: "plan_complete_waiting_approval",
+      awaitingPlanApproval: true,
+    })
+    db.updateTask(planTask.id, { agentOutput: "This is output, but not a captured plan" })
+
+    const approveResp = await fetch(`http://127.0.0.1:${port}/api/tasks/${planTask.id}/approve-plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    })
+
+    assert(approveResp.status === 400, `Expected approve-plan to fail with 400, got ${approveResp.status}`)
+    const text = await approveResp.text()
+    assert(text.includes("captured plan output"), `Expected captured plan error, got ${text}`)
+
+    console.log("✓ approve-plan rejects review tasks without a captured [plan] block")
+  } finally {
+    server.stop()
+    db.close()
+    cleanupTempDir(tempDir)
+  }
+}
+
+async function testRepairStateQueuesImplementation() {
+  const tempDir = mkdtempSync(join(tmpdir(), "easy-workflow-repair-queue-"))
+  const dbPath = join(tempDir, "tasks.db")
+  const db = new KanbanDB(dbPath)
+  const portProbe = Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response("ok")
+    },
+  })
+  const port = portProbe.port
+  portProbe.stop()
+  db.updateOptions({ port })
+
+  let startCalls = 0
+  const server = new KanbanServer(db, {
+    onStart: async () => { startCalls++ },
+    onStartSingle: async () => {},
+    onStop: () => {},
+    getExecuting: () => false,
+    getStartError: () => null,
+    getServerUrl: () => `http://127.0.0.1:${port}`,
+  })
+
+  server.start()
+
+  try {
+    const task = db.createTask({
+      name: "Repairable plan task",
+      prompt: "Test prompt",
+      planmode: true,
+      review: true,
+      autoCommit: false,
+      status: "review",
+      executionPhase: "plan_complete_waiting_approval",
+      awaitingPlanApproval: true,
+    })
+    db.updateTask(task.id, { agentOutput: "[plan] A valid captured plan\n" })
+
+    const repairResp = await fetch(`http://127.0.0.1:${port}/api/tasks/${task.id}/repair-state`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "queue_implementation" }),
+    })
+
+    assert(repairResp.ok, `Expected repair-state to succeed, got ${repairResp.status}`)
+    const updated = db.getTask(task.id)!
+    assert(updated.status === "backlog", `Expected backlog status, got ${updated.status}`)
+    assert(updated.executionPhase === "implementation_pending", `Expected implementation_pending phase, got ${updated.executionPhase}`)
+    assert(updated.awaitingPlanApproval === false, "Expected awaitingPlanApproval to be false")
+    assert(startCalls === 1, `Expected repair-state to auto-start execution once, got ${startCalls}`)
+
+    console.log("✓ repair-state can send a stranded plan task back to execution")
+  } finally {
+    server.stop()
+    db.close()
+    cleanupTempDir(tempDir)
+  }
+}
+
 async function main() {
   await testApprovePlanWithMessage()
   await testApprovePlanWithoutMessage()
   await testApprovePlanWithEmptyMessage()
   await testApprovePlanWithExistingApprovalNote()
+  await testApprovePlanRejectsNonPlanOutput()
+  await testRepairStateQueuesImplementation()
   console.log("\nAll approval message tests passed")
 }
 

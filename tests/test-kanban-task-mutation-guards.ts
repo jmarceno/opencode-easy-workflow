@@ -39,6 +39,7 @@ async function createServerWithExecutionLock() {
 
   const server = new KanbanServer(db, {
     onStart: async () => {},
+    onStartSingle: async () => {},
     onStop: () => {},
     getExecuting: () => true,
     getStartError: () => null,

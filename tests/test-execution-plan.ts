@@ -3,7 +3,7 @@
  * Unit tests for execution-plan.ts
  */
 
-import { getExecutableTasks, resolveBatches, buildExecutionGraph } from "../.opencode/easy-workflow/execution-plan"
+import { getExecutableTasks, isTaskExecutable, resolveBatches, buildExecutionGraph } from "../.opencode/easy-workflow/execution-plan"
 import type { Task } from "../.opencode/easy-workflow/types"
 
 function makeTask(overrides: Partial<Task> & { id: string; name: string }): Task {
@@ -71,6 +71,51 @@ test("getExecutableTasks includes implementation_pending tasks", () => {
   assertEq(result.length, 1)
 })
 
+test("getExecutableTasks excludes tasks blocked by dependency awaiting plan approval", () => {
+  const tasks = [
+    makeTask({
+      id: "1",
+      name: "Plan Task",
+      status: "review",
+      executionPhase: "plan_complete_waiting_approval",
+      awaitingPlanApproval: true,
+    }),
+    makeTask({
+      id: "2",
+      name: "Dependent Task",
+      status: "backlog",
+      executionPhase: "pending",
+      requirements: ["1"],
+    }),
+  ]
+  const result = getExecutableTasks(tasks)
+  assertEq(result.length, 0)
+})
+
+test("isTaskExecutable excludes implementation_pending tasks without a captured plan", () => {
+  const task = makeTask({
+    id: "1",
+    name: "Broken plan task",
+    planmode: true,
+    status: "backlog",
+    executionPhase: "implementation_pending",
+    agentOutput: "Some unrelated output",
+  })
+  assertEq(isTaskExecutable(task), false)
+})
+
+test("isTaskExecutable excludes revision_pending tasks without a captured revision request", () => {
+  const task = makeTask({
+    id: "1",
+    name: "Broken revision task",
+    planmode: true,
+    status: "backlog",
+    executionPhase: "plan_revision_pending",
+    agentOutput: "[plan] A captured plan\n",
+  })
+  assertEq(isTaskExecutable(task), false)
+})
+
 test("resolveBatches handles no dependencies", () => {
   const tasks = [
     makeTask({ id: "1", name: "Task 1" }),
@@ -123,13 +168,12 @@ test("buildExecutionGraph returns correct structure", () => {
     makeTask({ id: "2", name: "Task 2", requirements: ["1"] }),
   ]
   const graph = buildExecutionGraph(tasks, 2)
-  assertEq(graph.totalTasks, 2)
+  assertEq(graph.totalTasks, 1)
   assertEq(graph.parallelLimit, 2)
-  assertEq(graph.batches.length, 2)
-  assertEq(graph.nodes.length, 2)
-  assertEq(graph.edges.length, 1)
-  assertEq(graph.edges[0].from, "1")
-  assertEq(graph.edges[0].to, "2")
+  assertEq(graph.batches.length, 1)
+  assertEq(graph.nodes.length, 1)
+  assertEq(graph.edges.length, 0)
+  assertEq(graph.nodes[0].id, "1")
 })
 
 console.log("\n=== All Tests Passed ===")

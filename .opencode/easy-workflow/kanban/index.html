@@ -1079,15 +1079,32 @@ function isTaskMutationLocked(task) {
 }
 
 function hasPlanOutput(task) {
-  return !!(task.agentOutput && task.agentOutput.trim())
+  return /\[plan\]\s*[\s\S]*?(?=\n\[[a-z0-9-]+\]|$)/.test(task.agentOutput || '')
 }
 
 function isAnomalousReviewTask(task) {
   return task.status === 'review'
     && task.awaitingPlanApproval !== true
-    && task.planmode !== true
     && task.executionStrategy !== 'best_of_n'
+    && !!(task.agentOutput && task.agentOutput.trim())
+}
+
+function isOrphanExecutingTask(task) {
+  return !isExecuting && task.status === 'executing'
+}
+
+function canSendTaskToExecution(task) {
+  return task.planmode === true
     && hasPlanOutput(task)
+    && task.executionPhase !== 'implementation_done'
+    && (task.status === 'review' || task.status === 'executing' || task.status === 'failed' || task.status === 'stuck')
+}
+
+function canRepairTaskToDone(task) {
+  return task.status !== 'done'
+    && task.executionStrategy !== 'best_of_n'
+    && task.awaitingPlanApproval !== true
+    && !!(task.agentOutput && task.agentOutput.trim())
 }
 
 // ---- Rendering ----
@@ -1224,7 +1241,7 @@ function renderCard(task, colStatus) {
   }
 
   // Approve Plan button for tasks awaiting approval
-  if (!isTaskMutationLocked(task) && task.status === 'review' && task.awaitingPlanApproval && hasPlanOutput(task)) {
+  if (!isTaskMutationLocked(task) && task.status === 'review' && task.awaitingPlanApproval && task.executionPhase === 'plan_complete_waiting_approval' && hasPlanOutput(task)) {
     const approveBtn = document.createElement('button')
     approveBtn.className = 'action-text'
     approveBtn.textContent = 'Approve Plan'
@@ -1253,6 +1270,39 @@ function renderCard(task, colStatus) {
     actions.appendChild(doneBtn)
   }
 
+  if (!isTaskMutationLocked(task) && canSendTaskToExecution(task)) {
+    const resumeBtn = document.createElement('button')
+    resumeBtn.className = 'action-text'
+    resumeBtn.textContent = 'Send to Exec'
+    resumeBtn.title = 'Queue task back into execution'
+    resumeBtn.style.borderColor = 'var(--green)'
+    resumeBtn.style.color = 'var(--green)'
+    resumeBtn.onclick = () => repairTaskState(task.id, 'queue_implementation')
+    actions.appendChild(resumeBtn)
+  }
+
+  if (!isTaskMutationLocked(task) && canRepairTaskToDone(task) && task.status !== 'stuck') {
+    const doneRepairBtn = document.createElement('button')
+    doneRepairBtn.className = 'action-text'
+    doneRepairBtn.textContent = 'Repair Done'
+    doneRepairBtn.title = 'Repair task by marking it done'
+    doneRepairBtn.style.borderColor = 'var(--green)'
+    doneRepairBtn.style.color = 'var(--green)'
+    doneRepairBtn.onclick = () => repairTaskState(task.id, 'mark_done')
+    actions.appendChild(doneRepairBtn)
+  }
+
+  if (!isTaskMutationLocked(task) && ['review', 'executing', 'failed', 'stuck'].includes(task.status)) {
+    const smartRepairBtn = document.createElement('button')
+    smartRepairBtn.className = 'action-text'
+    smartRepairBtn.textContent = 'Smart Repair'
+    smartRepairBtn.title = 'Let the system choose the safest repair action'
+    smartRepairBtn.style.borderColor = 'var(--purple)'
+    smartRepairBtn.style.color = 'var(--purple)'
+    smartRepairBtn.onclick = () => repairTaskState(task.id, 'smart')
+    actions.appendChild(smartRepairBtn)
+  }
+
   // Start single task button for backlog tasks
   if (task.status === 'backlog' && !isExecuting) {
     const startBtn = document.createElement('button')
@@ -1275,7 +1325,7 @@ function renderCard(task, colStatus) {
     b.textContent = 'plan'
     meta.appendChild(b)
   }
-  if (task.status === 'review' && task.awaitingPlanApproval) {
+  if (task.status === 'review' && task.awaitingPlanApproval && task.executionPhase === 'plan_complete_waiting_approval') {
     const b = document.createElement('span')
     b.className = 'badge badge-approval'
     b.textContent = 'plan approval pending'
@@ -1391,18 +1441,25 @@ function renderCard(task, colStatus) {
   }
   if (meta.children.length > 0) card.appendChild(meta)
 
-  if (task.status === 'review' && task.awaitingPlanApproval && !hasPlanOutput(task)) {
+  if (task.status === 'review' && task.awaitingPlanApproval && task.executionPhase === 'plan_complete_waiting_approval' && !hasPlanOutput(task)) {
     const note = document.createElement('div')
     note.className = 'card-note'
-    note.textContent = 'Plan approval is unavailable because no plan output was captured. Reset the task to retry planning.'
+    note.textContent = 'Plan approval is unavailable because no captured [plan] block exists. Use Smart Repair or Reset.'
     card.appendChild(note)
   }
 
-  if (!isTaskMutationLocked(task) && (task.status === 'review' || task.status === 'failed' || task.status === 'stuck')) {
+  if (isOrphanExecutingTask(task)) {
+    const note = document.createElement('div')
+    note.className = 'card-note'
+    note.textContent = 'Execution is not currently running. Use Send to Exec, Repair Done, Smart Repair, or Reset.'
+    card.appendChild(note)
+  }
+
+  if (!isTaskMutationLocked(task) && (task.status === 'review' || task.status === 'executing' || task.status === 'failed' || task.status === 'stuck')) {
     const actionBar = document.createElement('div')
     actionBar.className = 'card-inline-actions'
 
-    if (task.status === 'review' && task.awaitingPlanApproval && hasPlanOutput(task)) {
+    if (task.status === 'review' && task.awaitingPlanApproval && task.executionPhase === 'plan_complete_waiting_approval' && hasPlanOutput(task)) {
       const approvePlanBtn = document.createElement('button')
       approvePlanBtn.className = 'btn btn-sm btn-primary'
       approvePlanBtn.textContent = 'Approve Plan'
@@ -1425,6 +1482,28 @@ function renderCard(task, colStatus) {
       doneBtn.onclick = () => markReviewDone(task.id)
       actionBar.appendChild(doneBtn)
     }
+
+    if (canSendTaskToExecution(task)) {
+      const resumeBtn = document.createElement('button')
+      resumeBtn.className = 'btn btn-sm btn-primary'
+      resumeBtn.textContent = 'Send to Execution'
+      resumeBtn.onclick = () => repairTaskState(task.id, 'queue_implementation')
+      actionBar.appendChild(resumeBtn)
+    }
+
+    if (canRepairTaskToDone(task) && task.status !== 'stuck') {
+      const doneRepairBtn = document.createElement('button')
+      doneRepairBtn.className = 'btn btn-sm'
+      doneRepairBtn.textContent = 'Repair Done'
+      doneRepairBtn.onclick = () => repairTaskState(task.id, 'mark_done')
+      actionBar.appendChild(doneRepairBtn)
+    }
+
+    const smartRepairBtn = document.createElement('button')
+    smartRepairBtn.className = 'btn btn-sm'
+    smartRepairBtn.textContent = 'Smart Repair'
+    smartRepairBtn.onclick = () => repairTaskState(task.id, 'smart')
+    actionBar.appendChild(smartRepairBtn)
 
     const resetBtn = document.createElement('button')
     resetBtn.className = 'btn btn-sm'
@@ -1816,6 +1895,17 @@ async function markReviewDone(id) {
     await loadTasks()
     showToast('Task marked as done', 'success')
   } catch (e) { showToast('Failed: ' + e.message, 'error') }
+}
+
+async function repairTaskState(id, action = 'smart') {
+  const verb = action === 'smart' ? 'run Smart Repair on' : `apply ${action} to`
+  if (!confirm(`Repair this task now? This will ${verb} the current task state.`)) return
+  try {
+    const response = await api(`/api/tasks/${id}/repair-state`, 'POST', action === 'smart' ? {} : { action })
+    await loadTasks()
+    const actionLabel = response?.action ? ` (${response.action})` : ''
+    showToast(`Task repaired${actionLabel}`, 'success')
+  } catch (e) { showToast('Repair failed: ' + e.message, 'error') }
 }
 
 async function resetTask(id) {

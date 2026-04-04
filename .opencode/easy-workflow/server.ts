@@ -6,7 +6,8 @@ import { execFileSync } from "child_process"
 import type { WSMessage, ThinkingLevel, ExecutionStrategy, BestOfNConfig, SelectionMode } from "./types"
 import { KanbanDB } from "./db"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
-import { buildExecutionGraph } from "./execution-plan"
+import { buildExecutionGraph, getExecutableTasks, isTaskExecutable } from "./execution-plan"
+import { chooseDeterministicRepairAction, getLatestTaggedOutput, getPlanExecutionEligibility, hasCapturedPlanOutput, isTaskAwaitingPlanApproval, type TaskRepairAction } from "./task-state"
 
 const MAX_EXPANDED_WORKER_RUNS = 8
 const MAX_EXPANDED_REVIEWER_RUNS = 4
@@ -191,11 +192,7 @@ function resolveCatalogModel(rawModel: string, catalog: any, context: string): s
 }
 
 function hasExecutableTasks(db: KanbanDB): boolean {
-  return db.getTasks().some((task) => {
-    const isBacklogTask = task.status === "backlog" && task.executionPhase !== "plan_complete_waiting_approval"
-    const isApprovedPlanTask = task.executionPhase === "implementation_pending"
-    return isBacklogTask || isApprovedPlanTask
-  })
+  return getExecutableTasks(db.getTasks()).length > 0
 }
 
 function getExecutionMutationError(): string {
@@ -253,6 +250,155 @@ export class KanbanServer {
       return 500
     }
     return 400
+  }
+
+  private async maybeAutoStartExecution(): Promise<void> {
+    if (this.getExecuting()) return
+    const preflightError = this.getStartError()
+    if (preflightError) return
+    this.onStart().catch((err) => this.reportExecutionStartFailure(err))
+  }
+
+  private applyRepairAction(taskId: string, action: TaskRepairAction, reason: string, errorMessage?: string) {
+    const task = this.db.getTask(taskId)
+    if (!task) {
+      throw new Error("Task not found")
+    }
+
+    const hasPlan = hasCapturedPlanOutput(task.agentOutput)
+    const eligibility = getPlanExecutionEligibility(task)
+    const now = Math.floor(Date.now() / 1000)
+    const repairNote = `[repair] action=${action} reason=${reason}\n`
+
+    switch (action) {
+      case "queue_implementation": {
+        if (!task.planmode || !hasPlan) {
+          throw new Error("Task cannot be sent to execution because no captured [plan] block exists")
+        }
+        const updated = this.db.updateTask(taskId, {
+          status: "backlog",
+          awaitingPlanApproval: false,
+          executionPhase: task.executionPhase === "plan_revision_pending" ? "plan_revision_pending" : "implementation_pending",
+          errorMessage: null,
+          completedAt: null,
+        })
+        this.db.appendAgentOutput(taskId, repairNote)
+        return updated
+      }
+      case "restore_plan_approval": {
+        if (!task.planmode || !hasPlan) {
+          throw new Error("Task cannot return to plan approval because no captured [plan] block exists")
+        }
+        const updated = this.db.updateTask(taskId, {
+          status: "review",
+          awaitingPlanApproval: true,
+          executionPhase: "plan_complete_waiting_approval",
+          errorMessage: null,
+          completedAt: null,
+        })
+        this.db.appendAgentOutput(taskId, repairNote)
+        return updated
+      }
+      case "mark_done": {
+        const updated = this.db.updateTask(taskId, {
+          status: "done",
+          awaitingPlanApproval: false,
+          executionPhase: task.planmode && hasPlan ? "implementation_done" : task.executionPhase,
+          errorMessage: null,
+          completedAt: now,
+        })
+        this.db.appendAgentOutput(taskId, repairNote)
+        return updated
+      }
+      case "reset_backlog": {
+        const updated = this.db.updateTask(taskId, {
+          status: "backlog",
+          reviewCount: 0,
+          agentOutput: "",
+          errorMessage: null,
+          completedAt: null,
+          sessionId: null,
+          sessionUrl: null,
+          worktreeDir: null,
+          executionPhase: "not_started",
+          awaitingPlanApproval: false,
+          planRevisionCount: 0,
+          bestOfNSubstage: "idle",
+        })
+        return updated
+      }
+      case "fail_task": {
+        const updated = this.db.updateTask(taskId, {
+          status: "failed",
+          awaitingPlanApproval: false,
+          executionPhase: eligibility.ok ? "not_started" : task.executionPhase === "plan_complete_waiting_approval" ? "not_started" : task.executionPhase,
+          errorMessage: errorMessage || reason,
+          completedAt: null,
+        })
+        this.db.appendAgentOutput(taskId, repairNote)
+        return updated
+      }
+      default:
+        throw new Error(`Unsupported repair action: ${String(action)}`)
+    }
+  }
+
+  private async runSmartRepair(taskId: string): Promise<{ action: TaskRepairAction; reason: string; errorMessage?: string }> {
+    const task = this.db.getTask(taskId)
+    if (!task) {
+      throw new Error("Task not found")
+    }
+
+    const serverUrl = this.getServerUrl()
+    if (!serverUrl) {
+      throw new Error("OpenCode server URL is not configured")
+    }
+
+    const options = this.db.getOptions()
+    const client = createV2Client(serverUrl)
+    const prompt = [
+      "You repair workflow task states.",
+      "Choose exactly one action from this list and return JSON only:",
+      "queue_implementation, restore_plan_approval, reset_backlog, mark_done, fail_task",
+      "Prefer queue_implementation when a usable [plan] exists and the task should keep moving.",
+      "Prefer mark_done only when the task output indicates the work is already complete or should be closed manually.",
+      "Use restore_plan_approval only when the task should remain in explicit human plan approval.",
+      "Use reset_backlog when the task should be rerun from scratch.",
+      "Use fail_task when the state is invalid and should stay visible with an actionable error.",
+      "Return strict JSON with keys action, reason, and optional errorMessage.",
+      `Task:\n${JSON.stringify(task, null, 2)}`,
+      `Latest captured plan:\n${getLatestTaggedOutput(task.agentOutput, "plan") || "<none>"}`,
+      `Latest revision request:\n${getLatestTaggedOutput(task.agentOutput, "user-revision-request") || "<none>"}`,
+      `Latest execution output:\n${getLatestTaggedOutput(task.agentOutput, "exec") || "<none>"}`,
+    ].join("\n\n")
+
+    const sessionResponse = await client.session.create({
+      title: `Repair task state: ${task.name}`,
+    })
+    const session = sessionResponse?.data ?? sessionResponse
+    const response = await client.session.prompt({
+      sessionID: session?.id,
+      agent: "build-fast",
+      ...(options.executionModel !== "default" ? { model: options.executionModel } : {}),
+      parts: [{ type: "text", text: prompt }],
+    })
+    const result = response?.data ?? response
+    const text = result?.parts?.find((part: any) => part?.type === "text" && typeof part.text === "string")?.text?.trim() || ""
+    const normalized = text.startsWith("```")
+      ? text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")
+      : text
+    const parsed = JSON.parse(normalized) as { action?: TaskRepairAction; reason?: string; errorMessage?: string }
+    if (!parsed.action || !parsed.reason) {
+      throw new Error("Smart repair returned incomplete output")
+    }
+    if (!["queue_implementation", "restore_plan_approval", "reset_backlog", "mark_done", "fail_task"].includes(parsed.action)) {
+      throw new Error(`Smart repair returned unsupported action: ${parsed.action}`)
+    }
+    return {
+      action: parsed.action,
+      reason: parsed.reason.trim(),
+      errorMessage: typeof parsed.errorMessage === "string" && parsed.errorMessage.trim() ? parsed.errorMessage.trim() : undefined,
+    }
   }
 
   start(): number {
@@ -583,7 +729,7 @@ export class KanbanServer {
             }
           }
 
-          const pendingApprovalTasks = tasks.filter(t => t.status === "review" && t.awaitingPlanApproval)
+          const pendingApprovalTasks = tasks.filter(t => isTaskAwaitingPlanApproval(t))
           graph.pendingApprovals = pendingApprovalTasks.map(t => ({
             id: t.id,
             name: t.name,
@@ -616,10 +762,7 @@ export class KanbanServer {
         if (!task) {
           return this.json({ error: "Task not found" }, 404)
         }
-        const isBacklogTask = task.status === "backlog" && task.executionPhase !== "plan_complete_waiting_approval"
-        const isApprovedPlanTask = task.executionPhase === "implementation_pending"
-        const isRevisionPendingTask = task.executionPhase === "plan_revision_pending"
-        if (!isBacklogTask && !isApprovedPlanTask && !isRevisionPendingTask) {
+        if (!isTaskExecutable(task)) {
           return this.json({ error: "Task is not executable" }, 400)
         }
         const preflightError = this.getStartError(taskId)
@@ -643,13 +786,13 @@ export class KanbanServer {
         if (this.getExecuting()) {
           return this.json({ error: getExecutionMutationError() }, 409)
         }
-        if (!task.agentOutput.trim()) {
+        if (!hasCapturedPlanOutput(task.agentOutput)) {
           return this.json({ error: "Task has no captured plan output to approve. Reset it to backlog and rerun planning." }, 400)
         }
         if (task.planmode && (task.executionPhase === "implementation_pending" || task.executionPhase === "implementation_done")) {
           return this.json({ ok: true, message: "Plan already approved" })
         }
-        if (task.status !== "review" || !task.awaitingPlanApproval) {
+        if (!isTaskAwaitingPlanApproval(task)) {
           return this.json({ error: "Task is not awaiting plan approval" }, 400)
         }
         let approvalNote: string | undefined
@@ -675,12 +818,7 @@ export class KanbanServer {
         })
         const updated = this.db.getTask(taskId)!
         this.broadcast({ type: "task_updated", payload: updated })
-        if (!this.getExecuting()) {
-          const preflightError = this.getStartError()
-          if (!preflightError) {
-            this.onStart().catch((err) => this.reportExecutionStartFailure(err))
-          }
-        }
+        await this.maybeAutoStartExecution()
         return this.json({ ok: true })
       }
 
@@ -697,10 +835,10 @@ export class KanbanServer {
         if (this.getExecuting()) {
           return this.json({ error: getExecutionMutationError() }, 409)
         }
-        if (!task.agentOutput.trim()) {
+        if (!hasCapturedPlanOutput(task.agentOutput)) {
           return this.json({ error: "Task has no captured plan output to revise" }, 400)
         }
-        if (task.status !== "review" || !task.awaitingPlanApproval) {
+        if (!isTaskAwaitingPlanApproval(task)) {
           return this.json({ error: "Task is not awaiting plan approval" }, 400)
         }
         let feedback: string | undefined
@@ -723,17 +861,85 @@ export class KanbanServer {
         this.db.updateTask(taskId, {
           planRevisionCount: (task.planRevisionCount ?? 0) + 1,
           executionPhase: "plan_revision_pending",
+          awaitingPlanApproval: false,
+          status: "backlog",
         })
         const updated = this.db.getTask(taskId)!
         this.broadcast({ type: "plan_revision_requested", payload: updated })
         this.broadcast({ type: "task_updated", payload: updated })
-        if (!this.getExecuting()) {
-          const preflightError = this.getStartError()
-          if (!preflightError) {
-            this.onStart().catch((err) => this.reportExecutionStartFailure(err))
+        await this.maybeAutoStartExecution()
+        return this.json({ ok: true })
+      }
+
+      const repairMatch = method === "POST"
+        ? url.pathname.match(/^\/api\/tasks\/([a-z0-9]+)\/repair-state$/)
+        : null
+      if (repairMatch) {
+        const taskId = repairMatch[1]
+        const task = this.db.getTask(taskId)
+        if (!task) {
+          return this.json({ error: "Task not found" }, 404)
+        }
+        if (this.getExecuting()) {
+          return this.json({ error: getExecutionMutationError() }, 409)
+        }
+
+        let requestedAction: TaskRepairAction | "smart" | undefined
+        try {
+          const body = await req.json()
+          if (body && typeof body.action === "string") {
+            requestedAction = body.action as TaskRepairAction | "smart"
+          }
+        } catch {
+          // action is optional
+        }
+
+        let action: TaskRepairAction
+        let reason: string
+        let errorMessage: string | undefined
+
+        if (!requestedAction || requestedAction === "smart") {
+          const eligibility = getPlanExecutionEligibility(task)
+          if (!eligibility.ok) {
+            action = "fail_task"
+            reason = eligibility.reason || "Task state is invalid"
+            errorMessage = reason
+          } else if (task.status === "review" || task.status === "executing") {
+            try {
+              const smart = await this.runSmartRepair(taskId)
+              action = smart.action
+              reason = smart.reason
+              errorMessage = smart.errorMessage
+            } catch (smartErr) {
+              const fallback = chooseDeterministicRepairAction(task)
+              action = fallback.action
+              reason = `${fallback.reason} Smart repair fallback: ${smartErr instanceof Error ? smartErr.message : String(smartErr)}`
+            }
+          } else {
+            const deterministic = chooseDeterministicRepairAction(task)
+            action = deterministic.action
+            reason = deterministic.reason
+          }
+        } else {
+          action = requestedAction
+          reason = `User requested repair action: ${requestedAction}`
+        }
+
+        const updated = this.applyRepairAction(taskId, action, reason, errorMessage)
+        if (!updated) {
+          return this.json({ error: "Task not found" }, 404)
+        }
+        this.broadcast({ type: "task_updated", payload: updated })
+        if (updated.agentOutput !== task.agentOutput) {
+          const appended = updated.agentOutput.slice(task.agentOutput.length)
+          if (appended) {
+            this.broadcast({ type: "agent_output", payload: { taskId, output: appended } })
           }
         }
-        return this.json({ ok: true })
+        if (action === "queue_implementation") {
+          await this.maybeAutoStartExecution()
+        }
+        return this.json({ ok: true, action, reason, task: this.db.getTask(taskId) })
       }
 
       // Task runs

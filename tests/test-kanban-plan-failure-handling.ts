@@ -45,10 +45,78 @@ async function testInvalidApprovalStateIsRepairedOnLoad() {
     assert(repairedTask?.awaitingPlanApproval === false, "Expected awaitingPlanApproval to be cleared")
     assert(repairedTask?.executionPhase === "not_started", `Expected executionPhase to reset, got ${repairedTask?.executionPhase}`)
     assert(
-      repairedTask?.errorMessage?.includes("no captured plan output") || repairedTask?.errorMessage?.includes("without any captured plan output"),
+      repairedTask?.errorMessage?.includes("captured [plan] block") || repairedTask?.errorMessage?.includes("no captured plan output") || repairedTask?.errorMessage?.includes("without any captured plan output"),
       `Expected repair error message, got ${repairedTask?.errorMessage}`,
     )
     console.log("✓ invalid plan approval state is repaired on load")
+  } finally {
+    repairedDb.close()
+    cleanupTempDir(tempDir)
+  }
+}
+
+async function testApprovalStateWithNonPlanOutputIsRepairedOnLoad() {
+  const tempDir = mkdtempSync(join(tmpdir(), "easy-workflow-repair-non-plan-"))
+  const dbPath = join(tempDir, "tasks.db")
+
+  const db = new KanbanDB(dbPath)
+  const task = db.createTask({
+    name: "Broken non-plan task",
+    prompt: "Plan something",
+    planmode: true,
+    review: true,
+    autoCommit: false,
+    status: "review",
+    executionPhase: "plan_complete_waiting_approval",
+    awaitingPlanApproval: true,
+  })
+  db.updateTask(task.id, { agentOutput: "This is output, but not a captured plan block." })
+  db.close()
+
+  const repairedDb = new KanbanDB(dbPath)
+  const repairedTask = repairedDb.getTask(task.id)
+
+  try {
+    assert(repairedTask?.status === "failed", `Expected repaired task to be failed, got ${repairedTask?.status}`)
+    assert(repairedTask?.awaitingPlanApproval === false, "Expected awaitingPlanApproval to be cleared")
+    assert(repairedTask?.executionPhase === "not_started", `Expected executionPhase to reset, got ${repairedTask?.executionPhase}`)
+    assert(
+      repairedTask?.errorMessage?.includes("captured [plan] block"),
+      `Expected captured-plan repair error message, got ${repairedTask?.errorMessage}`,
+    )
+    console.log("✓ invalid approval state with non-plan output is repaired on load")
+  } finally {
+    repairedDb.close()
+    cleanupTempDir(tempDir)
+  }
+}
+
+async function testRevisionPendingStateWithoutRequestReturnsToApprovalOnLoad() {
+  const tempDir = mkdtempSync(join(tmpdir(), "easy-workflow-repair-revision-"))
+  const dbPath = join(tempDir, "tasks.db")
+
+  const db = new KanbanDB(dbPath)
+  const task = db.createTask({
+    name: "Broken revision task",
+    prompt: "Plan something",
+    planmode: true,
+    review: true,
+    autoCommit: false,
+    status: "review",
+    executionPhase: "plan_revision_pending",
+    awaitingPlanApproval: true,
+  })
+  db.updateTask(task.id, { agentOutput: "[plan] A captured plan\n" })
+  db.close()
+
+  const repairedDb = new KanbanDB(dbPath)
+  const repairedTask = repairedDb.getTask(task.id)
+
+  try {
+    assert(repairedTask?.status === "review", `Expected repaired task to be in review, got ${repairedTask?.status}`)
+    assert(repairedTask?.awaitingPlanApproval === true, "Expected awaitingPlanApproval to be restored")
+    assert(repairedTask?.executionPhase === "plan_complete_waiting_approval", `Expected executionPhase to return to approval, got ${repairedTask?.executionPhase}`)
+    console.log("✓ revision-pending state without request is returned to approval on load")
   } finally {
     repairedDb.close()
     cleanupTempDir(tempDir)
@@ -155,6 +223,8 @@ async function testPlanModeEmptyOutputFailsTask() {
 
 async function main() {
   await testInvalidApprovalStateIsRepairedOnLoad()
+  await testApprovalStateWithNonPlanOutputIsRepairedOnLoad()
+  await testRevisionPendingStateWithoutRequestReturnsToApprovalOnLoad()
   await testPlanModeCreditErrorFailsTask()
   await testPlanModeEmptyOutputFailsTask()
   console.log("\nAll plan failure handling tests passed")

@@ -1,11 +1,16 @@
 import type { Task } from "./types"
+import { getPlanExecutionEligibility } from "./task-state"
 
 export function getExecutableTasks(tasks: Task[]): Task[] {
+  const taskMap = new Map<string, Task>()
+  for (const task of tasks) taskMap.set(task.id, task)
+
   const seen = new Set<string>()
   const executable: Task[] = []
 
   for (const task of tasks) {
     if (!isTaskExecutable(task)) continue
+    if (!areTaskRequirementsDone(task, taskMap)) continue
     if (seen.has(task.id)) continue
     seen.add(task.id)
     executable.push(task)
@@ -15,10 +20,24 @@ export function getExecutableTasks(tasks: Task[]): Task[] {
 }
 
 export function isTaskExecutable(task: Task): boolean {
+  if (!getPlanExecutionEligibility(task).ok) {
+    return false
+  }
+
   const isBacklogTask = task.status === "backlog" && task.executionPhase !== "plan_complete_waiting_approval"
   const isApprovedPlanTask = task.executionPhase === "implementation_pending"
   const isRevisionPendingTask = task.executionPhase === "plan_revision_pending"
   return isBacklogTask || isApprovedPlanTask || isRevisionPendingTask
+}
+
+function areTaskRequirementsDone(task: Task, taskMap: Map<string, Task>): boolean {
+  for (const depId of task.requirements) {
+    const dep = taskMap.get(depId)
+    if (!dep || dep.status !== "done") {
+      return false
+    }
+  }
+  return true
 }
 
 function collectTaskAndDependencyIds(taskId: string, taskMap: Map<string, Task>): string[] {

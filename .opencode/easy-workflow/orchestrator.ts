@@ -2,11 +2,13 @@ import { readFileSync, existsSync, appendFileSync, mkdirSync, writeFileSync, unl
 import { join } from "path"
 import { fileURLToPath } from "url"
 import { dirname } from "path"
+import { execFileSync } from "child_process"
 import type { Task, Options, ReviewResult, ThinkingLevel, BestOfNConfig, BestOfNSlot, TaskRun, TaskCandidate, ReviewerOutput, AggregatedReviewResult, SelectionMode } from "./types"
 import { KanbanDB } from "./db"
 import { KanbanServer } from "./server"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
 import { resolveExecutionTasks, resolveBatches } from "./execution-plan"
+import { getLatestTaggedOutput, getPlanExecutionEligibility } from "./task-state"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const WORKFLOW_ROOT = join(__dirname, "..")
@@ -334,20 +336,73 @@ export class Orchestrator {
     }
   }
 
-  private resolveTargetBranch(task: Task, options: Options, worktreeInfo?: any): string {
-    const taskBranch = typeof task.branch === "string" ? task.branch.trim() : ""
-    if (taskBranch) return taskBranch
+  private gitBranchExists(branch: string, directory?: string): boolean {
+    const trimmed = branch.trim()
+    if (!trimmed || !directory) return false
 
-    const optionBranch = typeof options.branch === "string" ? options.branch.trim() : ""
-    if (optionBranch) return optionBranch
+    try {
+      execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${trimmed}`], {
+        cwd: directory,
+        stdio: "ignore",
+      })
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private readRemoteDefaultBranch(directory?: string): string | null {
+    if (!directory) return null
+
+    try {
+      const value = execFileSync("git", ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], {
+        cwd: directory,
+        encoding: "utf-8",
+        stdio: "pipe",
+      }).trim()
+      if (!value) return null
+      return value.startsWith("origin/") ? value.slice("origin/".length) : value
+    } catch {
+      return null
+    }
+  }
+
+  private readLocalBranches(directory?: string): string[] {
+    if (!directory) return []
+
+    try {
+      const output = execFileSync("git", ["branch", "--format=%(refname:short)"], {
+        cwd: directory,
+        encoding: "utf-8",
+        stdio: "pipe",
+      })
+      return output.split("\n").map((line: string) => line.trim()).filter(Boolean)
+    } catch {
+      return []
+    }
+  }
+
+  private resolveTargetBranch(task: Task, options: Options, worktreeInfo?: any): string {
+    const worktreeDirectory = typeof worktreeInfo?.directory === "string" ? worktreeInfo.directory : undefined
+    const taskBranch = typeof task.branch === "string" ? task.branch.trim() : ""
+    if (this.gitBranchExists(taskBranch, worktreeDirectory)) return taskBranch
 
     const worktreeBaseRef = typeof worktreeInfo?.baseRef === "string" ? worktreeInfo.baseRef.trim() : ""
-    if (worktreeBaseRef) return worktreeBaseRef
+    if (this.gitBranchExists(worktreeBaseRef, worktreeDirectory)) return worktreeBaseRef
+
+    const optionBranch = typeof options.branch === "string" ? options.branch.trim() : ""
+    if (this.gitBranchExists(optionBranch, worktreeDirectory)) return optionBranch
+
+    const remoteDefaultBranch = this.readRemoteDefaultBranch(worktreeDirectory)
+    if (this.gitBranchExists(remoteDefaultBranch || "", worktreeDirectory)) return remoteDefaultBranch!
 
     const worktreeBranch = typeof worktreeInfo?.branch === "string" ? worktreeInfo.branch.trim() : ""
-    if (worktreeBranch) return worktreeBranch
+    const localBranches = this.readLocalBranches(worktreeDirectory)
+      .filter((branch) => branch !== worktreeBranch)
+      .filter((branch) => !branch.startsWith("opencode/"))
+    if (localBranches.length > 0) return localBranches[0]
 
-    return "main"
+    throw new Error("Could not determine target branch from git metadata")
   }
 
   private getTaskOrThrow(taskId: string, context: string, fallbackName?: string): Task {
@@ -451,9 +506,9 @@ export class Orchestrator {
       throw new Error(preflightError)
     }
 
-    const allTasks = resolveExecutionTasks(this.db.getTasks())
+    const initialTasks = resolveExecutionTasks(this.db.getTasks())
 
-    if (allTasks.length === 0) {
+    if (initialTasks.length === 0) {
       throw new Error("No tasks in backlog")
     }
 
@@ -469,27 +524,31 @@ export class Orchestrator {
       })
       // Keep unresolved marker; execution will fail with explicit error later.
     }
-    appendDebugLog("info", "orchestrator starting", { taskCount: allTasks.length, serverUrl: resolvedServerUrl })
+    appendDebugLog("info", "orchestrator starting", { taskCount: initialTasks.length, serverUrl: resolvedServerUrl })
     this.server.broadcast({ type: "execution_started", payload: {} })
 
     try {
       const options = this.db.getOptions()
-      const batches = resolveBatches(allTasks, options.parallelTasks)
+      while (!this.shouldStop) {
+        const executableTasks = resolveExecutionTasks(this.db.getTasks())
+        if (executableTasks.length === 0) break
 
-      for (const batch of batches) {
-        if (this.shouldStop) break
+        const batches = resolveBatches(executableTasks, options.parallelTasks)
 
-        // Execute tasks in this batch (respecting parallel limit already applied)
-        const settled = await Promise.allSettled(batch.map(t => this.executeTask(t, options)))
-        const rejected = settled.filter((result): result is PromiseRejectedResult => result.status === "rejected")
-        if (rejected.length > 0) {
-          this.shouldStop = true
-          const firstReason = rejected[0].reason
-          const message = firstReason instanceof Error ? firstReason.message : String(firstReason)
-          throw new Error(message)
+        for (const batch of batches) {
+          if (this.shouldStop) break
+
+          const settled = await Promise.allSettled(batch.map(t => this.executeTask(t, options)))
+          const rejected = settled.filter((result): result is PromiseRejectedResult => result.status === "rejected")
+          if (rejected.length > 0) {
+            this.shouldStop = true
+            const firstReason = rejected[0].reason
+            const message = firstReason instanceof Error ? firstReason.message : String(firstReason)
+            throw new Error(message)
+          }
+
+          if (this.shouldStop) break
         }
-
-        if (this.shouldStop) break
       }
 
       this.server.broadcast({ type: "execution_complete", payload: {} })
@@ -596,6 +655,11 @@ export class Orchestrator {
 
     const isPlanImplementationResume = task.planmode && task.executionPhase === "implementation_pending"
     const isPlanRevisionResume = task.planmode && task.executionPhase === "plan_revision_pending"
+
+    const planEligibility = getPlanExecutionEligibility(task)
+    if (!planEligibility.ok) {
+      throw new Error(`Task state is invalid: ${planEligibility.reason}`)
+    }
 
     // Validate deps are done
     for (const depId of task.requirements) {
@@ -754,12 +818,14 @@ export class Orchestrator {
 
         if (isPlanRevisionResume) {
           appendDebugLog("info", "plan mode: sending revision prompt", { taskId: task.id })
-          const revisionRequestMatches = [...task.agentOutput.matchAll(/\[user-revision-request\]\s*([\s\S]*?)(?=\n\[|$)/g)]
-          const latestRevisionRequest = revisionRequestMatches.length > 0
-            ? revisionRequestMatches[revisionRequestMatches.length - 1][1].trim()
-            : null
-          const planMatches = [...task.agentOutput.matchAll(/\[plan\]\s*([\s\S]*?)(?=\n\[|$)/g)]
-          const originalPlan = planMatches.length > 0 ? planMatches[planMatches.length - 1][1].trim() : null
+          const latestRevisionRequest = getLatestTaggedOutput(task.agentOutput, "user-revision-request")
+          const originalPlan = getLatestTaggedOutput(task.agentOutput, "plan")
+          if (!latestRevisionRequest) {
+            throw new Error("Revision prompt failed: no user revision request was captured")
+          }
+          if (!originalPlan) {
+            throw new Error("Revision prompt failed: no captured plan output was found to revise")
+          }
           const revisionPrompt = [
             "The user has reviewed your plan and requested changes. Revise the plan based on their feedback.",
             `Original task:\n${task.prompt}`,
@@ -806,11 +872,13 @@ export class Orchestrator {
         }
 
         appendDebugLog("info", "plan mode: sending execution prompt", { taskId: task.id })
-        const approvedPlanContext = task.agentOutput.trim()
-        const userApprovalNoteMatch = task.agentOutput.match(/\[user-approval-note\]\s*([\s\S]*?)(?=\n\[|$)/)
-        const userApprovalNote = userApprovalNoteMatch ? userApprovalNoteMatch[1].trim() : null
-        const revisionRequestMatches = [...task.agentOutput.matchAll(/\[user-revision-request\]\s*([\s\S]*?)(?=\n\[|$)/g)]
-        const revisionRequests = revisionRequestMatches.map(m => m[1].trim()).filter(Boolean)
+        const approvedPlanContext = getLatestTaggedOutput(task.agentOutput, "plan")
+        if (!approvedPlanContext) {
+          throw new Error("Execution prompt failed: no approved [plan] block was captured")
+        }
+        const userApprovalNote = getLatestTaggedOutput(task.agentOutput, "user-approval-note")
+        const revisionRequests = task.agentOutput
+          .match(/\[user-revision-request\]\s*[\s\S]*?(?=\n\[[a-z0-9-]+\]|$)/g)?.map((entry) => entry.replace(/^\[user-revision-request\]\s*/, "").trim()).filter(Boolean) ?? []
         const allUserGuidance = [
           ...revisionRequests.map((r, i) => `Revision request ${i + 1}:\n${r}`),
           userApprovalNote ? `Final approval note:\n${userApprovalNote}` : "",
@@ -923,7 +991,6 @@ export class Orchestrator {
       if (worktreeInfo) {
         try {
           appendDebugLog("info", "merging worktree", { taskId: task.id, branch: worktreeInfo.branch })
-          const { execSync, execFileSync } = await import("child_process")
 
           // Resolve merge target branch from task/options first, then git defaults.
           let mainBranch = this.resolveTargetBranch(currentTask, options, worktreeInfo)
@@ -947,7 +1014,7 @@ export class Orchestrator {
 
           if (!hasTargetBranch) {
             try {
-              const defaultBranch = execSync("git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true", {
+              const defaultBranch = execFileSync("git", ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], {
                 cwd: worktreeInfo.directory,
                 encoding: "utf-8",
                 stdio: "pipe",
@@ -958,12 +1025,15 @@ export class Orchestrator {
                 mainBranch = defaultBranch
               }
             } catch (e) {
-              throw new Error(`Failed to detect main branch: ${e}`);
+              appendDebugLog("warn", "could not resolve origin HEAD for merge target", {
+                taskId: task.id,
+                error: e instanceof Error ? e.message : String(e),
+              })
             }
 
             if (!mainBranch) {
               try {
-                mainBranch = execSync("git rev-parse --abbrev-ref HEAD", {
+                mainBranch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
                   cwd: worktreeInfo.directory,
                   encoding: "utf-8",
                   stdio: "pipe",
@@ -972,38 +1042,15 @@ export class Orchestrator {
                 throw new Error(`Failed to get current branch: ${e}`);
               }
             }
-
-            try {
-              execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${mainBranch}`], {
-                cwd: worktreeInfo.directory,
-                stdio: "ignore",
-              })
-            } catch (e) {
-              throw new Error(`Branch ${mainBranch} does not exist: ${e}`);
-            }
           }
 
-          if (mainBranch === "main") {
-            try {
-              execFileSync("git", ["show-ref", "--verify", "--quiet", "refs/heads/main"], {
-                cwd: worktreeInfo.directory,
-                stdio: "ignore",
-              })
-            } catch (mainMissingErr) {
-              appendDebugLog("warn", "main branch unavailable, trying master fallback", {
-                taskId: task.id,
-                error: mainMissingErr instanceof Error ? mainMissingErr.message : String(mainMissingErr),
-              })
-              try {
-                execFileSync("git", ["show-ref", "--verify", "--quiet", "refs/heads/master"], {
-                  cwd: worktreeInfo.directory,
-                  stdio: "ignore",
-                })
-                mainBranch = "master"
-              } catch (err) {
-                appendDebugLog("warn", "could not verify master fallback branch", { taskId: task.id, error: String(err) })
-              }
-            }
+          try {
+            execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${mainBranch}`], {
+              cwd: worktreeInfo.directory,
+              stdio: "ignore",
+            })
+          } catch (e) {
+            throw new Error(`Branch ${mainBranch} does not exist: ${e}`);
           }
 
           appendDebugLog("info", "merge target branch selected", { taskId: task.id, mainBranch })

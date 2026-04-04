@@ -3,10 +3,11 @@ import { mkdirSync } from "fs"
 import { dirname } from "path"
 import type { Task, TaskStatus, Options, ThinkingLevel, ExecutionPhase, ExecutionStrategy, BestOfNConfig, BestOfNSubstage, TaskRun, TaskCandidate, RunPhase, RunStatus } from "./types"
 import { DEFAULT_COMMIT_PROMPT } from "./types"
+import { hasCapturedPlanOutput, hasCapturedRevisionRequest } from "./task-state"
 
 const DEFAULT_OPTIONS: Options = {
   commitPrompt: DEFAULT_COMMIT_PROMPT,
-  branch: "main",
+  branch: "",
   planModel: "default",
   executionModel: "default",
   reviewModel: "minimax/MiniMax-M2.7",
@@ -41,7 +42,7 @@ function rowToTask(row: any): Task {
     name: row.name,
     idx: row.idx,
     prompt: row.prompt,
-    branch: row.branch || "main",
+    branch: row.branch || "",
     planModel: row.plan_model,
     executionModel: row.execution_model,
     planmode: row.planmode === 1,
@@ -110,7 +111,7 @@ export class KanbanDB {
         name TEXT NOT NULL,
         idx INTEGER NOT NULL DEFAULT 0,
         prompt TEXT NOT NULL,
-        branch TEXT NOT NULL DEFAULT 'main',
+        branch TEXT NOT NULL DEFAULT '',
         plan_model TEXT NOT NULL DEFAULT 'default',
         execution_model TEXT NOT NULL DEFAULT 'default',
         planmode INTEGER NOT NULL DEFAULT 0,
@@ -197,7 +198,7 @@ export class KanbanDB {
 
     const hasBranch = tableInfo.some((col: any) => col.name === "branch")
     if (!hasBranch) {
-      this.db.exec("ALTER TABLE tasks ADD COLUMN branch TEXT NOT NULL DEFAULT 'main'")
+      this.db.exec("ALTER TABLE tasks ADD COLUMN branch TEXT NOT NULL DEFAULT ''")
     }
 
     const hasDeleteWorktree = tableInfo.some((col: any) => col.name === "delete_worktree")
@@ -280,24 +281,95 @@ export class KanbanDB {
   }
 
   private repairInvalidTaskStates() {
-    this.db.prepare(`
-      UPDATE tasks
-      SET
-        status = 'failed',
-        awaiting_plan_approval = 0,
-        execution_phase = 'not_started',
-        error_message = CASE
-          WHEN error_message IS NULL OR trim(error_message) = ''
-            THEN 'Plan phase completed without any captured plan output. Reset the task to backlog and retry.'
-          ELSE error_message
-        END,
-        updated_at = unixepoch()
-      WHERE planmode = 1
-        AND status = 'review'
-        AND awaiting_plan_approval = 1
-        AND execution_phase = 'plan_complete_waiting_approval'
-        AND trim(COALESCE(agent_output, '')) = ''
-    `).run()
+    const tasks = (this.db.query("SELECT * FROM tasks ORDER BY idx ASC").all() as any[]).map(rowToTask)
+    for (const task of tasks) {
+      if (!task.planmode) continue
+
+      const hasPlan = hasCapturedPlanOutput(task.agentOutput)
+      const hasRevisionRequest = hasCapturedRevisionRequest(task.agentOutput)
+
+      if (task.executionPhase === "plan_complete_waiting_approval") {
+        if (!hasPlan) {
+          this.updateTask(task.id, {
+            status: "failed",
+            awaitingPlanApproval: false,
+            executionPhase: "not_started",
+            errorMessage: task.errorMessage?.trim()
+              ? task.errorMessage
+              : "Plan phase completed without a captured [plan] block. Reset the task to backlog and retry.",
+          })
+          continue
+        }
+
+        if (task.status !== "review" || task.awaitingPlanApproval !== true) {
+          this.updateTask(task.id, {
+            status: "review",
+            awaitingPlanApproval: true,
+            errorMessage: task.errorMessage,
+          })
+          continue
+        }
+      }
+
+      if (task.executionPhase === "plan_revision_pending") {
+        if (!hasPlan) {
+          this.updateTask(task.id, {
+            status: "failed",
+            awaitingPlanApproval: false,
+            errorMessage: task.errorMessage?.trim()
+              ? task.errorMessage
+              : "Plan revision was pending without a captured [plan] block. Reset the task to backlog and retry.",
+          })
+          continue
+        }
+
+        if (!hasRevisionRequest) {
+          this.updateTask(task.id, {
+            status: "review",
+            awaitingPlanApproval: true,
+            executionPhase: "plan_complete_waiting_approval",
+            errorMessage: task.errorMessage?.trim()
+              ? task.errorMessage
+              : "Plan revision was pending without a captured revision request. Returned the task to plan approval review.",
+          })
+          continue
+        }
+
+        if (task.status !== "backlog" && task.status !== "executing") {
+          this.updateTask(task.id, {
+            status: "backlog",
+            awaitingPlanApproval: false,
+          })
+          continue
+        }
+
+        if (task.awaitingPlanApproval) {
+          this.updateTask(task.id, {
+            awaitingPlanApproval: false,
+          })
+          continue
+        }
+      }
+
+      if (task.executionPhase === "implementation_pending" && !hasPlan) {
+        this.updateTask(task.id, {
+          status: "failed",
+          awaitingPlanApproval: false,
+          executionPhase: "not_started",
+          errorMessage: task.errorMessage?.trim()
+            ? task.errorMessage
+            : "Implementation was queued without a captured [plan] block. Reset the task to backlog and retry.",
+        })
+        continue
+      }
+
+      if (task.executionPhase === "implementation_pending" && task.status === "review") {
+        this.updateTask(task.id, {
+          status: "backlog",
+          awaitingPlanApproval: false,
+        })
+      }
+    }
 
     this.db.prepare(`
       UPDATE tasks
