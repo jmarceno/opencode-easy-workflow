@@ -1212,8 +1212,10 @@ function renderCard(task, colStatus) {
     actions.appendChild(deployBtn)
   }
   
+  const showInlineActionBar = !isTaskMutationLocked(task) && (task.status === 'review' || task.status === 'executing' || task.status === 'failed' || task.status === 'stuck')
+
   // Reset to backlog (stuck, failed, done, review)
-  if (!isTaskMutationLocked(task) && (task.status === 'stuck' || task.status === 'failed' || task.status === 'done' || task.status === 'review')) {
+  if (!showInlineActionBar && !isTaskMutationLocked(task) && (task.status === 'stuck' || task.status === 'failed' || task.status === 'done' || task.status === 'review')) {
     const resetBtn = document.createElement('button')
     resetBtn.textContent = '\u21BB'
     resetBtn.title = 'Reset to Backlog'
@@ -1222,7 +1224,7 @@ function renderCard(task, colStatus) {
   }
   
   // Delete button (not while executing, but always for done tasks)
-  if ((!isTaskMutationLocked(task) && task.status !== 'executing') || task.status === 'done') {
+  if (!showInlineActionBar && (((!isTaskMutationLocked(task) && task.status !== 'executing')) || task.status === 'done')) {
     const delBtn = document.createElement('button')
     delBtn.textContent = '\u2715'
     delBtn.title = 'Delete Task'
@@ -1240,27 +1242,6 @@ function renderCard(task, colStatus) {
     actions.appendChild(doneBtn)
   }
 
-  // Approve Plan button for tasks awaiting approval
-  if (!isTaskMutationLocked(task) && task.status === 'review' && task.awaitingPlanApproval && task.executionPhase === 'plan_complete_waiting_approval' && hasPlanOutput(task)) {
-    const approveBtn = document.createElement('button')
-    approveBtn.className = 'action-text'
-    approveBtn.textContent = 'Approve Plan'
-    approveBtn.title = 'Approve Plan'
-    approveBtn.style.borderColor = 'var(--green)'
-    approveBtn.style.color = 'var(--green)'
-    approveBtn.onclick = () => approvePlan(task.id)
-    actions.appendChild(approveBtn)
-
-    const revisionBtn = document.createElement('button')
-    revisionBtn.className = 'action-text'
-    revisionBtn.textContent = 'Request Changes'
-    revisionBtn.title = 'Request Plan Changes'
-    revisionBtn.style.borderColor = 'var(--orange)'
-    revisionBtn.style.color = 'var(--orange)'
-    revisionBtn.onclick = () => openRevisionModal(task.id)
-    actions.appendChild(revisionBtn)
-  }
-
   if (!isTaskMutationLocked(task) && isAnomalousReviewTask(task)) {
     const doneBtn = document.createElement('button')
     doneBtn.textContent = '\u2713'
@@ -1268,39 +1249,6 @@ function renderCard(task, colStatus) {
     doneBtn.style.color = 'var(--green)'
     doneBtn.onclick = () => markReviewDone(task.id)
     actions.appendChild(doneBtn)
-  }
-
-  if (!isTaskMutationLocked(task) && canSendTaskToExecution(task)) {
-    const resumeBtn = document.createElement('button')
-    resumeBtn.className = 'action-text'
-    resumeBtn.textContent = 'Send to Exec'
-    resumeBtn.title = 'Queue task back into execution'
-    resumeBtn.style.borderColor = 'var(--green)'
-    resumeBtn.style.color = 'var(--green)'
-    resumeBtn.onclick = () => repairTaskState(task.id, 'queue_implementation')
-    actions.appendChild(resumeBtn)
-  }
-
-  if (!isTaskMutationLocked(task) && canRepairTaskToDone(task) && task.status !== 'stuck') {
-    const doneRepairBtn = document.createElement('button')
-    doneRepairBtn.className = 'action-text'
-    doneRepairBtn.textContent = 'Repair Done'
-    doneRepairBtn.title = 'Repair task by marking it done'
-    doneRepairBtn.style.borderColor = 'var(--green)'
-    doneRepairBtn.style.color = 'var(--green)'
-    doneRepairBtn.onclick = () => repairTaskState(task.id, 'mark_done')
-    actions.appendChild(doneRepairBtn)
-  }
-
-  if (!isTaskMutationLocked(task) && ['review', 'executing', 'failed', 'stuck'].includes(task.status)) {
-    const smartRepairBtn = document.createElement('button')
-    smartRepairBtn.className = 'action-text'
-    smartRepairBtn.textContent = 'Smart Repair'
-    smartRepairBtn.title = 'Let the system choose the safest repair action'
-    smartRepairBtn.style.borderColor = 'var(--purple)'
-    smartRepairBtn.style.color = 'var(--purple)'
-    smartRepairBtn.onclick = () => repairTaskState(task.id, 'smart')
-    actions.appendChild(smartRepairBtn)
   }
 
   // Start single task button for backlog tasks
@@ -1311,6 +1259,16 @@ function renderCard(task, colStatus) {
     startBtn.style.color = 'var(--green)'
     startBtn.onclick = () => openStartSingleModal(task.id, task.name)
     actions.appendChild(startBtn)
+  }
+
+  // Convert to template for backlog tasks
+  if (task.status === 'backlog' && !isTaskMutationLocked(task) && !isExecuting) {
+    const templateBtn = document.createElement('button')
+    templateBtn.className = 'action-text'
+    templateBtn.textContent = 'Template'
+    templateBtn.title = 'Convert to Template'
+    templateBtn.onclick = () => convertTaskToTemplate(task.id)
+    actions.appendChild(templateBtn)
   }
 
   card.appendChild(header)
@@ -1455,7 +1413,7 @@ function renderCard(task, colStatus) {
     card.appendChild(note)
   }
 
-  if (!isTaskMutationLocked(task) && (task.status === 'review' || task.status === 'executing' || task.status === 'failed' || task.status === 'stuck')) {
+  if (showInlineActionBar) {
     const actionBar = document.createElement('div')
     actionBar.className = 'card-inline-actions'
 
@@ -1505,12 +1463,6 @@ function renderCard(task, colStatus) {
     smartRepairBtn.onclick = () => repairTaskState(task.id, 'smart')
     actionBar.appendChild(smartRepairBtn)
 
-    const resetBtn = document.createElement('button')
-    resetBtn.className = 'btn btn-sm'
-    resetBtn.textContent = 'Reset'
-    resetBtn.onclick = () => resetTask(task.id)
-    actionBar.appendChild(resetBtn)
-
     if (task.status === 'stuck') {
       const doneBtn = document.createElement('button')
       doneBtn.className = 'btn btn-sm btn-primary'
@@ -1518,12 +1470,6 @@ function renderCard(task, colStatus) {
       doneBtn.onclick = () => markStuckDone(task.id)
       actionBar.appendChild(doneBtn)
     }
-
-    const deleteBtn = document.createElement('button')
-    deleteBtn.className = 'btn btn-sm btn-danger'
-    deleteBtn.textContent = 'Delete'
-    deleteBtn.onclick = () => deleteTask(task.id)
-    actionBar.appendChild(deleteBtn)
 
     card.appendChild(actionBar)
   }
@@ -1926,6 +1872,26 @@ async function resetTask(id) {
     await loadTasks()
     showToast('Task reset to backlog', 'success')
   } catch (e) { showToast('Reset failed: ' + e.message, 'error') }
+}
+
+async function convertTaskToTemplate(id) {
+  if (!confirm('Convert this task to a template? The task will be moved to the Templates lane.')) return
+  try {
+    await api(`/api/tasks/${id}`, 'PATCH', {
+      status: 'template',
+      reviewCount: 0,
+      agentOutput: '',
+      errorMessage: null,
+      completedAt: null,
+      sessionId: null,
+      sessionUrl: null,
+      worktreeDir: null,
+      executionPhase: 'not_started',
+      awaitingPlanApproval: false,
+    })
+    await loadTasks()
+    showToast('Task converted to template', 'success')
+  } catch (e) { showToast('Conversion failed: ' + e.message, 'error') }
 }
 
 let approveModalTaskId = null
