@@ -93,6 +93,167 @@ type KanbanSingletonState = {
   initPromise: Promise<void> | null;
 };
 
+// ---- Workflow session ownership (for permission auto-reply) ----
+
+interface WorkflowSessionOwner {
+  taskId: string;
+  source: "task" | "task_run";
+  skipPermissionAsking: boolean;
+}
+
+/**
+ * Look up whether a sessionId belongs to a workflow-owned task or task-run.
+ * Uses persisted data from the Kanban DB (tasks.session_id and task_runs.session_id).
+ * Returns null if the session is not owned by any workflow task/run.
+ */
+function resolveWorkflowSessionOwnership(
+  sessionId: string | null | undefined,
+  db: KanbanDB | null,
+): WorkflowSessionOwner | null {
+  if (!sessionId || !db) return null;
+
+  // 1. Check tasks table
+  try {
+    const allTasks = db.getTasks();
+    for (const task of allTasks) {
+      if (task.sessionId === sessionId) {
+        return {
+          taskId: task.id,
+          source: "task",
+          skipPermissionAsking: task.skipPermissionAsking,
+        };
+      }
+    }
+  } catch {
+    // best-effort
+  }
+
+  // 2. Check task_runs table (worker, reviewer, final_applier runs)
+  try {
+    const allTaskRows = db.getTasks();
+    for (const task of allTaskRows) {
+      const runs = db.getTaskRuns(task.id);
+      for (const run of runs) {
+        if (run.sessionId === sessionId) {
+          return {
+            taskId: task.id,
+            source: "task_run",
+            skipPermissionAsking: task.skipPermissionAsking,
+          };
+        }
+      }
+    }
+  } catch {
+    // best-effort
+  }
+
+  return null;
+}
+
+/**
+ * Extract permission request ID from a permission.asked event payload.
+ * Tolerant of different casing conventions (id vs permissionID vs requestID).
+ */
+function extractPermissionId(event: any): string | null {
+  // Direct field
+  const direct =
+    event?.properties?.permissionID ??
+    event?.properties?.id ??
+    event?.properties?.requestID ??
+    event?.permissionID ??
+    event?.id ??
+    event?.requestID;
+
+  if (typeof direct === "string" && direct.trim().length > 0) {
+    return direct.trim();
+  }
+  return null;
+}
+
+/**
+ * Extract session ID from a permission.asked event properties.
+ * Tolerant of sessionID vs sessionId.
+ */
+function extractPermissionSessionId(event: any): string | null {
+  const raw =
+    event?.properties?.sessionID ??
+    event?.properties?.sessionId ??
+    event?.sessionID ??
+    event?.sessionId;
+
+  if (typeof raw === "string" && raw.trim().length > 0) {
+    return raw.trim();
+  }
+  return null;
+}
+
+/**
+ * Auto-reply to a permission.asked event if the session is workflow-owned
+ * and skipPermissionAsking is true on the owning task.
+ * Uses SDK permission.respond with response mode "once".
+ * Failures are non-fatal — errors are logged and execution continues.
+ */
+export async function handlePermissionAutoReply(
+  event: any,
+  client: any,
+  db: KanbanDB | null,
+): Promise<void> {
+  const sessionId = extractPermissionSessionId(event);
+  if (!sessionId) {
+    appendDebugLog("debug", "permission.asked event skipped: no sessionId in payload");
+    return;
+  }
+
+  const permissionId = extractPermissionId(event);
+  if (!permissionId) {
+    appendDebugLog("debug", "permission.asked event skipped: no permissionId in payload");
+    return;
+  }
+
+  const owner = resolveWorkflowSessionOwnership(sessionId, db);
+  if (!owner) {
+    appendDebugLog("debug", "permission.asked event skipped: session not workflow-owned", { sessionId });
+    return;
+  }
+
+  if (!owner.skipPermissionAsking) {
+    appendDebugLog("debug", "permission.asked event skipped: task has skipPermissionAsking=false", {
+      taskId: owner.taskId,
+      source: owner.source,
+      sessionId,
+    });
+    return;
+  }
+
+  appendDebugLog("info", "auto-replying to permission.asked for workflow session", {
+    taskId: owner.taskId,
+    source: owner.source,
+    sessionId,
+    permissionId,
+    response: "once",
+  });
+
+  try {
+    // SDK: client.permission.respond({ sessionID, permissionID, response: "once" })
+    const result = await client.permission.respond(
+      { sessionID: sessionId, permissionID: permissionId, response: "once" },
+      { throwOnError: false },
+    );
+    appendDebugLog("info", "permission auto-reply succeeded", {
+      sessionId,
+      permissionId,
+      response: result,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    appendDebugLog("warn", "permission auto-reply failed (non-fatal)", {
+      sessionId,
+      permissionId,
+      error: msg,
+    });
+  }
+}
+
 type KanbanSingletonMap = Map<string, KanbanSingletonState>;
 
 const KANBAN_SINGLETON_MAP_KEY = "__easyWorkflowKanbanSingletonByDirectory";
@@ -1195,6 +1356,13 @@ export const EasyWorkflowPlugin = async (input: any) => {
     },
 
     event: async ({ event }: any) => {
+      // Handle permission.asked events for workflow-owned autonomous sessions
+      if (event?.type === "permission.asked") {
+        await handlePermissionAutoReply(event, client, singleton.db);
+        return;
+      }
+
+      // Handle session.idle for review orchestration (existing behavior)
       if (event?.type !== "session.idle") {
         return;
       }
