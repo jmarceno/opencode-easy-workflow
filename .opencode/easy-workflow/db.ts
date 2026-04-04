@@ -69,6 +69,7 @@ function rowToTask(row: any): Task {
     executionStrategy: normalizeExecutionStrategy(row.execution_strategy),
     bestOfNConfig: row.best_of_n_config ? JSON.parse(row.best_of_n_config) : null,
     bestOfNSubstage: normalizeBestOfNSubstage(row.best_of_n_substage),
+    skipPermissionAsking: row.skip_permission_asking !== 0,
   }
 }
 
@@ -138,7 +139,8 @@ export class KanbanDB {
         plan_revision_count INTEGER NOT NULL DEFAULT 0,
         execution_strategy TEXT NOT NULL DEFAULT 'standard',
         best_of_n_config TEXT,
-        best_of_n_substage TEXT NOT NULL DEFAULT 'idle'
+        best_of_n_substage TEXT NOT NULL DEFAULT 'idle',
+        skip_permission_asking INTEGER NOT NULL DEFAULT 1
       );
 
       CREATE TABLE IF NOT EXISTS task_runs (
@@ -247,6 +249,11 @@ export class KanbanDB {
     const hasPlanRevisionCount = tableInfo.some((col: any) => col.name === "plan_revision_count")
     if (!hasPlanRevisionCount) {
       this.db.exec("ALTER TABLE tasks ADD COLUMN plan_revision_count INTEGER NOT NULL DEFAULT 0")
+    }
+
+    const hasSkipPermissionAsking = tableInfo.some((col: any) => col.name === "skip_permission_asking")
+    if (!hasSkipPermissionAsking) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN skip_permission_asking INTEGER NOT NULL DEFAULT 1")
     }
 
     const optCount = this.db.query("SELECT COUNT(*) as cnt FROM options").get() as any
@@ -486,6 +493,7 @@ export class KanbanDB {
     executionStrategy?: ExecutionStrategy
     bestOfNConfig?: BestOfNConfig | null
     bestOfNSubstage?: BestOfNSubstage
+    skipPermissionAsking?: boolean
   }): Task {
     const id = Math.random().toString(36).substring(2, 10)
     const maxIdx = this.db.query("SELECT COALESCE(MAX(idx), -1) as max_idx FROM tasks").get() as any
@@ -493,8 +501,8 @@ export class KanbanDB {
     const now = Math.floor(Date.now() / 1000)
 
     this.db.prepare(`
-      INSERT INTO tasks (id, name, idx, prompt, branch, plan_model, execution_model, planmode, auto_approve_plan, review, auto_commit, delete_worktree, status, requirements, created_at, updated_at, thinking_level, execution_phase, awaiting_plan_approval, plan_revision_count, execution_strategy, best_of_n_config, best_of_n_substage)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tasks (id, name, idx, prompt, branch, plan_model, execution_model, planmode, auto_approve_plan, review, auto_commit, delete_worktree, status, requirements, created_at, updated_at, thinking_level, execution_phase, awaiting_plan_approval, plan_revision_count, execution_strategy, best_of_n_config, best_of_n_substage, skip_permission_asking)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       data.name,
@@ -519,6 +527,7 @@ export class KanbanDB {
       data.executionStrategy ?? "standard",
       data.bestOfNConfig ? JSON.stringify(data.bestOfNConfig) : null,
       data.bestOfNSubstage ?? "idle",
+      data.skipPermissionAsking !== false ? 1 : 0,
     )
 
     return this.getTask(id)!
@@ -552,6 +561,7 @@ export class KanbanDB {
     executionStrategy: ExecutionStrategy
     bestOfNConfig: BestOfNConfig | null
     bestOfNSubstage: BestOfNSubstage
+    skipPermissionAsking: boolean
   }>): Task | null {
     const sets: string[] = []
     const values: any[] = []
@@ -583,6 +593,7 @@ export class KanbanDB {
     if (updates.executionStrategy !== undefined) { sets.push("execution_strategy = ?"); values.push(updates.executionStrategy) }
     if (updates.bestOfNConfig !== undefined) { sets.push("best_of_n_config = ?"); values.push(updates.bestOfNConfig ? JSON.stringify(updates.bestOfNConfig) : null) }
     if (updates.bestOfNSubstage !== undefined) { sets.push("best_of_n_substage = ?"); values.push(updates.bestOfNSubstage) }
+    if (updates.skipPermissionAsking !== undefined) { sets.push("skip_permission_asking = ?"); values.push(updates.skipPermissionAsking ? 1 : 0) }
 
     if (sets.length === 0) return this.getTask(id)
 

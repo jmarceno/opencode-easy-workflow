@@ -50,7 +50,7 @@ function isBoolean(value: unknown): value is boolean {
   return typeof value === "boolean"
 }
 
-const TASK_BOOLEAN_FIELDS = ["planmode", "autoApprovePlan", "review", "autoCommit", "deleteWorktree"] as const
+const TASK_BOOLEAN_FIELDS = ["planmode", "autoApprovePlan", "review", "autoCommit", "deleteWorktree", "skipPermissionAsking"] as const
 
 function getInvalidTaskBooleanField(body: any): string | null {
   for (const field of TASK_BOOLEAN_FIELDS) {

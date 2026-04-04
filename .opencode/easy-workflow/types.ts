@@ -71,6 +71,7 @@ export interface Task {
   executionStrategy: ExecutionStrategy
   bestOfNConfig: BestOfNConfig | null
   bestOfNSubstage: BestOfNSubstage
+  skipPermissionAsking: boolean
 }
 
 export interface TaskRun {
