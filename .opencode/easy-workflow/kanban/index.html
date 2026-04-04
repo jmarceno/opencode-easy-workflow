@@ -1075,7 +1075,7 @@ function updateStartBtn() {
 }
 
 function isTaskMutationLocked(task) {
-  return isExecuting && task.status !== 'template'
+  return isExecuting && !['template', 'review', 'failed', 'stuck'].includes(task.status)
 }
 
 function hasPlanOutput(task) {

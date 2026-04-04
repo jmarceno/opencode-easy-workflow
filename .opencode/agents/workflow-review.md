@@ -1,7 +1,7 @@
 ---
 description: Reviews the current repository against workflow run goals
 mode: subagent
-model: openai/gpt-5.3-codex
+model: minimax/MiniMax-M2.7
 permission:
   edit: deny
   webfetch: deny

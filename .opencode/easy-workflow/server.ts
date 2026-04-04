@@ -199,6 +199,14 @@ function getExecutionMutationError(): string {
   return "Cannot modify workflow tasks while execution is running. Stop execution first."
 }
 
+function isTaskActionableWhileExecutionRuns(status: string): boolean {
+  return status === "template" || status === "review" || status === "failed" || status === "stuck"
+}
+
+function isTaskMutationLockedWhileExecuting(executing: boolean, status: string): boolean {
+  return executing && !isTaskActionableWhileExecutionRuns(status)
+}
+
 export class KanbanServer {
   private db: KanbanDB
   private clients: Set<any> = new Set()
@@ -551,7 +559,7 @@ export class KanbanServer {
         if (method === "PATCH") {
           const existingTask = this.db.getTask(taskId)
           if (!existingTask) return this.json({ error: "Task not found" }, 404)
-          if (this.getExecuting() && existingTask.status !== "template") {
+          if (isTaskMutationLockedWhileExecuting(this.getExecuting(), existingTask.status)) {
             return this.json({ error: getExecutionMutationError() }, 409)
           }
 
@@ -594,7 +602,7 @@ export class KanbanServer {
         if (method === "DELETE") {
           const existingTask = this.db.getTask(taskId)
           if (!existingTask) return this.json({ error: "Task not found" }, 404)
-          if (this.getExecuting() && existingTask.status !== "template") {
+          if (isTaskMutationLockedWhileExecuting(this.getExecuting(), existingTask.status)) {
             return this.json({ error: getExecutionMutationError() }, 409)
           }
 
@@ -783,7 +791,7 @@ export class KanbanServer {
         if (!task) {
           return this.json({ error: "Task not found" }, 404)
         }
-        if (this.getExecuting()) {
+        if (isTaskMutationLockedWhileExecuting(this.getExecuting(), task.status)) {
           return this.json({ error: getExecutionMutationError() }, 409)
         }
         if (!hasCapturedPlanOutput(task.agentOutput)) {
@@ -832,7 +840,7 @@ export class KanbanServer {
         if (!task) {
           return this.json({ error: "Task not found" }, 404)
         }
-        if (this.getExecuting()) {
+        if (isTaskMutationLockedWhileExecuting(this.getExecuting(), task.status)) {
           return this.json({ error: getExecutionMutationError() }, 409)
         }
         if (!hasCapturedPlanOutput(task.agentOutput)) {
@@ -880,7 +888,7 @@ export class KanbanServer {
         if (!task) {
           return this.json({ error: "Task not found" }, 404)
         }
-        if (this.getExecuting()) {
+        if (isTaskMutationLockedWhileExecuting(this.getExecuting(), task.status)) {
           return this.json({ error: getExecutionMutationError() }, 409)
         }
 

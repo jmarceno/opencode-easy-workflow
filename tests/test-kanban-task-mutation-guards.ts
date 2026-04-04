@@ -94,7 +94,14 @@ async function testServerBlocksMutationsWhileExecuting() {
     const approveResp = await fetch(`http://127.0.0.1:${port}/api/tasks/${planTask.id}/approve-plan`, {
       method: "POST",
     })
-    assert(approveResp.status === 409, `Expected approve-plan to be blocked with 409, got ${approveResp.status}`)
+    assert(approveResp.status !== 409, `Expected approve-plan to remain actionable for review tasks, got ${approveResp.status}`)
+
+    const reviewPatchResp = await fetch(`http://127.0.0.1:${port}/api/tasks/${planTask.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ errorMessage: "manual action while execution lock is active" }),
+    })
+    assert(reviewPatchResp.status !== 409, `Expected review task PATCH to remain actionable, got ${reviewPatchResp.status}`)
 
     console.log("✓ server blocks task mutations while execution is running")
   } finally {
