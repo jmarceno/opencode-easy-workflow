@@ -32,6 +32,8 @@ const AUTONOMOUS_THINKING_AGENT_MAP: Record<ThinkingLevel, string> = {
 
 const EXPECTED_THINKING_AGENTS = Object.values(THINKING_LEVEL_AGENT_MAP)
 
+export const AUTONOMY_INSTRUCTION = "EXECUTE END-TO-END. Do not ask follow-up questions unless blocked by: missing credentials, missing required external input, or an irreversible product decision. Make reasonable assumptions from the codebase."
+
 // ---- SDK v2 client wrapper ----
 
 function createV2Client(baseUrl: string, directory?: string) {
@@ -798,7 +800,7 @@ export class Orchestrator {
             sessionID: sessionId,
             agent: resolvePlanningAgent(task.skipPermissionAsking),
             model: planModelParsed,
-            parts: [{ type: "text", text: task.prompt }],
+            parts: [{ type: "text", text: `${AUTONOMY_INSTRUCTION}\n\n${task.prompt}` }],
           })
           const planResult = unwrapResponseDataOrThrow<any>(planResponse, "Planning prompt")
           const planFailure = this.extractExecutionFailure(planResult)
@@ -857,6 +859,8 @@ export class Orchestrator {
             throw new Error("Revision prompt failed: no captured plan output was found to revise")
           }
           const revisionPrompt = [
+            AUTONOMY_INSTRUCTION,
+            "",
             "The user has reviewed your plan and requested changes. Revise the plan based on their feedback.",
             `Original task:\n${task.prompt}`,
             originalPlan ? `Previous plan:\n${originalPlan}` : "",
@@ -932,6 +936,8 @@ export class Orchestrator {
           parts: [{
             type: "text",
             text: [
+              AUTONOMY_INSTRUCTION,
+              "",
               "The user has approved the plan below. Implement it now.",
               `Original task:\n${task.prompt}`,
               approvedPlanContext ? `Approved plan:\n${approvedPlanContext}` : "",
@@ -963,7 +969,7 @@ export class Orchestrator {
         const promptOpts: any = {
           sessionID: sessionId,
           model,
-          parts: [{ type: "text", text: task.prompt }],
+          parts: [{ type: "text", text: `${AUTONOMY_INSTRUCTION}\n\n${task.prompt}` }],
         }
         if (executionAgent) promptOpts.agent = executionAgent
         let result: any
@@ -1521,7 +1527,9 @@ export class Orchestrator {
   }
 
   private buildWorkerPrompt(taskPrompt: string, taskSuffix: string | null): string {
-    let prompt = `You are one candidate implementation worker in a best-of-n workflow.
+    let prompt = `${AUTONOMY_INSTRUCTION}
+
+You are one candidate implementation worker in a best-of-n workflow.
 Produce the best complete solution you can in this worktree.
 
 Task:
@@ -2119,7 +2127,9 @@ RECOMMENDED_PROMPT:
     selectionMode: SelectionMode,
     taskSuffix?: string | null
   ): string {
-    let prompt = `You are the final applier in a best-of-n workflow.
+    let prompt = `${AUTONOMY_INSTRUCTION}
+
+You are the final applier in a best-of-n workflow.
 Your job is to produce the final implementation based on the original task and the evaluated candidates.
 
 Original Task:
