@@ -551,6 +551,7 @@ sl-dialog::part(close-button):hover { color: var(--text); background: var(--surf
       <div class="form-group">
         <div class="checkbox-group">
           <label title="Create a plan first and wait for approval before full execution continues."><sl-checkbox id="taskPlanmode"> Plan Mode</sl-checkbox></label>
+          <label title="When plan mode is enabled, automatically accept generated plans and continue directly to implementation."><sl-checkbox id="taskAutoApprovePlan"> Auto-approve plan</sl-checkbox></label>
           <label title="Run an automated review pass after execution so the task can be checked before completion."><sl-checkbox id="taskReview" checked> Review</sl-checkbox></label>
           <label title="Allow the workflow to create a git commit automatically when the task finishes successfully."><sl-checkbox id="taskAutoCommit" checked> Auto-commit</sl-checkbox></label>
           <label title="Remove the temporary worktree after the task finishes. Disable this if you want to inspect files afterward."><sl-checkbox id="taskDeleteWorktree" checked> Delete Worktree</sl-checkbox></label>
@@ -1732,6 +1733,7 @@ function openTaskModal(taskId, options = {}) {
     resetModelInput('taskPlanModel', task.planModel)
     resetModelInput('taskExecModel', task.executionModel)
     document.getElementById('taskPlanmode').checked = task.planmode
+    document.getElementById('taskAutoApprovePlan').checked = task.autoApprovePlan === true
     document.getElementById('taskReview').checked = task.review
     document.getElementById('taskAutoCommit').checked = task.autoCommit
     document.getElementById('taskDeleteWorktree').checked = task.deleteWorktree !== false
@@ -1770,6 +1772,7 @@ function openTaskModal(taskId, options = {}) {
     resetModelInput('taskPlanModel', seedTask.planModel || 'default')
     resetModelInput('taskExecModel', seedTask.executionModel || 'default')
     document.getElementById('taskPlanmode').checked = seedTask.planmode
+    document.getElementById('taskAutoApprovePlan').checked = seedTask.autoApprovePlan === true
     document.getElementById('taskReview').checked = seedTask.review
     document.getElementById('taskAutoCommit').checked = seedTask.autoCommit
     document.getElementById('taskDeleteWorktree').checked = seedTask.deleteWorktree !== false
@@ -1790,6 +1793,7 @@ function openTaskModal(taskId, options = {}) {
     resetModelInput('taskPlanModel', 'default')
     resetModelInput('taskExecModel', 'default')
     document.getElementById('taskPlanmode').checked = false
+    document.getElementById('taskAutoApprovePlan').checked = false
     document.getElementById('taskReview').checked = true
     document.getElementById('taskAutoCommit').checked = true
     document.getElementById('taskDeleteWorktree').checked = true
@@ -1898,6 +1902,7 @@ async function saveTask() {
     planModel: normalizeModelInputValue(document.getElementById('taskPlanModel').value),
     executionModel: normalizeModelInputValue(document.getElementById('taskExecModel').value),
     planmode: document.getElementById('taskPlanmode').checked,
+    autoApprovePlan: document.getElementById('taskAutoApprovePlan').checked,
     review: document.getElementById('taskReview').checked,
     autoCommit: document.getElementById('taskAutoCommit').checked,
     deleteWorktree: document.getElementById('taskDeleteWorktree').checked,

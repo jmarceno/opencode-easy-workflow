@@ -221,12 +221,86 @@ async function testPlanModeEmptyOutputFailsTask() {
   }
 }
 
+async function testPlanModeAutoApproveSkipsManualApprovalWait() {
+  const tempDir = mkdtempSync(join(tmpdir(), "easy-workflow-auto-approve-"))
+  const dbPath = join(tempDir, "tasks.db")
+  const db = new KanbanDB(dbPath)
+  const task = db.createTask({
+    name: "Auto approve task",
+    prompt: "Plan and execute something",
+    planmode: true,
+    autoApprovePlan: true,
+    review: false,
+    autoCommit: false,
+    deleteWorktree: false,
+  })
+
+  const server = { broadcast: () => {} } as any
+  const orchestrator = new Orchestrator(db, server, "http://127.0.0.1:4096", process.cwd()) as any
+
+  let promptCalls = 0
+  orchestrator.createWorktree = async () => ({
+    directory: tempDir,
+    branch: `opencode/task-${task.id}`,
+    baseRef: "main",
+  })
+  orchestrator.removeWorktree = async () => {}
+  orchestrator.getClient = () => ({
+    session: {
+      create: async () => ({ data: { id: "session-auto-approve" } }),
+      prompt: async (opts: any) => {
+        promptCalls += 1
+        if (opts.agent === "plan") {
+          return {
+            data: {
+              parts: [
+                {
+                  type: "text",
+                  text: "1. Inspect the codebase\n2. Implement the fix\n3. Verify the result",
+                },
+              ],
+            },
+          }
+        }
+        return {
+          data: {
+            parts: [
+              {
+                type: "text",
+                text: "Error: deliberate execution failure after auto-approval",
+              },
+            ],
+          },
+        }
+      },
+    },
+  })
+
+  try {
+    await orchestrator.executeTask(task, db.getOptions())
+    throw new Error("Expected execution to fail after auto-approval path")
+  } catch (err) {
+    const failedTask = db.getTask(task.id)
+    const message = err instanceof Error ? err.message : String(err)
+    assert(promptCalls === 2, `Expected planning and implementation prompts, got ${promptCalls}`)
+    assert(message.includes("deliberate execution failure"), `Expected execution failure after planning, got ${message}`)
+    assert(failedTask?.status === "failed", `Expected failed status, got ${failedTask?.status}`)
+    assert(failedTask?.awaitingPlanApproval === false, "Expected auto-approved task to not wait for approval")
+    assert(failedTask?.executionPhase === "implementation_pending", `Expected implementation_pending phase before failure, got ${failedTask?.executionPhase}`)
+    console.log("✓ auto-approved plan mode continues to implementation without review wait")
+  } finally {
+    db.close()
+    cleanupTempDir(tempDir)
+  }
+}
+
 async function main() {
   await testInvalidApprovalStateIsRepairedOnLoad()
   await testApprovalStateWithNonPlanOutputIsRepairedOnLoad()
   await testRevisionPendingStateWithoutRequestReturnsToApprovalOnLoad()
   await testPlanModeCreditErrorFailsTask()
   await testPlanModeEmptyOutputFailsTask()
+  await testPlanModeAutoApproveSkipsManualApprovalWait()
   console.log("\nAll plan failure handling tests passed")
 }
 

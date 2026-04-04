@@ -50,6 +50,17 @@ function isBoolean(value: unknown): value is boolean {
   return typeof value === "boolean"
 }
 
+const TASK_BOOLEAN_FIELDS = ["planmode", "autoApprovePlan", "review", "autoCommit", "deleteWorktree"] as const
+
+function getInvalidTaskBooleanField(body: any): string | null {
+  for (const field of TASK_BOOLEAN_FIELDS) {
+    if (body?.[field] !== undefined && !isBoolean(body[field])) {
+      return field
+    }
+  }
+  return null
+}
+
 function validateBestOfNConfig(config: unknown): { valid: boolean; error?: string } {
   if (!config || typeof config !== "object") {
     return { valid: false, error: "bestOfNConfig must be an object" }
@@ -526,6 +537,10 @@ export class KanbanServer {
 
       if (method === "POST" && url.pathname === "/api/tasks") {
         const body = await req.json()
+        const invalidBooleanField = getInvalidTaskBooleanField(body)
+        if (invalidBooleanField) {
+          return this.json({ error: `Invalid ${invalidBooleanField}. Expected boolean.` }, 400)
+        }
         if (body?.thinkingLevel !== undefined && !isThinkingLevel(body.thinkingLevel)) {
           return this.json({ error: "Invalid thinkingLevel. Allowed values: default, low, medium, high" }, 400)
         }
@@ -564,6 +579,10 @@ export class KanbanServer {
           }
 
           const body = await req.json()
+          const invalidBooleanField = getInvalidTaskBooleanField(body)
+          if (invalidBooleanField) {
+            return this.json({ error: `Invalid ${invalidBooleanField}. Expected boolean.` }, 400)
+          }
           if (body?.thinkingLevel !== undefined && !isThinkingLevel(body.thinkingLevel)) {
             return this.json({ error: "Invalid thinkingLevel. Allowed values: default, low, medium, high" }, 400)
           }

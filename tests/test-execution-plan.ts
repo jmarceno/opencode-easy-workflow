@@ -162,18 +162,46 @@ test("resolveBatches throws on circular dependency", () => {
   if (!threw) throw new Error("Expected circular dependency error")
 })
 
-test("buildExecutionGraph returns correct structure", () => {
+test("buildExecutionGraph includes dependent backlog tasks in later batches", () => {
   const tasks = [
     makeTask({ id: "1", name: "Task 1" }),
     makeTask({ id: "2", name: "Task 2", requirements: ["1"] }),
   ]
   const graph = buildExecutionGraph(tasks, 2)
-  assertEq(graph.totalTasks, 1)
+  assertEq(graph.totalTasks, 2)
   assertEq(graph.parallelLimit, 2)
-  assertEq(graph.batches.length, 1)
-  assertEq(graph.nodes.length, 1)
-  assertEq(graph.edges.length, 0)
+  assertEq(graph.batches.length, 2)
+  assertEq(graph.nodes.length, 2)
+  assertEq(graph.edges.length, 1)
   assertEq(graph.nodes[0].id, "1")
+  assertEq(graph.nodes[1].id, "2")
+  assertEq(graph.edges[0].from, "1")
+  assertEq(graph.edges[0].to, "2")
+})
+
+test("buildExecutionGraph excludes tasks blocked by non-runnable dependencies", () => {
+  const tasks = [
+    makeTask({
+      id: "1",
+      name: "Plan Task",
+      status: "review",
+      executionPhase: "plan_complete_waiting_approval",
+      awaitingPlanApproval: true,
+      planmode: true,
+      agentOutput: "[plan] Approved plan waiting for user approval\n",
+    }),
+    makeTask({
+      id: "2",
+      name: "Dependent Task",
+      requirements: ["1"],
+    }),
+  ]
+
+  const graph = buildExecutionGraph(tasks, 2)
+  assertEq(graph.totalTasks, 0)
+  assertEq(graph.batches.length, 0)
+  assertEq(graph.nodes.length, 0)
+  assertEq(graph.edges.length, 0)
 })
 
 console.log("\n=== All Tests Passed ===")

@@ -49,6 +49,7 @@ export interface Task {
   planModel: string
   executionModel: string
   planmode: boolean
+  autoApprovePlan: boolean
   review: boolean
   autoCommit: boolean
   deleteWorktree: boolean

@@ -202,8 +202,38 @@ export function resolveDependencyChain(targetTaskId: string, allTasks: Task[]): 
   return resolveExecutionTasks(allTasks, targetTaskId)
 }
 
+function getExecutionGraphTasks(tasks: Task[]): Task[] {
+  const taskMap = new Map<string, Task>()
+  for (const task of tasks) taskMap.set(task.id, task)
+
+  const pendingTasks = tasks.filter(task => task.status !== "done" && isTaskExecutable(task))
+  const scheduledIds = new Set<string>()
+
+  let madeProgress = true
+  while (madeProgress) {
+    madeProgress = false
+
+    for (const task of pendingTasks) {
+      if (scheduledIds.has(task.id)) continue
+
+      const requirementsSatisfied = task.requirements.every(depId => {
+        const dependency = taskMap.get(depId)
+        if (!dependency) return false
+        return dependency.status === "done" || scheduledIds.has(depId)
+      })
+
+      if (!requirementsSatisfied) continue
+
+      scheduledIds.add(task.id)
+      madeProgress = true
+    }
+  }
+
+  return pendingTasks.filter(task => scheduledIds.has(task.id))
+}
+
 export function buildExecutionGraph(tasks: Task[], parallelLimit: number): ExecutionGraph {
-  const executableTasks = getExecutableTasks(tasks)
+  const executableTasks = getExecutionGraphTasks(tasks)
   const batches = resolveBatches(executableTasks, parallelLimit)
 
   const nodes = executableTasks.map(t => ({

@@ -405,6 +405,123 @@ async function testRepairStateQueuesImplementation() {
   }
 }
 
+async function testAutoApprovePlanDefaultsAndRoundTrips() {
+  const tempDir = mkdtempSync(join(tmpdir(), "easy-workflow-auto-approve-roundtrip-"))
+  const dbPath = join(tempDir, "tasks.db")
+  const db = new KanbanDB(dbPath)
+  const portProbe = Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response("ok")
+    },
+  })
+  const port = portProbe.port
+  portProbe.stop()
+  db.updateOptions({ port })
+
+  const server = new KanbanServer(db, {
+    onStart: async () => {},
+    onStartSingle: async () => {},
+    onStop: () => {},
+    getExecuting: () => false,
+    getStartError: () => null,
+    getServerUrl: () => `http://127.0.0.1:${port}`,
+  })
+
+  server.start()
+
+  try {
+    const createdDefault = db.createTask({
+      name: "Default auto-approve",
+      prompt: "Test",
+    })
+    assert(createdDefault.autoApprovePlan === false, "Expected autoApprovePlan to default to false")
+
+    const createResp = await fetch(`http://127.0.0.1:${port}/api/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Auto approve true",
+        prompt: "Plan and execute",
+        planmode: true,
+        autoApprovePlan: true,
+      }),
+    })
+
+    assert(createResp.ok, `Expected create to succeed, got ${createResp.status}`)
+    const createdTask = await createResp.json() as any
+    assert(createdTask.autoApprovePlan === true, "Expected created task to store autoApprovePlan=true")
+
+    const patchResp = await fetch(`http://127.0.0.1:${port}/api/tasks/${createdTask.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ autoApprovePlan: false }),
+    })
+    assert(patchResp.ok, `Expected patch to succeed, got ${patchResp.status}`)
+    const patchedTask = db.getTask(createdTask.id)!
+    assert(patchedTask.autoApprovePlan === false, "Expected autoApprovePlan=false after patch")
+
+    console.log("✓ autoApprovePlan defaults to false and round-trips via API")
+  } finally {
+    server.stop()
+    db.close()
+    cleanupTempDir(tempDir)
+  }
+}
+
+async function testTaskBooleanValidationRejectsInvalidAutoApprovePlan() {
+  const tempDir = mkdtempSync(join(tmpdir(), "easy-workflow-auto-approve-validation-"))
+  const dbPath = join(tempDir, "tasks.db")
+  const db = new KanbanDB(dbPath)
+  const portProbe = Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response("ok")
+    },
+  })
+  const port = portProbe.port
+  portProbe.stop()
+  db.updateOptions({ port })
+
+  const server = new KanbanServer(db, {
+    onStart: async () => {},
+    onStartSingle: async () => {},
+    onStop: () => {},
+    getExecuting: () => false,
+    getStartError: () => null,
+    getServerUrl: () => `http://127.0.0.1:${port}`,
+  })
+
+  server.start()
+
+  try {
+    const createResp = await fetch(`http://127.0.0.1:${port}/api/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Invalid bool",
+        prompt: "Test",
+        autoApprovePlan: "yes",
+      }),
+    })
+    assert(createResp.status === 400, `Expected invalid boolean create to fail with 400, got ${createResp.status}`)
+
+    const validTask = db.createTask({ name: "Patch target", prompt: "Test" })
+    const patchResp = await fetch(`http://127.0.0.1:${port}/api/tasks/${validTask.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ autoApprovePlan: 1 }),
+    })
+    assert(patchResp.status === 400, `Expected invalid boolean patch to fail with 400, got ${patchResp.status}`)
+
+    console.log("✓ task API rejects non-boolean autoApprovePlan values")
+  } finally {
+    server.stop()
+    db.close()
+    cleanupTempDir(tempDir)
+  }
+}
+
 async function main() {
   await testApprovePlanWithMessage()
   await testApprovePlanWithoutMessage()
@@ -412,6 +529,8 @@ async function main() {
   await testApprovePlanWithExistingApprovalNote()
   await testApprovePlanRejectsNonPlanOutput()
   await testRepairStateQueuesImplementation()
+  await testAutoApprovePlanDefaultsAndRoundTrips()
+  await testTaskBooleanValidationRejectsInvalidAutoApprovePlan()
   console.log("\nAll approval message tests passed")
 }
 

@@ -46,6 +46,7 @@ function rowToTask(row: any): Task {
     planModel: row.plan_model,
     executionModel: row.execution_model,
     planmode: row.planmode === 1,
+    autoApprovePlan: row.auto_approve_plan === 1,
     review: row.review === 1,
     autoCommit: row.auto_commit === 1,
     deleteWorktree: row.delete_worktree !== 0,
@@ -115,6 +116,7 @@ export class KanbanDB {
         plan_model TEXT NOT NULL DEFAULT 'default',
         execution_model TEXT NOT NULL DEFAULT 'default',
         planmode INTEGER NOT NULL DEFAULT 0,
+        auto_approve_plan INTEGER NOT NULL DEFAULT 0,
         review INTEGER NOT NULL DEFAULT 1,
         auto_commit INTEGER NOT NULL DEFAULT 1,
         delete_worktree INTEGER NOT NULL DEFAULT 1,
@@ -204,6 +206,11 @@ export class KanbanDB {
     const hasDeleteWorktree = tableInfo.some((col: any) => col.name === "delete_worktree")
     if (!hasDeleteWorktree) {
       this.db.exec("ALTER TABLE tasks ADD COLUMN delete_worktree INTEGER NOT NULL DEFAULT 1")
+    }
+
+    const hasAutoApprovePlan = tableInfo.some((col: any) => col.name === "auto_approve_plan")
+    if (!hasAutoApprovePlan) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN auto_approve_plan INTEGER NOT NULL DEFAULT 0")
     }
 
     const hasThinkingLevel = tableInfo.some((col: any) => col.name === "thinking_level")
@@ -466,6 +473,7 @@ export class KanbanDB {
     planModel?: string
     executionModel?: string
     planmode?: boolean
+    autoApprovePlan?: boolean
     review?: boolean
     autoCommit?: boolean
     deleteWorktree?: boolean
@@ -484,8 +492,8 @@ export class KanbanDB {
     const now = Math.floor(Date.now() / 1000)
 
     this.db.prepare(`
-      INSERT INTO tasks (id, name, idx, prompt, branch, plan_model, execution_model, planmode, review, auto_commit, delete_worktree, status, requirements, created_at, updated_at, thinking_level, execution_phase, awaiting_plan_approval, plan_revision_count, execution_strategy, best_of_n_config, best_of_n_substage)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tasks (id, name, idx, prompt, branch, plan_model, execution_model, planmode, auto_approve_plan, review, auto_commit, delete_worktree, status, requirements, created_at, updated_at, thinking_level, execution_phase, awaiting_plan_approval, plan_revision_count, execution_strategy, best_of_n_config, best_of_n_substage)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       data.name,
@@ -495,6 +503,7 @@ export class KanbanDB {
       data.planModel ?? "default",
       data.executionModel ?? "default",
       data.planmode ? 1 : 0,
+      data.autoApprovePlan ? 1 : 0,
       data.review !== false ? 1 : 0,
       data.autoCommit !== false ? 1 : 0,
       data.deleteWorktree !== false ? 1 : 0,
@@ -522,6 +531,7 @@ export class KanbanDB {
     planModel: string
     executionModel: string
     planmode: boolean
+    autoApprovePlan: boolean
     review: boolean
     autoCommit: boolean
     deleteWorktree: boolean
@@ -552,6 +562,7 @@ export class KanbanDB {
     if (updates.planModel !== undefined) { sets.push("plan_model = ?"); values.push(updates.planModel) }
     if (updates.executionModel !== undefined) { sets.push("execution_model = ?"); values.push(updates.executionModel) }
     if (updates.planmode !== undefined) { sets.push("planmode = ?"); values.push(updates.planmode ? 1 : 0) }
+    if (updates.autoApprovePlan !== undefined) { sets.push("auto_approve_plan = ?"); values.push(updates.autoApprovePlan ? 1 : 0) }
     if (updates.review !== undefined) { sets.push("review = ?"); values.push(updates.review ? 1 : 0) }
     if (updates.autoCommit !== undefined) { sets.push("auto_commit = ?"); values.push(updates.autoCommit ? 1 : 0) }
     if (updates.deleteWorktree !== undefined) { sets.push("delete_worktree = ?"); values.push(updates.deleteWorktree ? 1 : 0) }

@@ -794,26 +794,38 @@ export class Orchestrator {
             this.server.broadcast({ type: "agent_output", payload: { taskId: task.id, output: `[plan] ${planOutput}\n` } })
           }
 
-          const shouldDeletePausedWorktree = currentTask.deleteWorktree !== false
-          if (worktreeInfo?.directory && shouldDeletePausedWorktree) {
-            try {
-              await this.removeWorktree(worktreeInfo.directory)
-            } catch (cleanupErr) {
-              appendDebugLog("warn", "plan mode worktree cleanup failed", { taskId: task.id, error: String(cleanupErr) })
+          const shouldAutoApprovePlan = currentTask.autoApprovePlan === true
+          if (shouldAutoApprovePlan) {
+            this.db.updateTask(task.id, {
+              awaitingPlanApproval: false,
+              executionPhase: "implementation_pending",
+            })
+            currentTask = this.getTaskOrThrow(task.id, "transitioning auto-approved plan to implementation", task.name)
+            lastKnownTask = currentTask
+            this.server.broadcast({ type: "task_updated", payload: currentTask })
+            appendDebugLog("info", "plan mode: plan auto-approved, continuing to implementation", { taskId: task.id })
+          } else {
+            const shouldDeletePausedWorktree = currentTask.deleteWorktree !== false
+            if (worktreeInfo?.directory && shouldDeletePausedWorktree) {
+              try {
+                await this.removeWorktree(worktreeInfo.directory)
+              } catch (cleanupErr) {
+                appendDebugLog("warn", "plan mode worktree cleanup failed", { taskId: task.id, error: String(cleanupErr) })
+              }
             }
-          }
 
-          this.db.updateTask(task.id, {
-            status: "review",
-            awaitingPlanApproval: true,
-            executionPhase: "plan_complete_waiting_approval",
-            worktreeDir: shouldDeletePausedWorktree ? null : currentTask.worktreeDir,
-          })
-          currentTask = this.getTaskOrThrow(task.id, "saving the completed plan", task.name)
-          lastKnownTask = currentTask
-          this.server.broadcast({ type: "task_updated", payload: currentTask })
-          appendDebugLog("info", "plan mode: plan complete, awaiting approval", { taskId: task.id })
-          return
+            this.db.updateTask(task.id, {
+              status: "review",
+              awaitingPlanApproval: true,
+              executionPhase: "plan_complete_waiting_approval",
+              worktreeDir: shouldDeletePausedWorktree ? null : currentTask.worktreeDir,
+            })
+            currentTask = this.getTaskOrThrow(task.id, "saving the completed plan", task.name)
+            lastKnownTask = currentTask
+            this.server.broadcast({ type: "task_updated", payload: currentTask })
+            appendDebugLog("info", "plan mode: plan complete, awaiting approval", { taskId: task.id })
+            return
+          }
         }
 
         if (isPlanRevisionResume) {
@@ -849,35 +861,48 @@ export class Orchestrator {
           this.db.appendAgentOutput(task.id, `[plan] ${revisedPlanOutput}\n`)
           this.server.broadcast({ type: "agent_output", payload: { taskId: task.id, output: `[plan] ${revisedPlanOutput}\n` } })
 
-          const shouldDeletePausedWorktree = currentTask.deleteWorktree !== false
-          if (worktreeInfo?.directory && shouldDeletePausedWorktree) {
-            try {
-              await this.removeWorktree(worktreeInfo.directory)
-            } catch (cleanupErr) {
-              appendDebugLog("warn", "plan revision worktree cleanup failed", { taskId: task.id, error: String(cleanupErr) })
+          const shouldAutoApprovePlan = currentTask.autoApprovePlan === true
+          if (shouldAutoApprovePlan) {
+            this.db.updateTask(task.id, {
+              awaitingPlanApproval: false,
+              executionPhase: "implementation_pending",
+            })
+            currentTask = this.getTaskOrThrow(task.id, "transitioning revised auto-approved plan to implementation", task.name)
+            lastKnownTask = currentTask
+            this.server.broadcast({ type: "task_updated", payload: currentTask })
+            appendDebugLog("info", "plan mode: revised plan auto-approved, continuing to implementation", { taskId: task.id })
+          } else {
+            const shouldDeletePausedWorktree = currentTask.deleteWorktree !== false
+            if (worktreeInfo?.directory && shouldDeletePausedWorktree) {
+              try {
+                await this.removeWorktree(worktreeInfo.directory)
+              } catch (cleanupErr) {
+                appendDebugLog("warn", "plan revision worktree cleanup failed", { taskId: task.id, error: String(cleanupErr) })
+              }
             }
-          }
 
-          this.db.updateTask(task.id, {
-            status: "review",
-            awaitingPlanApproval: true,
-            executionPhase: "plan_complete_waiting_approval",
-            worktreeDir: shouldDeletePausedWorktree ? null : currentTask.worktreeDir,
-          })
-          currentTask = this.getTaskOrThrow(task.id, "saving the revised plan", task.name)
-          lastKnownTask = currentTask
-          this.server.broadcast({ type: "task_updated", payload: currentTask })
-          appendDebugLog("info", "plan mode: revision complete, awaiting approval", { taskId: task.id })
-          return
+            this.db.updateTask(task.id, {
+              status: "review",
+              awaitingPlanApproval: true,
+              executionPhase: "plan_complete_waiting_approval",
+              worktreeDir: shouldDeletePausedWorktree ? null : currentTask.worktreeDir,
+            })
+            currentTask = this.getTaskOrThrow(task.id, "saving the revised plan", task.name)
+            lastKnownTask = currentTask
+            this.server.broadcast({ type: "task_updated", payload: currentTask })
+            appendDebugLog("info", "plan mode: revision complete, awaiting approval", { taskId: task.id })
+            return
+          }
         }
 
         appendDebugLog("info", "plan mode: sending execution prompt", { taskId: task.id })
-        const approvedPlanContext = getLatestTaggedOutput(task.agentOutput, "plan")
+        const executionTaskState = this.getTaskOrThrow(task.id, "loading approved plan context", task.name)
+        const approvedPlanContext = getLatestTaggedOutput(executionTaskState.agentOutput, "plan")
         if (!approvedPlanContext) {
           throw new Error("Execution prompt failed: no approved [plan] block was captured")
         }
-        const userApprovalNote = getLatestTaggedOutput(task.agentOutput, "user-approval-note")
-        const revisionRequests = task.agentOutput
+        const userApprovalNote = getLatestTaggedOutput(executionTaskState.agentOutput, "user-approval-note")
+        const revisionRequests = executionTaskState.agentOutput
           .match(/\[user-revision-request\]\s*[\s\S]*?(?=\n\[[a-z0-9-]+\]|$)/g)?.map((entry) => entry.replace(/^\[user-revision-request\]\s*/, "").trim()).filter(Boolean) ?? []
         const allUserGuidance = [
           ...revisionRequests.map((r, i) => `Revision request ${i + 1}:\n${r}`),
