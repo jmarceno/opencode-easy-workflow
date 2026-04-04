@@ -665,6 +665,9 @@ export class KanbanServer {
         if (body?.autoDeleteReviewSessions !== undefined && !isBoolean(body.autoDeleteReviewSessions)) {
           return this.json({ error: "Invalid autoDeleteReviewSessions. Expected boolean." }, 400)
         }
+        if (body?.showExecutionGraph !== undefined && !isBoolean(body.showExecutionGraph)) {
+          return this.json({ error: "Invalid showExecutionGraph. Expected boolean." }, 400)
+        }
         if (body?.reviewModel !== undefined) {
           if (typeof body.reviewModel !== "string" || !body.reviewModel.trim() || body.reviewModel === "default") {
             return this.json({ error: "Invalid reviewModel. Select a concrete provider/model value." }, 400)

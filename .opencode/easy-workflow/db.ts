@@ -15,6 +15,7 @@ const DEFAULT_OPTIONS: Options = {
   parallelTasks: 1,
   autoDeleteNormalSessions: false,
   autoDeleteReviewSessions: false,
+  showExecutionGraph: true,
   port: 3789,
   thinkingLevel: "default",
 }
@@ -644,6 +645,7 @@ export class KanbanDB {
       parallelTasks: parseInt(opts.parallel_tasks ?? "1", 10) || 1,
       autoDeleteNormalSessions: normalizeOptionBoolean(opts.auto_delete_normal_sessions, DEFAULT_OPTIONS.autoDeleteNormalSessions),
       autoDeleteReviewSessions: normalizeOptionBoolean(opts.auto_delete_review_sessions, DEFAULT_OPTIONS.autoDeleteReviewSessions),
+      showExecutionGraph: normalizeOptionBoolean(opts.show_execution_graph, DEFAULT_OPTIONS.showExecutionGraph),
       port: parseInt(opts.port ?? "3789", 10) || 3789,
       thinkingLevel: normalizeThinkingLevel(opts.thinking_level) ?? DEFAULT_OPTIONS.thinkingLevel,
     }
@@ -663,6 +665,7 @@ export class KanbanDB {
     if (partial.parallelTasks !== undefined) upsert.run("parallel_tasks", String(partial.parallelTasks))
     if (partial.autoDeleteNormalSessions !== undefined) upsert.run("auto_delete_normal_sessions", String(partial.autoDeleteNormalSessions))
     if (partial.autoDeleteReviewSessions !== undefined) upsert.run("auto_delete_review_sessions", String(partial.autoDeleteReviewSessions))
+    if (partial.showExecutionGraph !== undefined) upsert.run("show_execution_graph", String(partial.showExecutionGraph))
     if (partial.port !== undefined) upsert.run("port", String(partial.port))
     if (partial.thinkingLevel !== undefined) upsert.run("thinking_level", partial.thinkingLevel)
 

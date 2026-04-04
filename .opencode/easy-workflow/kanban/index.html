@@ -106,11 +106,60 @@ sl-button, sl-icon-button, sl-input, sl-select, sl-textarea, sl-checkbox, sl-swi
 }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 
+html { scrollbar-color: var(--border) var(--surface); }
+body, .board, .column-body, .log-body, .modal-body, .req-list, .output-content {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+body::-webkit-scrollbar,
+.board::-webkit-scrollbar,
+.column-body::-webkit-scrollbar,
+.log-body::-webkit-scrollbar,
+.modal-body::-webkit-scrollbar,
+.req-list::-webkit-scrollbar,
+.output-content::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+body::-webkit-scrollbar-track,
+.board::-webkit-scrollbar-track,
+.column-body::-webkit-scrollbar-track,
+.log-body::-webkit-scrollbar-track,
+.modal-body::-webkit-scrollbar-track,
+.req-list::-webkit-scrollbar-track,
+.output-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+body::-webkit-scrollbar-thumb,
+.board::-webkit-scrollbar-thumb,
+.column-body::-webkit-scrollbar-thumb,
+.log-body::-webkit-scrollbar-thumb,
+.modal-body::-webkit-scrollbar-thumb,
+.req-list::-webkit-scrollbar-thumb,
+.output-content::-webkit-scrollbar-thumb {
+  background: rgba(139, 148, 158, 0.35);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+body::-webkit-scrollbar-thumb:hover,
+.board::-webkit-scrollbar-thumb:hover,
+.column-body::-webkit-scrollbar-thumb:hover,
+.log-body::-webkit-scrollbar-thumb:hover,
+.modal-body::-webkit-scrollbar-thumb:hover,
+.req-list::-webkit-scrollbar-thumb:hover,
+.output-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(139, 148, 158, 0.6);
+  background-clip: content-box;
+}
+
 /* Top bar */
 .topbar { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 12px 24px; background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 100; }
 .topbar h1 { font-size: 18px; font-weight: 600; order: 2; }
 .topbar-title { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 240px; }
 .topbar-title h1 { order: 0; }
+.topbar-heading { display: inline-flex; align-items: center; gap: 8px; }
+.topbar-actions { display:flex; align-items:center; gap:12px; flex-wrap:wrap; justify-content:flex-end; }
 .shortcut-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; color: var(--text-dim); font-size: 11px; }
 .shortcut-item { display: inline-flex; align-items: center; gap: 4px; }
 .shortcut-key { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace; color: var(--text); font-weight: 700; border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; background: var(--surface2); }
@@ -124,6 +173,29 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 .btn-danger:hover { background: #b62324; }
 .btn-sm { padding: 3px 10px; font-size: 12px; }
 sl-button.btn { display: inline-flex; align-items: center; justify-content: center; }
+sl-button::part(base) {
+  min-height: 38px;
+  border-radius: 8px;
+  font-weight: 600;
+  padding: 0 14px;
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease, box-shadow .15s ease;
+}
+sl-button::part(label) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  text-align: center;
+}
+sl-button[size="small"]::part(base) {
+  min-height: 30px;
+  padding: 0 10px;
+}
+sl-icon-button::part(base) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
 
 /* Board */
 .board { display: grid; grid-template-columns: repeat(5, minmax(200px, 1fr)); grid-template-rows: minmax(0, 1fr); gap: 12px; padding: 16px; flex: 1; min-height: 0; min-width: 0; max-width: 100%; overflow-x: auto; overflow-y: hidden; }
@@ -233,15 +305,17 @@ sl-badge.badge { font-size: 11px; --sl-font-size-small: 11px; }
 .delete-all-btn:hover { border-color: var(--red); color: var(--red); background: rgba(218,54,51,.14); }
 
 /* Modal overlay */
-.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 200; display: flex; align-items: center; justify-content: center; }
+.modal-overlay { position: fixed; inset: 0; padding: 20px; background: rgba(0,0,0,.72); backdrop-filter: blur(4px); z-index: 200; display: flex; align-items: center; justify-content: center; }
 .modal-overlay.hidden { display: none; }
-.modal { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; width: 520px; max-height: 85vh; overflow-y: auto; box-shadow: var(--shadow); }
-.modal-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+.modal { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; width: min(640px, calc(100vw - 40px)); max-height: min(880px, calc(100vh - 40px)); display: flex; flex-direction: column; overflow: hidden; box-shadow: var(--shadow); }
+.modal-options { width: min(560px, calc(100vw - 40px)); }
+.modal-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-shrink: 0; }
 .modal-header h2 { font-size: 16px; font-weight: 600; }
 .modal-close { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 18px; padding: 4px; border-radius: 4px; }
 .modal-close:hover { color: var(--text); background: var(--surface2); }
-.modal-body { padding: 20px; }
-.modal-footer { padding: 12px 20px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 8px; }
+.modal-body { padding: 20px; overflow-y: auto; flex: 1; min-height: 0; }
+.modal-footer { padding: 12px 20px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; flex-shrink: 0; background: linear-gradient(180deg, rgba(22,27,34,.96), #161b22); }
+.modal-options .modal-body { padding: 16px 18px; }
 sl-dialog::part(base) { --width: 520px; }
 sl-dialog::part(panel) { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); }
 sl-dialog::part(header) { background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 20px; }
@@ -253,9 +327,114 @@ sl-dialog::part(close-button):hover { color: var(--text); background: var(--surf
 
 /* Form */
 .form-group { margin-bottom: 14px; }
+.form-group { position: relative; z-index: 0; }
+.form-group:focus-within { z-index: 8; }
 .form-group label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 4px; color: var(--text-dim); }
 .label-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
 .label-row label { margin-bottom: 0; }
+.model-search,
+.bon-slot-row input[type="number"],
+.bon-slot-row input[type="text"],
+.bon-slot-row select {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+}
+.model-search::placeholder,
+.bon-slot-row input::placeholder {
+  color: var(--text-dim);
+}
+.model-search:focus,
+.bon-slot-row input:focus,
+.bon-slot-row select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(47, 129, 247, 0.16);
+}
+.form-group sl-input::part(form-control),
+.form-group sl-select::part(form-control),
+.form-group sl-textarea::part(form-control) {
+  width: 100%;
+}
+.form-group sl-input::part(base),
+.form-group sl-textarea::part(base),
+.form-group sl-select::part(combobox) {
+  min-height: 38px;
+  border-radius: var(--radius);
+  border-color: var(--border);
+  background: var(--bg);
+  box-shadow: none;
+}
+.form-group sl-textarea::part(base) {
+  min-height: 112px;
+  overflow: hidden;
+}
+.form-group sl-input::part(input),
+.form-group sl-textarea::part(textarea),
+.form-group sl-select::part(display-input) {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+  padding-inline: 12px;
+}
+.form-group sl-textarea::part(textarea) {
+  padding: 12px;
+  min-height: 112px;
+  resize: none;
+  vertical-align: top;
+}
+.form-group sl-input::part(input)::placeholder,
+.form-group sl-textarea::part(textarea)::placeholder {
+  color: var(--text-dim);
+}
+.form-group sl-input::part(base):focus-within,
+.form-group sl-textarea::part(base):focus-within,
+.form-group sl-select::part(combobox):focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(47, 129, 247, 0.16);
+}
+.form-group sl-select::part(listbox) {
+  background: var(--surface);
+  border-color: var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.form-group sl-select::part(panel) {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+.form-group sl-select::part(menu) {
+  background: var(--surface);
+}
+.form-group sl-select::part(display-input) {
+  color: var(--text);
+}
+sl-option {
+  display: block;
+  background: var(--surface);
+}
+sl-option::part(base) {
+  display: flex;
+  width: 100%;
+  padding: 8px 12px;
+  color: var(--text);
+  background: var(--surface);
+}
+sl-option::part(base):hover {
+  background: rgba(47, 129, 247, 0.16);
+}
+sl-option[aria-selected="true"]::part(base),
+sl-option[variant~="checked"]::part(base) {
+  background: var(--accent);
+  color: #fff;
+}
 .help-btn {
   width: 18px;
   height: 18px;
@@ -281,10 +460,42 @@ sl-dialog::part(close-button):hover { color: var(--text); background: var(--surf
 .form-group textarea { min-height: 100px; resize: vertical; }
 .form-group input:focus, .form-group textarea:focus, .form-group select:focus { outline: none; border-color: var(--accent); }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.checkbox-group { display: flex; gap: 16px; flex-wrap: wrap; }
-.checkbox-group label { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; color: var(--text); }
-.checkbox-group input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; }
+.checkbox-group { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; }
+.checkbox-group sl-checkbox,
+.inline-checkbox {
+  width: auto;
+  max-width: 100%;
+}
+.checkbox-group sl-checkbox::part(base),
+.inline-checkbox::part(base) {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: auto;
+  min-height: 0;
+}
+.checkbox-group sl-checkbox::part(control),
+.inline-checkbox::part(control) {
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  flex: 0 0 auto;
+  border-radius: 5px;
+}
+.checkbox-group sl-checkbox::part(label),
+.inline-checkbox::part(label) {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.35;
+  font-size: 13px;
+}
+.checkbox-group sl-checkbox::part(control--checked),
+.inline-checkbox::part(control--checked) {
+  background: var(--accent);
+  border-color: var(--accent);
+}
 .form-group sl-input, .form-group sl-select, .form-group sl-textarea { width: 100%; }
+.form-group sl-select { position: relative; z-index: 2; }
 
 /* Multi-select for requirements */
 .req-list { max-height: 150px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); padding: 6px; }
@@ -313,13 +524,49 @@ sl-dialog::part(close-button):hover { color: var(--text); background: var(--surf
 .conn-status { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .conn-status.connected { background: var(--green); }
 .conn-status.disconnected { background: var(--red); }
+.topbar-status-dot { width: 9px; height: 9px; box-shadow: 0 0 0 3px rgba(139, 148, 158, 0.12); }
 .model-search { margin-bottom: 6px; }
+
+.options-btn::part(base) {
+  background: #c9d1d9;
+  border-color: #a4adb8;
+  color: #111827;
+}
+.options-btn::part(base):hover {
+  background: #b8c1cb;
+  border-color: #b8c1cb;
+  color: #111827;
+}
+
+sl-tooltip::part(body) {
+  max-width: 320px;
+  background: rgba(22, 27, 34, 0.98);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 8px 10px;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 500;
+  position: relative;
+  z-index: 10000;
+}
+sl-tooltip {
+  --sl-z-index-tooltip: 10000;
+}
 
 @media (max-width: 980px) {
   .topbar { flex-wrap: wrap; gap: 10px; padding: 10px 12px; }
   .topbar-title { order: 3; width: 100%; }
+  .topbar-actions { width: 100%; justify-content: center; }
   .board { grid-template-columns: 1fr; overflow-y: auto; }
   .log-panel { height: 160px; }
+  .modal-overlay { padding: 12px; }
+  .modal, .modal-options { width: min(100vw - 24px, 640px); max-height: calc(100vh - 24px); }
+  .form-row, .checkbox-group { grid-template-columns: 1fr; }
 }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/fuse.js@7.1.0"></script>
@@ -330,7 +577,7 @@ sl-dialog::part(close-button):hover { color: var(--text); background: var(--surf
 <div class="topbar">
   <sl-button variant="success" id="startBtn" onclick="toggleExecution()">Start</sl-button>
   <div class="topbar-title">
-    <h1>Easy Workflow Kanban</h1>
+    <h1 class="topbar-heading"><span>Easy Workflow Kanban</span><span class="conn-status disconnected topbar-status-dot" id="connStatus"></span></h1>
     <div class="shortcut-list" aria-label="Keyboard shortcuts">
       <span class="shortcut-item"><span class="shortcut-key">T</span> Create a new template</span>
       <span class="shortcut-item"><span class="shortcut-key">B</span> Create a new backlog task</span>
@@ -338,13 +585,9 @@ sl-dialog::part(close-button):hover { color: var(--text); background: var(--surf
       <span class="shortcut-item"><span class="shortcut-key">D</span> Delete all done tasks</span>
     </div>
   </div>
-  <div style="display:flex;align-items:center;gap:8px;">
-    <div class="conn-status disconnected" id="connStatus"></div>
-    <sl-button onclick="openOptionsModal()">Options</sl-button>
-    <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-dim);cursor:pointer;">
-      <sl-checkbox id="showGraphChk"></sl-checkbox>
-      Show execution graph
-    </label>
+  <div class="topbar-actions">
+    <sl-button class="options-btn" onclick="openOptionsModal()">Options</sl-button>
+    <sl-checkbox class="inline-checkbox" id="showGraphChk">Show execution graph</sl-checkbox>
   </div>
 </div>
 
@@ -406,7 +649,7 @@ sl-dialog::part(close-button):hover { color: var(--text); background: var(--surf
 </div>
 
 <!-- Task Modal -->
-<div class="modal-overlay hidden" id="taskModal">
+<div class="modal-overlay hidden" id="taskModal" data-close-on-overlay="true">
   <div class="modal">
     <div class="modal-header">
       <h2 id="taskModalTitle">Add Task</h2>
@@ -550,11 +793,11 @@ sl-dialog::part(close-button):hover { color: var(--text); background: var(--surf
       </div>
       <div class="form-group">
         <div class="checkbox-group">
-          <label title="Create a plan first and wait for approval before full execution continues."><sl-checkbox id="taskPlanmode"> Plan Mode</sl-checkbox></label>
-          <label title="When plan mode is enabled, automatically accept generated plans and continue directly to implementation."><sl-checkbox id="taskAutoApprovePlan"> Auto-approve plan</sl-checkbox></label>
-          <label title="Run an automated review pass after execution so the task can be checked before completion."><sl-checkbox id="taskReview" checked> Review</sl-checkbox></label>
-          <label title="Allow the workflow to create a git commit automatically when the task finishes successfully."><sl-checkbox id="taskAutoCommit" checked> Auto-commit</sl-checkbox></label>
-          <label title="Remove the temporary worktree after the task finishes. Disable this if you want to inspect files afterward."><sl-checkbox id="taskDeleteWorktree" checked> Delete Worktree</sl-checkbox></label>
+          <sl-checkbox id="taskPlanmode" title="Create a plan first and wait for approval before full execution continues.">Plan Mode</sl-checkbox>
+          <sl-checkbox id="taskAutoApprovePlan" title="When plan mode is enabled, automatically accept generated plans and continue directly to implementation.">Auto-approve plan</sl-checkbox>
+          <sl-checkbox id="taskReview" checked title="Run an automated review pass after execution so the task can be checked before completion.">Review</sl-checkbox>
+          <sl-checkbox id="taskAutoCommit" checked title="Allow the workflow to create a git commit automatically when the task finishes successfully.">Auto-commit</sl-checkbox>
+          <sl-checkbox id="taskDeleteWorktree" checked title="Remove the temporary worktree after the task finishes. Disable this if you want to inspect files afterward.">Delete Worktree</sl-checkbox>
         </div>
       </div>
       <div class="form-group">
@@ -573,8 +816,8 @@ sl-dialog::part(close-button):hover { color: var(--text); background: var(--surf
 </div>
 
 <!-- Options Modal -->
-<div class="modal-overlay hidden" id="optionsModal">
-  <div class="modal">
+<div class="modal-overlay hidden" id="optionsModal" data-close-on-overlay="true">
+  <div class="modal modal-options">
     <div class="modal-header">
       <h2>Options</h2>
       <sl-icon-button class="modal-close" onclick="closeOptionsModal()" name="x"></sl-icon-button>
@@ -657,8 +900,8 @@ sl-dialog::part(close-button):hover { color: var(--text); background: var(--surf
           <sl-icon-button class="help-btn" type="button" title="Automatically delete OpenCode sessions after task/review runs finish. Enable only if you do not need session history for debugging." aria-label="Session cleanup help" name="question-circle"></sl-icon-button>
         </div>
         <div class="checkbox-group">
-          <label title="Delete normal execution sessions for tasks, worker runs, and final applier runs after they finish."><sl-checkbox id="optAutoDeleteNormalSessions"> Auto-delete normal sessions</sl-checkbox></label>
-          <label title="Delete review sessions after each review pass (review loop + best-of-n reviewers)."><sl-checkbox id="optAutoDeleteReviewSessions"> Auto-delete review sessions</sl-checkbox></label>
+          <sl-checkbox id="optAutoDeleteNormalSessions" title="Delete normal execution sessions for tasks, worker runs, and final applier runs after they finish.">Auto-delete normal sessions</sl-checkbox>
+          <sl-checkbox id="optAutoDeleteReviewSessions" title="Delete review sessions after each review pass (review loop + best-of-n reviewers).">Auto-delete review sessions</sl-checkbox>
         </div>
       </div>
       <div class="form-group">
@@ -666,7 +909,7 @@ sl-dialog::part(close-button):hover { color: var(--text); background: var(--surf
           <label for="optCommitPrompt">Commit Prompt <span style="font-weight:normal;color:var(--text-dim)">({{base_ref}} will be replaced at runtime)</span></label>
           <sl-icon-button class="help-btn" type="button" title="Instructions used when the workflow asks the agent to prepare a git commit. Use {{base_ref}} anywhere you want the current base branch inserted automatically." aria-label="Commit prompt help" name="question-circle"></sl-icon-button>
         </div>
-        <sl-textarea id="optCommitPrompt" style="min-height:300px;font-family:monospace;font-size:12px" placeholder="Instructions for committing changes..."></sl-textarea>
+        <sl-textarea id="optCommitPrompt" style="min-height:180px;font-family:monospace;font-size:12px" placeholder="Instructions for committing changes..."></sl-textarea>
       </div>
     </div>
     <div class="modal-footer">
@@ -677,7 +920,7 @@ sl-dialog::part(close-button):hover { color: var(--text); background: var(--surf
 </div>
 
 <!-- Execution Graph Modal -->
-<div class="modal-overlay hidden" id="graphModal">
+<div class="modal-overlay hidden" id="graphModal" data-close-on-overlay="true">
   <div class="modal" style="width:600px;">
     <div class="modal-header">
       <h2>Execution Graph Preview</h2>
@@ -693,7 +936,7 @@ sl-dialog::part(close-button):hover { color: var(--text); background: var(--surf
   </div>
 </div>
 
-<div class="modal-overlay hidden" id="approveModal">
+<div class="modal-overlay hidden" id="approveModal" data-close-on-overlay="true">
   <div class="modal" style="width:440px;">
     <div class="modal-header">
       <h2 id="approveModalTitle">Approve Plan</h2>
@@ -711,7 +954,7 @@ sl-dialog::part(close-button):hover { color: var(--text); background: var(--surf
   </div>
 </div>
 
-<div class="modal-overlay hidden" id="revisionModal">
+<div class="modal-overlay hidden" id="revisionModal" data-close-on-overlay="true">
   <div class="modal" style="width:440px;">
     <div class="modal-header">
       <h2>Request Plan Changes</h2>
@@ -729,7 +972,7 @@ sl-dialog::part(close-button):hover { color: var(--text); background: var(--surf
   </div>
 </div>
 
-<div class="modal-overlay hidden" id="startSingleModal">
+<div class="modal-overlay hidden" id="startSingleModal" data-close-on-overlay="true">
   <div class="modal" style="width:440px;">
     <div class="modal-header">
       <h2>Start Single Task</h2>
@@ -945,7 +1188,24 @@ async function refreshBonSummaries(taskIds) {
 async function loadOptions() {
   try {
     allOptions = await api('/api/options')
+    const showGraphCheckbox = document.getElementById('showGraphChk')
+    if (showGraphCheckbox) {
+      showGraphCheckbox.checked = allOptions.showExecutionGraph !== false
+    }
   } catch (e) { showToast('Failed to load options: ' + e.message, 'error') }
+}
+
+async function persistShowExecutionGraphPreference() {
+  const checkbox = document.getElementById('showGraphChk')
+  if (!checkbox) return
+  try {
+    allOptions = await api('/api/options', 'PUT', {
+      showExecutionGraph: !!checkbox.checked,
+    })
+  } catch (e) {
+    checkbox.checked = allOptions.showExecutionGraph !== false
+    showToast('Failed to save graph preference: ' + e.message, 'error')
+  }
 }
 
 async function loadBranches() {
@@ -1123,7 +1383,7 @@ function populateBranchSelect(selectId, selectedBranch) {
 
   select.innerHTML = ''
   if (branches.length === 0) {
-    const opt = document.createElement('option')
+    const opt = document.createElement('sl-option')
     opt.value = ''
     opt.textContent = 'No branches found'
     select.appendChild(opt)
@@ -1132,12 +1392,46 @@ function populateBranchSelect(selectId, selectedBranch) {
   }
 
   for (const branch of branches) {
-    const opt = document.createElement('option')
+    const opt = document.createElement('sl-option')
     opt.value = branch
     opt.textContent = branch
     select.appendChild(opt)
   }
   select.value = desired || branches[0]
+}
+
+const MODAL_CLOSE_HANDLERS = {
+  taskModal: closeTaskModal,
+  optionsModal: closeOptionsModal,
+  graphModal: closeGraphModal,
+  approveModal: closeApproveModal,
+  revisionModal: closeRevisionModal,
+  startSingleModal: closeStartSingleModal,
+}
+
+function getOpenModalIds() {
+  return Object.keys(MODAL_CLOSE_HANDLERS).filter((id) => {
+    const el = document.getElementById(id)
+    return el && !el.classList.contains('hidden')
+  })
+}
+
+function closeTopmostModal() {
+  const openIds = getOpenModalIds()
+  const topmostId = openIds[openIds.length - 1]
+  if (!topmostId) return false
+  MODAL_CLOSE_HANDLERS[topmostId]?.()
+  return true
+}
+
+function attachModalOverlayHandlers() {
+  for (const overlay of document.querySelectorAll('.modal-overlay[data-close-on-overlay="true"]')) {
+    overlay.addEventListener('mousedown', (event) => {
+      if (event.target !== overlay) return
+      const close = MODAL_CLOSE_HANDLERS[overlay.id]
+      if (typeof close === 'function') close()
+    })
+  }
 }
 
 function logTaskTransition(prevTask, nextTask) {
@@ -1554,7 +1848,7 @@ function renderCard(task, colStatus) {
   if (isOrphanExecutingTask(task)) {
     const note = document.createElement('div')
     note.className = 'card-note'
-    note.textContent = 'Execution is not currently running. Use Send to Exec, Repair Done, Smart Repair, or Reset.'
+    note.textContent = 'OpenCode session may have dropped. Click on card title to verify, no action is needed if the session is still active, otherwise use Send to Exec, Repair Done, Smart Repair, or Reset.'
     card.appendChild(note)
   }
 
@@ -2361,10 +2655,28 @@ function renderGraphModal(graph) {
 
 async function confirmExecution() {
   closeGraphModal()
-  document.getElementById('showGraphChk').checked = false
   try {
     await api('/api/start', 'POST')
   } catch (e) { showToast('Execution start failed: ' + e.message, 'error') }
+}
+
+function enhanceTooltips() {
+  const tooltipTargets = Array.from(document.querySelectorAll('[title]'))
+  for (const el of tooltipTargets) {
+    if (el.dataset.tooltipEnhanced === 'true') continue
+    const content = (el.getAttribute('title') || '').trim()
+    if (!content) continue
+    const tooltip = document.createElement('sl-tooltip')
+    tooltip.content = content
+    tooltip.hoist = true
+    tooltip.placement = 'top'
+    el.removeAttribute('title')
+    el.dataset.tooltipEnhanced = 'true'
+    const parent = el.parentNode
+    if (!parent) continue
+    parent.insertBefore(tooltip, el)
+    tooltip.appendChild(el)
+  }
 }
 
 let bonDetailModal = null
@@ -2533,6 +2845,11 @@ function showToast(msg, variant = 'info') {
 
 // ---- Keyboard Shortcuts ----
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    const closed = closeTopmostModal()
+    if (closed) e.preventDefault()
+    return
+  }
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return
   if (e.metaKey || e.ctrlKey || e.altKey) return
   const key = e.key.toUpperCase()
@@ -2544,7 +2861,14 @@ document.addEventListener('keydown', (e) => {
 
 // ---- Init ----
 async function init() {
+  enhanceTooltips()
   rebuildModelSearchIndex()
+  attachModalOverlayHandlers()
+  const showGraphCheckbox = document.getElementById('showGraphChk')
+  if (showGraphCheckbox) {
+    showGraphCheckbox.checked = true
+    showGraphCheckbox.addEventListener('sl-change', persistShowExecutionGraphPreference)
+  }
   for (const inputId of MODEL_INPUT_IDS) {
     resetModelInput(inputId, 'default')
   }

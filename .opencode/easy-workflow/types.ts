@@ -136,6 +136,7 @@ export interface Options {
   parallelTasks: number
   autoDeleteNormalSessions: boolean
   autoDeleteReviewSessions: boolean
+  showExecutionGraph: boolean
   port: number
   thinkingLevel: ThinkingLevel
 }
