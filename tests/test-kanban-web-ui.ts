@@ -259,12 +259,12 @@ async function main() {
       undefined,
       { timeout: 5000 },
     );
-    const optionPlanCount = await page.locator("#optPlanModel option").count();
-    const optionExecCount = await page.locator("#optExecModel option").count();
+    const optionPlanCount = await page.locator("#optPlanModel-suggestions option").count();
+    const optionExecCount = await page.locator("#optExecModel-suggestions option").count();
     if (optionPlanCount < 1 || optionExecCount < 1) {
-      throw new Error("Model dropdowns in options modal did not populate");
+      throw new Error("Model suggestion lists in options modal did not populate");
     }
-    report.modelCatalogHasDefaultOption = await page.locator("#optExecModel option[value='default']").count() > 0;
+    report.modelCatalogHasDefaultOption = await page.locator("#optExecModel-suggestions option[value='default']").count() > 0;
     if (!report.modelCatalogHasDefaultOption) {
       throw new Error("Model dropdown is missing required default option");
     }
@@ -288,7 +288,8 @@ async function main() {
       throw new Error("No non-default execution model available in /api/models catalog");
     }
     report.selectedExecutionModel = firstNonDefaultModel;
-    await page.selectOption("#taskExecModel", firstNonDefaultModel);
+    await page.fill("#taskExecModel", firstNonDefaultModel);
+    await page.dispatchEvent("#taskExecModel", "blur");
     await page.selectOption("#taskThinkingLevel", "high");
 
     if (await page.isChecked("#taskReview")) {
@@ -327,7 +328,10 @@ async function main() {
       throw new Error(`Thinking level persistence mismatch: expected high, got ${report.persistedThinkingLevel}`);
     }
 
-    await page.locator(`.card-title:has-text("${taskName}")`).first().click({ button: "right" });
+    const createdTaskCard = page.locator(".card", {
+      has: page.locator(".card-title", { hasText: taskName }),
+    }).first();
+    await createdTaskCard.locator(".card-actions button[title='Edit Task']").click();
     await page.waitForFunction(
       () => document.getElementById("taskModal")?.classList.contains("hidden") === false,
       undefined,

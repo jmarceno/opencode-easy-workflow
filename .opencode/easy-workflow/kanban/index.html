@@ -217,6 +217,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
   .log-panel { height: 160px; }
 }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/fuse.js@7.1.0"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
 </head>
 <body>
 
@@ -322,21 +324,29 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
         <textarea id="taskPrompt" placeholder="What should this task do?"></textarea>
       </div>
       <div class="form-row">
-        <div class="form-group">
+        <div class="form-group" x-data="modelPicker('taskPlanModel')" x-init="attach()">
           <div class="label-row">
             <label for="taskPlanModel">Plan Model</label>
             <button class="help-btn" type="button" title="Model used for planning steps before implementation. Use this when you want a specific model to reason about the approach first." aria-label="Task plan model help">?</button>
           </div>
-          <input type="text" id="taskPlanModelSearch" class="model-search" placeholder="Filter models...">
-          <select id="taskPlanModel"></select>
+          <input type="text" id="taskPlanModel" class="model-search" placeholder="Type model name..." list="taskPlanModel-suggestions" x-model="query" @focus="refreshSuggestions()" @input="refreshSuggestions()" @blur="commit()">
+          <datalist id="taskPlanModel-suggestions">
+            <template x-for="match in matches" :key="match.value + '-' + match.providerId">
+              <option :value="match.value" :label="match.labelWithProvider"></option>
+            </template>
+          </datalist>
         </div>
-        <div class="form-group">
+        <div class="form-group" x-data="modelPicker('taskExecModel')" x-init="attach()">
           <div class="label-row">
             <label for="taskExecModel">Execution Model</label>
             <button class="help-btn" type="button" title="Model used for the actual implementation work. Set this when execution should run on a different model than planning." aria-label="Task execution model help">?</button>
           </div>
-          <input type="text" id="taskExecModelSearch" class="model-search" placeholder="Filter models...">
-          <select id="taskExecModel"></select>
+          <input type="text" id="taskExecModel" class="model-search" placeholder="Type model name..." list="taskExecModel-suggestions" x-model="query" @focus="refreshSuggestions()" @input="refreshSuggestions()" @blur="commit()">
+          <datalist id="taskExecModel-suggestions">
+            <template x-for="match in matches" :key="match.value + '-' + match.providerId">
+              <option :value="match.value" :label="match.labelWithProvider"></option>
+            </template>
+          </datalist>
         </div>
       </div>
       <div class="form-group">
@@ -381,12 +391,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
           <button type="button" class="bon-add-btn" onclick="addBonReviewerSlot()">+ Add Reviewer Slot</button>
         </div>
         
-        <div class="form-group">
+        <div class="form-group" x-data="modelPicker('bonFinalApplierModel')" x-init="attach()">
           <div class="label-row">
             <label for="bonFinalApplierModel">Final Applier Model</label>
           </div>
-          <input type="text" id="bonFinalApplierModelSearch" class="model-search" placeholder="Filter models...">
-          <select id="bonFinalApplierModel"></select>
+          <input type="text" id="bonFinalApplierModel" class="model-search" placeholder="Type model name..." list="bonFinalApplierModel-suggestions" x-model="query" @focus="refreshSuggestions()" @input="refreshSuggestions()" @blur="commit()">
+          <datalist id="bonFinalApplierModel-suggestions">
+            <template x-for="match in matches" :key="match.value + '-' + match.providerId">
+              <option :value="match.value" :label="match.labelWithProvider"></option>
+            </template>
+          </datalist>
         </div>
         
         <div class="form-group">
@@ -468,30 +482,42 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
         <select id="optBranch"></select>
       </div>
       <div class="form-row">
-        <div class="form-group">
+        <div class="form-group" x-data="modelPicker('optPlanModel')" x-init="attach()">
           <div class="label-row">
             <label for="optPlanModel">Plan Model (global)</label>
             <button class="help-btn" type="button" title="Default planning model for new tasks. Individual tasks can override this value." aria-label="Global plan model help">?</button>
           </div>
-          <input type="text" id="optPlanModelSearch" class="model-search" placeholder="Filter models...">
-          <select id="optPlanModel"></select>
+          <input type="text" id="optPlanModel" class="model-search" placeholder="Type model name..." list="optPlanModel-suggestions" x-model="query" @focus="refreshSuggestions()" @input="refreshSuggestions()" @blur="commit()">
+          <datalist id="optPlanModel-suggestions">
+            <template x-for="match in matches" :key="match.value + '-' + match.providerId">
+              <option :value="match.value" :label="match.labelWithProvider"></option>
+            </template>
+          </datalist>
         </div>
-        <div class="form-group">
+        <div class="form-group" x-data="modelPicker('optExecModel')" x-init="attach()">
           <div class="label-row">
             <label for="optExecModel">Execution Model (global)</label>
             <button class="help-btn" type="button" title="Default execution model for new tasks. Individual tasks can override this value." aria-label="Global execution model help">?</button>
           </div>
-          <input type="text" id="optExecModelSearch" class="model-search" placeholder="Filter models...">
-          <select id="optExecModel"></select>
+          <input type="text" id="optExecModel" class="model-search" placeholder="Type model name..." list="optExecModel-suggestions" x-model="query" @focus="refreshSuggestions()" @input="refreshSuggestions()" @blur="commit()">
+          <datalist id="optExecModel-suggestions">
+            <template x-for="match in matches" :key="match.value + '-' + match.providerId">
+              <option :value="match.value" :label="match.labelWithProvider"></option>
+            </template>
+          </datalist>
         </div>
       </div>
-      <div class="form-group">
+      <div class="form-group" x-data="modelPicker('optReviewModel')" x-init="attach()">
         <div class="label-row">
           <label for="optReviewModel">Review Model</label>
           <button class="help-btn" type="button" title="Model used by the workflow-review agent. Saving this writes the selected model into .opencode/agents/workflow-review.md." aria-label="Review model help">?</button>
         </div>
-        <input type="text" id="optReviewModelSearch" class="model-search" placeholder="Filter models...">
-        <select id="optReviewModel"></select>
+        <input type="text" id="optReviewModel" class="model-search" placeholder="Type model name..." list="optReviewModel-suggestions" x-model="query" @focus="refreshSuggestions()" @input="refreshSuggestions()" @blur="commit()">
+        <datalist id="optReviewModel-suggestions">
+          <template x-for="match in matches" :key="match.value + '-' + match.providerId">
+            <option :value="match.value" :label="match.labelWithProvider"></option>
+          </template>
+        </datalist>
       </div>
       <div class="form-group">
         <div class="label-row">
@@ -640,13 +666,15 @@ let bonSummaryByTask = {}
 let taskModalMode = 'create'
 let taskModalCreateStatus = 'backlog'
 let modelCatalog = { providers: [] }
-const MODEL_SELECT_FILTERS = [
-  { selectId: 'taskPlanModel', searchId: 'taskPlanModelSearch' },
-  { selectId: 'taskExecModel', searchId: 'taskExecModelSearch' },
-  { selectId: 'optPlanModel', searchId: 'optPlanModelSearch' },
-  { selectId: 'optExecModel', searchId: 'optExecModelSearch' },
-  { selectId: 'optReviewModel', searchId: 'optReviewModelSearch' },
-  { selectId: 'bonFinalApplierModel', searchId: 'bonFinalApplierModelSearch' },
+let modelSearchIndex = []
+let modelFuse = null
+const MODEL_INPUT_IDS = [
+  'taskPlanModel',
+  'taskExecModel',
+  'optPlanModel',
+  'optExecModel',
+  'optReviewModel',
+  'bonFinalApplierModel',
 ]
 
 let bonWorkers = []
@@ -838,103 +866,114 @@ async function loadModels() {
     if (data.error) {
       showToast('Failed to load models: ' + data.error, 'error')
       modelCatalog = { providers: [] }
+      rebuildModelSearchIndex()
+      window.dispatchEvent(new Event('easyworkflow:model-catalog-updated'))
       return
     }
     modelCatalog = data
+    rebuildModelSearchIndex()
+    window.dispatchEvent(new Event('easyworkflow:model-catalog-updated'))
   } catch (e) {
     modelCatalog = { providers: [] }
+    rebuildModelSearchIndex()
+    window.dispatchEvent(new Event('easyworkflow:model-catalog-updated'))
     showToast('Failed to load models: ' + e.message, 'error')
   }
 }
 
-function matchesModelFilter(model, provider, query) {
-  if (!query) return true
-  const q = query.toLowerCase()
-  const providerName = (provider.name || provider.id || '').toLowerCase()
-  const providerId = (provider.id || '').toLowerCase()
-  const modelLabel = (model.label || '').toLowerCase()
-  const modelValue = (model.value || '').toLowerCase()
-  return providerName.includes(q)
-    || providerId.includes(q)
-    || modelLabel.includes(q)
-    || modelValue.includes(q)
-}
-
-function populateModelSelect(selectId, selectedValue, filterText = '') {
-  const select = document.getElementById(selectId)
-  if (!select) return
-  select.innerHTML = ''
-
-  const optDefault = document.createElement('option')
-  optDefault.value = 'default'
-  optDefault.textContent = 'default'
-  select.appendChild(optDefault)
-
-  const filter = (filterText || '').trim()
-  let matchedCount = 0
-  const providers = modelCatalog?.providers || []
-  for (const provider of providers) {
-    if (!provider.models || provider.models.length === 0) continue
-    const group = document.createElement('optgroup')
-    group.label = provider.name || provider.id
-    for (const model of provider.models) {
-      const shouldInclude = matchesModelFilter(model, provider, filter) || model.value === selectedValue
-      if (!shouldInclude) continue
-      const opt = document.createElement('option')
-      opt.value = model.value
-      opt.textContent = model.label
-      group.appendChild(opt)
-      matchedCount++
+function rebuildModelSearchIndex() {
+  const entries = [{
+    value: 'default',
+    label: 'default',
+    providerId: 'default',
+    providerName: 'default',
+    labelWithProvider: 'default',
+  }]
+  for (const provider of modelCatalog?.providers || []) {
+    for (const model of provider.models || []) {
+      if (!model || !model.value) continue
+      const providerName = provider.name || provider.id || ''
+      const label = model.label || model.value
+      entries.push({
+        value: model.value,
+        label,
+        providerId: provider.id || providerName || 'unknown',
+        providerName,
+        labelWithProvider: providerName ? `${label} (${providerName})` : label,
+      })
     }
-    if (group.children.length > 0) select.appendChild(group)
   }
-
-  if (selectedValue && selectedValue !== 'default') {
-    let found = false
-    for (const provider of providers) {
-      for (const model of provider.models || []) {
-        if (model.value === selectedValue) {
-          select.value = selectedValue
-          found = true
-          break
-        }
-      }
-      if (found) break
-    }
-    if (!found) {
-      const optUnknown = document.createElement('option')
-      optUnknown.value = selectedValue
-      optUnknown.textContent = selectedValue + ' (unknown)'
-      optUnknown.selected = true
-      select.insertBefore(optUnknown, select.firstChild)
-    }
-  } else {
-    select.value = 'default'
-  }
-
-  if (filter && matchedCount === 0 && select.value === 'default') {
-    const noMatch = document.createElement('option')
-    noMatch.disabled = true
-    noMatch.textContent = 'No models match filter'
-    select.appendChild(noMatch)
-  }
-}
-
-function wireModelSearchInputs() {
-  for (const cfg of MODEL_SELECT_FILTERS) {
-    const search = document.getElementById(cfg.searchId)
-    const select = document.getElementById(cfg.selectId)
-    if (!search || !select) continue
-    search.addEventListener('input', () => {
-      populateModelSelect(cfg.selectId, select.value || 'default', search.value)
+  modelSearchIndex = entries
+  if (typeof Fuse === 'function') {
+    modelFuse = new Fuse(entries, {
+      includeScore: true,
+      threshold: 0.4,
+      ignoreLocation: true,
+      keys: ['value', 'label', 'providerId', 'providerName', 'labelWithProvider'],
     })
+  } else {
+    modelFuse = null
   }
 }
 
-function resetModelSelectWithSearch(selectId, searchId, selectedValue) {
-  const search = document.getElementById(searchId)
-  if (search) search.value = ''
-  populateModelSelect(selectId, selectedValue, '')
+function getModelSuggestions(query, limit = 12) {
+  const q = (query || '').trim()
+  if (!q) return modelSearchIndex.slice(0, limit)
+  if (modelFuse) {
+    return modelFuse.search(q, { limit }).map(result => result.item)
+  }
+  const lower = q.toLowerCase()
+  return modelSearchIndex
+    .filter(model => model.labelWithProvider.toLowerCase().includes(lower) || model.value.toLowerCase().includes(lower))
+    .slice(0, limit)
+}
+
+function normalizeModelInputValue(rawValue) {
+  const value = (rawValue || '').trim()
+  if (!value) return 'default'
+
+  const exactValue = modelSearchIndex.find(model => model.value.toLowerCase() === value.toLowerCase())
+  if (exactValue) return exactValue.value
+
+  const exactLabel = modelSearchIndex.find(model => model.label.toLowerCase() === value.toLowerCase())
+  if (exactLabel) return exactLabel.value
+
+  if (modelFuse) {
+    const [topMatch] = modelFuse.search(value, { limit: 1 })
+    if (topMatch && typeof topMatch.score === 'number' && topMatch.score <= 0.2) {
+      return topMatch.item.value
+    }
+  }
+  return value
+}
+
+function resetModelInput(inputId, selectedValue) {
+  const input = document.getElementById(inputId)
+  if (!input) return
+  input.value = selectedValue || 'default'
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
+window.modelPicker = function modelPicker(inputId) {
+  return {
+    query: 'default',
+    matches: [],
+    attach() {
+      const input = document.getElementById(inputId)
+      this.query = (input?.value || 'default').trim() || 'default'
+      this.refreshSuggestions()
+      window.addEventListener('easyworkflow:model-catalog-updated', () => {
+        this.refreshSuggestions()
+      })
+    },
+    refreshSuggestions() {
+      this.matches = getModelSuggestions(this.query)
+    },
+    commit() {
+      this.query = normalizeModelInputValue(this.query)
+      this.refreshSuggestions()
+    },
+  }
 }
 
 function addLogEntry(message, variant = 'info') {
@@ -1585,8 +1624,8 @@ function openTaskModal(taskId, options = {}) {
     document.getElementById('taskPrompt').value = task.prompt
     populateBranchSelect('taskBranch', task.branch || getFallbackBranch())
     document.getElementById('taskBranch').value = task.branch || getFallbackBranch()
-    resetModelSelectWithSearch('taskPlanModel', 'taskPlanModelSearch', task.planModel)
-    resetModelSelectWithSearch('taskExecModel', 'taskExecModelSearch', task.executionModel)
+    resetModelInput('taskPlanModel', task.planModel)
+    resetModelInput('taskExecModel', task.executionModel)
     document.getElementById('taskPlanmode').checked = task.planmode
     document.getElementById('taskReview').checked = task.review
     document.getElementById('taskAutoCommit').checked = task.autoCommit
@@ -1600,7 +1639,7 @@ function openTaskModal(taskId, options = {}) {
       bonWorkers = (task.bestOfNConfig.workers || []).map(w => ({ model: w.model, count: w.count, suffix: w.taskSuffix || '' }))
       bonReviewers = (task.bestOfNConfig.reviewers || []).map(r => ({ model: r.model, count: r.count, suffix: r.taskSuffix || '' }))
       if (task.bestOfNConfig.finalApplier) {
-        resetModelSelectWithSearch('bonFinalApplierModel', 'bonFinalApplierModelSearch', task.bestOfNConfig.finalApplier.model)
+        resetModelInput('bonFinalApplierModel', task.bestOfNConfig.finalApplier.model)
         document.getElementById('bonFinalApplierSuffix').value = task.bestOfNConfig.finalApplier.taskSuffix || ''
       }
       document.getElementById('bonSelectionMode').value = task.bestOfNConfig.selectionMode || 'pick_best'
@@ -1608,7 +1647,7 @@ function openTaskModal(taskId, options = {}) {
       document.getElementById('bonVerificationCmd').value = task.bestOfNConfig.verificationCommand || ''
     } else {
       document.getElementById('taskExecutionStrategy').value = 'standard'
-      resetModelSelectWithSearch('bonFinalApplierModel', 'bonFinalApplierModelSearch', 'default')
+      resetModelInput('bonFinalApplierModel', 'default')
       document.getElementById('bonFinalApplierSuffix').value = ''
       document.getElementById('bonSelectionMode').value = 'pick_best'
       document.getElementById('bonMinSuccessful').value = '1'
@@ -1623,8 +1662,8 @@ function openTaskModal(taskId, options = {}) {
     document.getElementById('taskPrompt').value = seedTask.prompt
     populateBranchSelect('taskBranch', seedTask.branch || getFallbackBranch())
     document.getElementById('taskBranch').value = seedTask.branch || getFallbackBranch()
-    resetModelSelectWithSearch('taskPlanModel', 'taskPlanModelSearch', seedTask.planModel || 'default')
-    resetModelSelectWithSearch('taskExecModel', 'taskExecModelSearch', seedTask.executionModel || 'default')
+    resetModelInput('taskPlanModel', seedTask.planModel || 'default')
+    resetModelInput('taskExecModel', seedTask.executionModel || 'default')
     document.getElementById('taskPlanmode').checked = seedTask.planmode
     document.getElementById('taskReview').checked = seedTask.review
     document.getElementById('taskAutoCommit').checked = seedTask.autoCommit
@@ -1633,7 +1672,7 @@ function openTaskModal(taskId, options = {}) {
     currentReqs = seedTask.requirements || []
     reqExcludeId = seedTask.id
     document.getElementById('taskExecutionStrategy').value = 'standard'
-    resetModelSelectWithSearch('bonFinalApplierModel', 'bonFinalApplierModelSearch', 'default')
+    resetModelInput('bonFinalApplierModel', 'default')
   } else {
     taskModalMode = explicitMode || 'create'
     taskModalCreateStatus = createStatus
@@ -1643,15 +1682,15 @@ function openTaskModal(taskId, options = {}) {
     document.getElementById('taskPrompt').value = ''
     populateBranchSelect('taskBranch', getFallbackBranch())
     document.getElementById('taskBranch').value = getFallbackBranch()
-    resetModelSelectWithSearch('taskPlanModel', 'taskPlanModelSearch', 'default')
-    resetModelSelectWithSearch('taskExecModel', 'taskExecModelSearch', 'default')
+    resetModelInput('taskPlanModel', 'default')
+    resetModelInput('taskExecModel', 'default')
     document.getElementById('taskPlanmode').checked = false
     document.getElementById('taskReview').checked = true
     document.getElementById('taskAutoCommit').checked = true
     document.getElementById('taskDeleteWorktree').checked = true
     document.getElementById('taskThinkingLevel').value = 'default'
     document.getElementById('taskExecutionStrategy').value = 'standard'
-    resetModelSelectWithSearch('bonFinalApplierModel', 'bonFinalApplierModelSearch', 'default')
+    resetModelInput('bonFinalApplierModel', 'default')
     document.getElementById('bonFinalApplierSuffix').value = ''
     document.getElementById('bonSelectionMode').value = 'pick_best'
     document.getElementById('bonMinSuccessful').value = '1'
@@ -1751,8 +1790,8 @@ async function saveTask() {
     name,
     prompt,
     branch,
-    planModel: document.getElementById('taskPlanModel').value || 'default',
-    executionModel: document.getElementById('taskExecModel').value || 'default',
+    planModel: normalizeModelInputValue(document.getElementById('taskPlanModel').value),
+    executionModel: normalizeModelInputValue(document.getElementById('taskExecModel').value),
     planmode: document.getElementById('taskPlanmode').checked,
     review: document.getElementById('taskReview').checked,
     autoCommit: document.getElementById('taskAutoCommit').checked,
@@ -1767,7 +1806,7 @@ async function saveTask() {
       workers: bonWorkers.map(w => ({ model: w.model, count: w.count || 1, taskSuffix: w.suffix || undefined })),
       reviewers: bonReviewers.map(r => ({ model: r.model, count: r.count || 1, taskSuffix: r.suffix || undefined })),
       finalApplier: {
-        model: document.getElementById('bonFinalApplierModel').value || 'default',
+        model: normalizeModelInputValue(document.getElementById('bonFinalApplierModel').value),
         taskSuffix: document.getElementById('bonFinalApplierSuffix').value.trim() || undefined,
       },
       selectionMode: document.getElementById('bonSelectionMode').value || 'pick_best',
@@ -2007,9 +2046,9 @@ function openOptionsModal() {
   populateBranchSelect('optBranch', allOptions.branch || getFallbackBranch())
   document.getElementById('optCommitPrompt').value = allOptions.commitPrompt || ''
   document.getElementById('optBranch').value = allOptions.branch || getFallbackBranch()
-  resetModelSelectWithSearch('optPlanModel', 'optPlanModelSearch', allOptions.planModel || 'default')
-  resetModelSelectWithSearch('optExecModel', 'optExecModelSearch', allOptions.executionModel || 'default')
-  resetModelSelectWithSearch('optReviewModel', 'optReviewModelSearch', allOptions.reviewModel || 'default')
+  resetModelInput('optPlanModel', allOptions.planModel || 'default')
+  resetModelInput('optExecModel', allOptions.executionModel || 'default')
+  resetModelInput('optReviewModel', allOptions.reviewModel || 'default')
   document.getElementById('optCommand').value = allOptions.command || ''
   document.getElementById('optParallel').value = allOptions.parallelTasks || 1
   document.getElementById('optAutoDeleteNormalSessions').checked = !!allOptions.autoDeleteNormalSessions
@@ -2033,9 +2072,9 @@ async function saveOptions() {
     await api('/api/options', 'PUT', {
       commitPrompt: document.getElementById('optCommitPrompt').value,
       branch,
-      planModel: document.getElementById('optPlanModel').value,
-      executionModel: document.getElementById('optExecModel').value,
-      reviewModel: document.getElementById('optReviewModel').value,
+      planModel: normalizeModelInputValue(document.getElementById('optPlanModel').value),
+      executionModel: normalizeModelInputValue(document.getElementById('optExecModel').value),
+      reviewModel: normalizeModelInputValue(document.getElementById('optReviewModel').value),
       command: document.getElementById('optCommand').value,
       parallelTasks: parseInt(document.getElementById('optParallel').value, 10) || 1,
       autoDeleteNormalSessions: document.getElementById('optAutoDeleteNormalSessions').checked,
@@ -2395,7 +2434,10 @@ document.addEventListener('keydown', (e) => {
 
 // ---- Init ----
 async function init() {
-  wireModelSearchInputs()
+  rebuildModelSearchIndex()
+  for (const inputId of MODEL_INPUT_IDS) {
+    resetModelInput(inputId, 'default')
+  }
   await loadOptions()
   await loadBranches()
   await loadModels()
