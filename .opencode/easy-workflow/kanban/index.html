@@ -798,6 +798,7 @@ sl-tooltip {
           <sl-checkbox id="taskReview" checked title="Run an automated review pass after execution so the task can be checked before completion.">Review</sl-checkbox>
           <sl-checkbox id="taskAutoCommit" checked title="Allow the workflow to create a git commit automatically when the task finishes successfully.">Auto-commit</sl-checkbox>
           <sl-checkbox id="taskDeleteWorktree" checked title="Remove the temporary worktree after the task finishes. Disable this if you want to inspect files afterward.">Delete Worktree</sl-checkbox>
+          <sl-checkbox id="taskSkipPermissionAsking" title="Task will use a more autonomous agent configuration, reducing permission prompts during execution.">Skip Permission Asking</sl-checkbox>
         </div>
       </div>
       <div class="form-group">
@@ -2031,6 +2032,7 @@ function openTaskModal(taskId, options = {}) {
     document.getElementById('taskReview').checked = task.review
     document.getElementById('taskAutoCommit').checked = task.autoCommit
     document.getElementById('taskDeleteWorktree').checked = task.deleteWorktree !== false
+    document.getElementById('taskSkipPermissionAsking').checked = task.skipPermissionAsking === true
     document.getElementById('taskThinkingLevel').value = task.thinkingLevel || 'default'
     currentReqs = task.requirements || []
     reqExcludeId = task.id
@@ -2070,6 +2072,7 @@ function openTaskModal(taskId, options = {}) {
     document.getElementById('taskReview').checked = seedTask.review
     document.getElementById('taskAutoCommit').checked = seedTask.autoCommit
     document.getElementById('taskDeleteWorktree').checked = seedTask.deleteWorktree !== false
+    document.getElementById('taskSkipPermissionAsking').checked = seedTask.skipPermissionAsking === true
     document.getElementById('taskThinkingLevel').value = seedTask.thinkingLevel || 'default'
     currentReqs = seedTask.requirements || []
     reqExcludeId = seedTask.id
@@ -2091,6 +2094,7 @@ function openTaskModal(taskId, options = {}) {
     document.getElementById('taskReview').checked = true
     document.getElementById('taskAutoCommit').checked = true
     document.getElementById('taskDeleteWorktree').checked = true
+    document.getElementById('taskSkipPermissionAsking').checked = true
     document.getElementById('taskThinkingLevel').value = 'default'
     document.getElementById('taskExecutionStrategy').value = 'standard'
     resetModelInput('bonFinalApplierModel', 'default')
@@ -2200,6 +2204,7 @@ async function saveTask() {
     review: document.getElementById('taskReview').checked,
     autoCommit: document.getElementById('taskAutoCommit').checked,
     deleteWorktree: document.getElementById('taskDeleteWorktree').checked,
+    skipPermissionAsking: document.getElementById('taskSkipPermissionAsking').checked,
     requirements: reqs,
     thinkingLevel: document.getElementById('taskThinkingLevel').value || 'default',
     executionStrategy,

@@ -571,6 +571,12 @@ export class KanbanServer {
       if (taskMatch) {
         const taskId = taskMatch[1]
 
+        if (method === "GET") {
+          const task = this.db.getTask(taskId)
+          if (!task) return this.json({ error: "Task not found" }, 404)
+          return this.json(task)
+        }
+
         if (method === "PATCH") {
           const existingTask = this.db.getTask(taskId)
           if (!existingTask) return this.json({ error: "Task not found" }, 404)
