@@ -23,6 +23,13 @@ const THINKING_LEVEL_AGENT_MAP: Record<Exclude<ThinkingLevel, "default">, string
   high: "deep-thinker",
 }
 
+const AUTONOMOUS_THINKING_AGENT_MAP: Record<ThinkingLevel, string> = {
+  default: "workflow-build",
+  low: "workflow-build-fast",
+  medium: "workflow-build",
+  high: "workflow-deep-thinker",
+}
+
 const EXPECTED_THINKING_AGENTS = Object.values(THINKING_LEVEL_AGENT_MAP)
 
 // ---- SDK v2 client wrapper ----
@@ -126,9 +133,20 @@ function resolveThinkingLevel(task: Task, options: Options): ThinkingLevel {
   return "default"
 }
 
-function mapThinkingLevelToAgent(level: ThinkingLevel): string | null {
+export function mapThinkingLevelToAgent(level: ThinkingLevel): string | null {
   if (level === "default") return null
   return THINKING_LEVEL_AGENT_MAP[level] || null
+}
+
+export function resolvePlanningAgent(skipPermissionAsking: boolean): string {
+  return skipPermissionAsking ? "workflow-plan" : "plan"
+}
+
+export function resolveExecutionAgent(skipPermissionAsking: boolean, level: ThinkingLevel): string | null {
+  if (skipPermissionAsking) {
+    return AUTONOMOUS_THINKING_AGENT_MAP[level]
+  }
+  return mapThinkingLevelToAgent(level)
 }
 
 function remapThinkingAgentError(error: unknown, agent: string | null): Error {
@@ -759,9 +777,9 @@ export class Orchestrator {
 
       // 4b. Determine effective thinking level and agent
       const effectiveThinkingLevel = resolveThinkingLevel(task, options)
-      const executionAgent = mapThinkingLevelToAgent(effectiveThinkingLevel)
-      if (effectiveThinkingLevel !== "default") {
-        appendDebugLog("info", "using thinking level", { taskId: task.id, level: effectiveThinkingLevel, agent: executionAgent })
+      const executionAgent = resolveExecutionAgent(task.skipPermissionAsking, effectiveThinkingLevel)
+      if (effectiveThinkingLevel !== "default" || task.skipPermissionAsking) {
+        appendDebugLog("info", "using thinking level", { taskId: task.id, level: effectiveThinkingLevel, agent: executionAgent, skipPermissionAsking: task.skipPermissionAsking })
       }
 
       // 5. Execute: plan mode or direct
@@ -778,7 +796,7 @@ export class Orchestrator {
           appendDebugLog("info", "plan mode: sending planning prompt", { taskId: task.id })
           const planResponse = await client.session.prompt({
             sessionID: sessionId,
-            agent: "plan",
+            agent: resolvePlanningAgent(task.skipPermissionAsking),
             model: planModelParsed,
             parts: [{ type: "text", text: task.prompt }],
           })
@@ -847,7 +865,7 @@ export class Orchestrator {
           ].filter(Boolean).join("\n\n")
           const planResponse = await client.session.prompt({
             sessionID: sessionId,
-            agent: "plan",
+            agent: resolvePlanningAgent(task.skipPermissionAsking),
             model: planModelParsed,
             parts: [{ type: "text", text: revisionPrompt }],
           })
@@ -1403,7 +1421,7 @@ export class Orchestrator {
           parts: [{ type: "text", text: workerPrompt }],
         }
         const effectiveThinkingLevel = resolveThinkingLevel(task, options)
-        const executionAgent = mapThinkingLevelToAgent(effectiveThinkingLevel)
+        const executionAgent = resolveExecutionAgent(task.skipPermissionAsking, effectiveThinkingLevel)
         if (executionAgent) promptOpts.agent = executionAgent
 
         let result: any
@@ -1948,7 +1966,7 @@ RECOMMENDED_PROMPT:
       appendDebugLog("info", "running best-of-n final applier", { taskId: task.id, finalApplierRunId: finalApplierRun.id, model: finalApplierRun.model })
 
       const effectiveThinkingLevel = resolveThinkingLevel(task, options)
-      const executionAgent = mapThinkingLevelToAgent(effectiveThinkingLevel)
+      const executionAgent = resolveExecutionAgent(task.skipPermissionAsking, effectiveThinkingLevel)
 
       const promptOpts: any = {
         sessionID: sessionId,
