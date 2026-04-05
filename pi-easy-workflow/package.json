@@ -1,0 +1,58 @@
+{
+  "name": "@jmarceno/pi-easy-workflow",
+  "version": "0.1.0",
+  "description": "Review-driven workflow with kanban board for pi",
+  "type": "module",
+  "license": "MIT",
+  "private": false,
+  "keywords": ["pi-package", "pi-extension", "pi", "workflow", "kanban", "review"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jmarceno/opencode-easy-workflow"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": ["src", "README.md"],
+  "pi": {
+    "extensions": ["./src/index.ts"],
+    "skills": ["./src/skills"],
+    "prompts": ["./src/prompts"]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": ">=0.52.7",
+    "@mariozechner/pi-tui": ">=0.52.7"
+  },
+  "peerDependenciesMeta": {
+    "@mariozechner/pi-coding-agent": { "optional": true },
+    "@mariozechner/pi-tui": { "optional": true }
+  },
+  "devDependencies": {
+    "@aliou/biome-plugins": "^0.3.0",
+    "@aliou/pi-utils-settings": "^0.2.0",
+    "@biomejs/biome": "^2.0.0",
+    "@changesets/cli": "^2.27.0",
+    "@mariozechner/pi-coding-agent": "0.52.7",
+    "@mariozechner/pi-tui": "0.52.7",
+    "@types/node": "^25.0.0",
+    "husky": "^9.0.0",
+    "typescript": "^5.8.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check",
+    "format": "biome check --write",
+    "check:lockfile": "pnpm install --frozen-lockfile --ignore-scripts",
+    "prepare": "[ -d .git ] && husky || true",
+    "changeset": "changeset",
+    "version": "changeset version",
+    "release": "pnpm changeset publish"
+  },
+  "pnpm": {
+    "overrides": {
+      "@mariozechner/pi-ai": "$@mariozechner/pi-coding-agent",
+      "@mariozechner/pi-tui": "$@mariozechner/pi-coding-agent"
+    }
+  },
+  "packageManager": "pnpm@10.26.1"
+}
