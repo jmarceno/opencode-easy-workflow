@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { configLoader } from "./config";
+import { startKanbanServer } from "./kanban/runtime";
 import { registerTools } from "./tools";
 import { registerCommands } from "./commands";
 import { registerHooks } from "./hooks";
@@ -28,6 +29,13 @@ export default async function (pi: ExtensionAPI) {
     reviewAgent: config.reviewAgent,
     maxReviewRuns: config.maxReviewRuns,
     port: config.port,
+  });
+
+  // Start kanban server
+  const kanbanServer = startKanbanServer(pi);
+  console.info("Easy Workflow kanban server started", {
+    port: kanbanServer.getPort(),
+    url: `http://127.0.0.1:${kanbanServer.getPort()}`,
   });
 
   // Register tools, commands, and hooks

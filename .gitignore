@@ -4,6 +4,7 @@ temp
 .opencode/easy-workflow/runs
 .opencode/easy-workflow/tasks.db*
 .opencode/easy-workflow/test-artifacts
+kanban.sqlite*
 
 # Logs
 logs

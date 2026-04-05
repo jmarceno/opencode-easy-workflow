@@ -198,11 +198,16 @@ function taskToExecutionNode(task: Task) {
 function buildExecutionGraph(tasks: Task[], parallelLimit: number) {
   const executable = tasks.filter(isTaskExecutable);
   const nodes = executable.map(taskToExecutionNode);
-  const batches: Array<{ index: number; tasks: ReturnType<typeof taskToExecutionNode>[] }> = [];
   const limit = Math.max(1, parallelLimit);
+  const batches: Array<{ idx: number; taskIds: string[]; taskNames: string[] }> = [];
 
   for (let i = 0; i < nodes.length; i += limit) {
-    batches.push({ index: batches.length, tasks: nodes.slice(i, i + limit) });
+    const batchNodes = nodes.slice(i, i + limit);
+    batches.push({
+      idx: batches.length,
+      taskIds: batchNodes.map((node) => node.id),
+      taskNames: batchNodes.map((node) => node.name),
+    });
   }
 
   const pendingApprovals = tasks
@@ -272,17 +277,29 @@ function listGitBranches(ownerDirectory: string): { branches: string[]; current:
 }
 
 function buildModelCatalog(options: Options) {
-  const modelValues = ["default", options.planModel, options.executionModel, options.reviewModel].filter(Boolean);
+  const seen = new Set<string>();
+  const concreteModels = [options.planModel, options.executionModel, options.reviewModel]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0 && value.trim() !== "default")
+    .map((value) => value.trim())
+    .filter((value) => {
+      const providerId = value.includes("/") ? value.split("/")[0] : "default";
+      const key = `${providerId}::${value}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((value) => ({
+      id: value,
+      label: value,
+      value,
+    }));
+
   return {
     providers: [
       {
         id: "default",
         name: "Default",
-        models: [...new Set(modelValues)].map((value) => ({
-          id: value,
-          label: value,
-          value,
-        })),
+        models: concreteModels,
       },
     ],
     defaults: { default: "default" },
@@ -417,6 +434,11 @@ export class KanbanServer {
     if (method === "GET" && (pathname === "/" || pathname === "/index.html")) {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(KANBAN_HTML);
+      return;
+    }
+
+    if (method === "GET" && pathname === "/favicon.ico") {
+      noContent(res);
       return;
     }
 

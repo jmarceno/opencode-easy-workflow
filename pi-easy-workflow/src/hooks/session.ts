@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { configLoader } from "../config";
+import { stopKanbanServer } from "../kanban/runtime";
 
 /**
  * Hook for session lifecycle management.
@@ -27,6 +28,7 @@ export function registerSessionStartHook(pi: ExtensionAPI): void {
 export function registerSessionShutdownHook(pi: ExtensionAPI): void {
   pi.on("session_shutdown", async (_event, _ctx) => {
     console.debug("Session shutdown");
+    stopKanbanServer();
 
     // TODO: Cleanup workflow state
     // - Close any open workflow runs for this session

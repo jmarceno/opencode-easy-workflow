@@ -2,7 +2,7 @@
 
 **Branch:** `pi-extension`  
 **Started:** 2026-04-05  
-**Status:** In Progress (exact HTML copied; compatibility API surface expanded)
+**Status:** In Progress (exact HTML copied; compatibility API expanded; real browser validation working)
 
 ## Overview
 
@@ -145,11 +145,11 @@ src/kanban/ (standalone dependencies)
 
 ## Next Steps
 
-1. **Manual/UI validation**: load the copied kanban page through the extension server and exercise create/edit/delete/start/approve/revision/repair flows to catch any remaining behavioral mismatches
-2. **Deepen orchestrator**: replace the current DB-only transitions with real sub-session execution
-3. **Review persistence**: store/update pending review state and run results from hooks
-4. **Lint + polish**: run `npm run lint` and clean up any remaining issues
-5. **Test**: run integration tests and then try loading the extension in pi
+1. **Deepen orchestrator**: replace the current DB-only transitions with real sub-session execution
+2. **Review persistence**: store/update pending review state and run results from hooks
+3. **Stress runtime startup/reload**: validate repeated Pi loads/reloads don't hit port conflicts or duplicate server-start issues
+4. **Lint + polish**: run `npm run lint`, then integration tests, then load the extension in pi
+5. **Optional real-model execution test later**: current E2E chain test is fully simulated/local; if/when a real API-backed execution test is added, it must use `minimax/MiniMax-M2.7` only
 
 ## Files Created
 
@@ -209,6 +209,14 @@ pi-easy-workflow/
 - 2026-04-05: Copied `.opencode/easy-workflow/kanban/index.html` verbatim into `pi-easy-workflow/src/kanban/index.html` so the page is now available from inside the Pi extension directory with exact visual/functional parity target.
 - 2026-04-05: Expanded `src/kanban/server.ts` to serve the copied page plus a broader compatibility API surface expected by the original UI (`/api/models`, `/api/branches`, `/api/start`, `/api/stop`, `/api/execution-graph`, task start/repair/revision endpoints, runs/candidates/summary endpoints, and `/ws`).
 - 2026-04-05: Performed a parity pass against the copied kanban HTML and tightened server behavior to better match the original OpenCode server: restored old-style validation/error cases, fixed `/api/start` and task-start behavior, returned `204` for deletes, accepted old reorder payloads, added plan approval/revision semantics, and aligned execution graph + best-of-n summary response shapes more closely with the legacy page.
+- 2026-04-05: Started real browser validation with Playwright against the actual copied page and live kanban server component. Added `scripts/kanban-dev-server.ts` for manual validation and `tests/kanban-ui-smoke.mjs` plus `npm run test:kanban-ui` for repeatable smoke coverage (page load, task create, task start, screenshot/report capture).
+- 2026-04-05: Manual + automated browser validation confirmed the page/server can load and perform basic task create/start flows, but the run initially failed on repeated Alpine console/page errors (`Duplicate key on x-for` and `Cannot read properties of undefined (reading 'after')`) coming from the model picker/render path.
+- 2026-04-05: Fixed the Alpine/runtime error by aligning `/api/models` with what the copied page expects: the page already injects its own `default` option, so the server must not duplicate it in the returned model catalog. After removing duplicate/default model entries, `npm run test:kanban-ui` passes cleanly with zero console errors, zero page errors, and zero failed requests.
+- 2026-04-05: Wired kanban server startup into the extension path via `src/index.ts` + `src/kanban/runtime.ts` so the extension now starts the HTTP/WebSocket kanban server automatically instead of relying only on the dev harness. Also updated the smoke test to avoid writing screenshots/reports by default and removed the generated test artifacts from the repo workspace.
+- 2026-04-05: Validated the real Pi runtime path, not just the dev harness: launched Pi with the extension loaded, confirmed the extension-started kanban server answered `/api/health`, opened the copied page in a browser against that server, and added `tests/pi-runtime-smoke.mjs` plus `npm run test:pi-runtime` to automate that runtime startup/browser validation. Added `/favicon.ico` handling to keep runtime browser console clean.
+- 2026-04-05: Expanded Playwright coverage with `tests/kanban-ui-extended.mjs` (edit, options, execution graph, approve/revision flows, repair flow, delete flow) and `tests/kanban-chain-e2e.mjs` (simulated complex dependency chain end-to-end through the copied UI + compatibility API). Added shared helpers in `tests/helpers/kanban-test-helpers.mjs` and npm scripts `test:kanban-ui:extended` + `test:kanban-chain`. No real model/API call is currently required for these tests; however, the reserved/default model for any future real API-backed test has been fixed to `minimax/MiniMax-M2.7` only.
+- 2026-04-05: Removed artifact-writing from the default Playwright smoke path entirely and added `scripts/pi-package.sh` plus matching npm scripts to install/remove/update the package in Pi (global or project-local scope) with one command.
+- 2026-04-05: Real browser coverage exposed another execution-graph compatibility mismatch: the copied page expected legacy batch fields (`idx`, `taskIds`, `taskNames`) rather than the simplified batch shape. Updated `src/kanban/server.ts` to return the legacy-compatible graph batch payload and got the expanded tests passing.
 - 2026-04-05: Fixed core kanban type mismatches in `src/kanban/types.ts` (`Task`, `WorkflowSessionKind`, `RunPhase`, `RunStatus`, `Options`, `plan_revision_pending`, and missing task fields).
 - 2026-04-05: Updated `src/kanban/db.ts` to persist the newly required task fields and reuse `WorkflowSessionKind` from shared types.
 - 2026-04-05: Added `src/kanban/orchestrator.ts` with an initial task lifecycle state machine and `src/kanban/runtime.ts` for shared DB/orchestrator access.

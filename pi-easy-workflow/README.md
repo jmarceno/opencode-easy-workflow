@@ -16,6 +16,32 @@ Review-driven workflow with kanban board for pi.
 npm install @jmarceno/pi-easy-workflow
 ```
 
+### Manage installation in Pi
+
+From inside `pi-easy-workflow/` you can use the helper script:
+
+```bash
+./scripts/pi-package.sh install
+./scripts/pi-package.sh remove
+./scripts/pi-package.sh update
+```
+
+For project-local Pi settings instead of global settings:
+
+```bash
+./scripts/pi-package.sh install --local
+./scripts/pi-package.sh remove --local
+./scripts/pi-package.sh update --local
+```
+
+Equivalent npm scripts are also available:
+
+```bash
+npm run pi:install
+npm run pi:remove
+npm run pi:update
+```
+
 ## Commands
 
 | Command | Description |
