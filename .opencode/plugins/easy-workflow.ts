@@ -84,6 +84,45 @@ const GOALS_PLACEHOLDER = "[REPLACE THIS WITH THE TASK GOALS]";
 const REVIEW_SECTION_MARKER = "## Persisted Review Result";
 const REVIEW_COOLDOWN_MS = 30_000;
 
+// ---- Root-owner resolution ----
+
+interface RootOwnerPointer {
+  ownerDirectory: string;
+  rootDbPath: string;
+}
+
+const ROOT_OWNER_FILENAME = "root-owner.json";
+
+function findRootOwnerPointer(startDirectory: string): { pointer: RootOwnerPointer | null; ownerDirectory: string; rootDbPath: string } {
+  const pointerPath = join(startDirectory, ".opencode", "easy-workflow", ROOT_OWNER_FILENAME);
+  if (existsSync(pointerPath)) {
+    try {
+      const raw = readFileSync(pointerPath, "utf-8");
+      const parsed = JSON.parse(raw) as Partial<RootOwnerPointer>;
+      if (typeof parsed.ownerDirectory === "string" && typeof parsed.rootDbPath === "string") {
+        return {
+          pointer: { ownerDirectory: parsed.ownerDirectory, rootDbPath: parsed.rootDbPath },
+          ownerDirectory: parsed.ownerDirectory,
+          rootDbPath: parsed.rootDbPath,
+        };
+      }
+    } catch {
+      appendDebugLog("warn", "root-owner.json exists but is invalid", { path: pointerPath });
+    }
+  }
+  return { pointer: null, ownerDirectory: resolve(startDirectory), rootDbPath: join(startDirectory, ".opencode", "easy-workflow", "tasks.db") };
+}
+
+function writeRootOwnerPointer(worktreeDirectory: string, ownerDirectory: string, rootDbPath: string): void {
+  const targetDir = join(worktreeDirectory, ".opencode", "easy-workflow");
+  mkdirSync(targetDir, { recursive: true });
+  writeFileSync(
+    join(targetDir, ROOT_OWNER_FILENAME),
+    JSON.stringify({ ownerDirectory, rootDbPath }, null, 2),
+    "utf-8",
+  );
+}
+
 // ---- Kanban globals ----
 
 type KanbanSingletonState = {
@@ -91,7 +130,203 @@ type KanbanSingletonState = {
   server: KanbanServer | null;
   orchestrator: Orchestrator | null;
   initPromise: Promise<void> | null;
+  rootDb: KanbanDB | null;
 };
+
+// ---- Workflow session ownership (for permission auto-reply) ----
+
+interface WorkflowSessionOwner {
+  taskId: string;
+  sessionKind: string;
+  skipPermissionAsking: boolean;
+}
+
+/**
+ * Look up whether a sessionId belongs to a workflow-owned session
+ * using the explicit root-level workflow session registry.
+ */
+function resolveWorkflowSessionOwnershipFromRegistry(
+  sessionId: string | null | undefined,
+  rootDb: KanbanDB | null,
+): WorkflowSessionOwner | null {
+  if (!sessionId || !rootDb) return null;
+  try {
+    const entry = rootDb.getWorkflowSession(sessionId);
+    if (!entry) return null;
+    return {
+      taskId: entry.taskId,
+      sessionKind: entry.sessionKind,
+      skipPermissionAsking: entry.skipPermissionAsking,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Extract permission request ID from a permission.asked event payload.
+ */
+function extractPermissionId(event: any): string | null {
+  const direct =
+    event?.properties?.permissionID ??
+    event?.properties?.id ??
+    event?.properties?.requestID ??
+    event?.permissionID ??
+    event?.id ??
+    event?.requestID;
+
+  if (typeof direct === "string" && direct.trim().length > 0) {
+    return direct.trim();
+  }
+  return null;
+}
+
+/**
+ * Extract session ID from a permission.asked event properties.
+ */
+function extractPermissionSessionId(event: any): string | null {
+  const raw =
+    event?.properties?.sessionID ??
+    event?.properties?.sessionId ??
+    event?.sessionID ??
+    event?.sessionId;
+
+  if (typeof raw === "string" && raw.trim().length > 0) {
+    return raw.trim();
+  }
+  return null;
+}
+
+/**
+ * Auto-reply to a permission.asked event if the session is workflow-owned
+ * and skipPermissionAsking is true on the owning task.
+ * Prefers client.permission.reply({ requestID, reply: "always" })
+ * Falls back to client.permission.respond({ sessionID, permissionID, response: "always" })
+ * Recovers session from permission.list() when sessionID is missing.
+ */
+export async function handlePermissionAutoReply(
+  event: any,
+  client: any,
+  rootDb: KanbanDB | null,
+): Promise<void> {
+  const sessionId = extractPermissionSessionId(event);
+  const permissionId = extractPermissionId(event);
+
+  if (!permissionId) {
+    appendDebugLog("debug", "permission.asked event skipped: no permissionId in payload");
+    return;
+  }
+
+  let resolvedSessionId = sessionId;
+
+  if (!resolvedSessionId) {
+    appendDebugLog("info", "permission.asked event: sessionId missing, trying permission.list() recovery");
+    try {
+      const pendingList = unwrapResponseData<any>(await client.permission.list());
+      const pending = Array.isArray(pendingList) ? pendingList : [];
+      const match = pending.find((p: any) => {
+        const pid = p?.id ?? p?.permissionID ?? p?.requestID;
+        return typeof pid === "string" && pid.trim() === permissionId.trim();
+      });
+      if (match) {
+        resolvedSessionId = match?.sessionID ?? match?.sessionId ?? null;
+        appendDebugLog("info", "permission.list() recovery found sessionId", { permissionId, sessionId: resolvedSessionId });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      appendDebugLog("warn", "permission.list() recovery failed", { permissionId, error: msg });
+    }
+  }
+
+  if (!resolvedSessionId) {
+    appendDebugLog("debug", "permission.asked event skipped: no sessionId after recovery", { permissionId });
+    return;
+  }
+
+  const owner = resolveWorkflowSessionOwnershipFromRegistry(resolvedSessionId, rootDb);
+  if (!owner) {
+    appendDebugLog("debug", "permission.asked event skipped: session not in root registry", { sessionId: resolvedSessionId });
+    return;
+  }
+
+  if (!owner.skipPermissionAsking) {
+    appendDebugLog("debug", "permission.asked event skipped: task has skipPermissionAsking=false", {
+      taskId: owner.taskId,
+      sessionKind: owner.sessionKind,
+      sessionId: resolvedSessionId,
+    });
+    return;
+  }
+
+  appendDebugLog("info", "auto-replying to permission.asked for workflow session", {
+    taskId: owner.taskId,
+    sessionKind: owner.sessionKind,
+    sessionId: resolvedSessionId,
+    permissionId,
+    reply: "always",
+  });
+
+  const requestID = extractRequestId(event);
+
+  if (requestID) {
+    try {
+      const result = await client.permission.reply(
+        { requestID, reply: "always" },
+        { throwOnError: false },
+      );
+      appendDebugLog("info", "permission auto-reply succeeded via reply()", {
+        sessionId: resolvedSessionId,
+        permissionId,
+        requestID,
+        result,
+      });
+      return;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      appendDebugLog("warn", "permission.reply() failed, falling back to respond()", {
+        sessionId: resolvedSessionId,
+        permissionId,
+        requestID,
+        error: msg,
+      });
+    }
+  }
+
+  try {
+    const result = await client.permission.respond(
+      { sessionID: resolvedSessionId, permissionID: permissionId, response: "always" },
+      { throwOnError: false },
+    );
+    appendDebugLog("info", "permission auto-reply succeeded via respond()", {
+      sessionId: resolvedSessionId,
+      permissionId,
+      response: result,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    appendDebugLog("warn", "permission auto-reply failed (non-fatal)", {
+      sessionId: resolvedSessionId,
+      permissionId,
+      error: msg,
+    });
+  }
+}
+
+/**
+ * Extract request ID from a permission.asked event payload.
+ */
+function extractRequestId(event: any): string | null {
+  const direct =
+    event?.properties?.requestID ??
+    event?.properties?.id ??
+    event?.requestID ??
+    event?.id;
+
+  if (typeof direct === "string" && direct.trim().length > 0) {
+    return direct.trim();
+  }
+  return null;
+}
 
 type KanbanSingletonMap = Map<string, KanbanSingletonState>;
 
@@ -118,6 +353,7 @@ function getKanbanSingletonState(directory: string): KanbanSingletonState {
       server: null,
       orchestrator: null,
       initPromise: null,
+      rootDb: null,
     };
 
   map.set(key, created);
@@ -980,6 +1216,28 @@ export const EasyWorkflowPlugin = async (input: any) => {
   const ownerDirectory = getKanbanOwnerDirectory(directory);
   const singleton = getKanbanSingletonState(ownerDirectory);
 
+  const rootResolution = findRootOwnerPointer(ownerDirectory);
+  const rootOwnerDirectory = rootResolution.ownerDirectory;
+  const rootDbPath = rootResolution.rootDbPath;
+
+  let rootDb: KanbanDB | null = null;
+  try {
+    rootDb = new KanbanDB(rootDbPath);
+    rootDb.cleanupStaleWorkflowSessions();
+    singleton.rootDb = rootDb;
+    appendDebugLog("info", "root workflow DB opened for permission bypass", {
+      rootDbPath,
+      ownerDirectory,
+      isWorktree: rootOwnerDirectory !== resolve(ownerDirectory),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    appendDebugLog("warn", "failed to open root workflow DB, permission bypass disabled", {
+      rootDbPath,
+      error: msg,
+    });
+  }
+
   const getOpencodeServerUrl = createStableOpencodeServerUrlResolver(
     () => input.serverUrl,
     () => input.client,
@@ -992,6 +1250,8 @@ export const EasyWorkflowPlugin = async (input: any) => {
     agentsDir: AGENTS_DIR,
     opencodeServerUrl,
     kanbanServerState: getKanbanServerStatusLine(ownerDirectory, singleton),
+    rootOwnerDirectory,
+    rootDbPath,
   });
 
   // Initialize kanban system (non-blocking, singleton per directory)
@@ -1017,6 +1277,7 @@ export const EasyWorkflowPlugin = async (input: any) => {
         getExecuting: () => nextOrchestrator?.isExecuting() ?? false,
         getStartError: (taskId?: string) => (nextOrchestrator ? nextOrchestrator.preflightStartError(taskId) : "Kanban orchestrator is not ready"),
         getServerUrl: getOpencodeServerUrl,
+        ownerDirectory: rootOwnerDirectory,
       });
 
         nextOrchestrator = new Orchestrator(
@@ -1024,6 +1285,7 @@ export const EasyWorkflowPlugin = async (input: any) => {
           nextServer,
           getOpencodeServerUrl,
           ownerDirectory,
+          rootOwnerDirectory,
         );
 
         const port = nextServer.start();
@@ -1195,6 +1457,13 @@ export const EasyWorkflowPlugin = async (input: any) => {
     },
 
     event: async ({ event }: any) => {
+      // Handle permission.asked events for workflow-owned autonomous sessions
+      if (event?.type === "permission.asked") {
+        await handlePermissionAutoReply(event, client, singleton.rootDb ?? singleton.db);
+        return;
+      }
+
+      // Handle session.idle for review orchestration (existing behavior)
       if (event?.type !== "session.idle") {
         return;
       }

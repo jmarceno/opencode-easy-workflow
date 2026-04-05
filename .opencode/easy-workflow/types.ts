@@ -71,6 +71,7 @@ export interface Task {
   executionStrategy: ExecutionStrategy
   bestOfNConfig: BestOfNConfig | null
   bestOfNSubstage: BestOfNSubstage
+  skipPermissionAsking: boolean
 }
 
 export interface TaskRun {
@@ -139,6 +140,8 @@ export interface Options {
   showExecutionGraph: boolean
   port: number
   thinkingLevel: ThinkingLevel
+  telegramBotToken: string
+  telegramChatId: string
 }
 
 export const DEFAULT_COMMIT_PROMPT = `You are in a worktree on a detached HEAD. When you are finished with the task, commit the working changes onto {{base_ref}}.

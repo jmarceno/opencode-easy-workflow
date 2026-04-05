@@ -798,6 +798,7 @@ sl-tooltip {
           <sl-checkbox id="taskReview" checked title="Run an automated review pass after execution so the task can be checked before completion.">Review</sl-checkbox>
           <sl-checkbox id="taskAutoCommit" checked title="Allow the workflow to create a git commit automatically when the task finishes successfully.">Auto-commit</sl-checkbox>
           <sl-checkbox id="taskDeleteWorktree" checked title="Remove the temporary worktree after the task finishes. Disable this if you want to inspect files afterward.">Delete Worktree</sl-checkbox>
+          <sl-checkbox id="taskSkipPermissionAsking" title="Task will use a more autonomous agent configuration, reducing permission prompts during execution.">Skip Permission Asking</sl-checkbox>
         </div>
       </div>
       <div class="form-group">
@@ -910,6 +911,23 @@ sl-tooltip {
           <sl-icon-button class="help-btn" type="button" title="Instructions used when the workflow asks the agent to prepare a git commit. Use {{base_ref}} anywhere you want the current base branch inserted automatically." aria-label="Commit prompt help" name="question-circle"></sl-icon-button>
         </div>
         <sl-textarea id="optCommitPrompt" style="min-height:180px;font-family:monospace;font-size:12px" placeholder="Instructions for committing changes..."></sl-textarea>
+      </div>
+      <div class="form-group telegram-section">
+        <div class="label-row">
+          <label>Telegram Notifications</label>
+          <sl-icon-button class="help-btn" type="button" title="Send a Telegram message when a task changes state. Leave both fields empty to disable notifications." aria-label="Telegram notifications help" name="question-circle"></sl-icon-button>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div>
+            <label for="optTelegramBotToken" style="display:block;font-size:12px;color:var(--text-dim);margin-bottom:4px;">Bot Token</label>
+            <sl-input type="password" id="optTelegramBotToken" placeholder="123456789:ABCdefGhIJKlmNoPQRsTUVwxYZ" style="width:100%;"></sl-input>
+          </div>
+          <div>
+            <label for="optTelegramChatId" style="display:block;font-size:12px;color:var(--text-dim);margin-bottom:4px;">Chat ID</label>
+            <sl-input type="text" id="optTelegramChatId" placeholder="-1001234567890 or @channel_name" style="width:100%;"></sl-input>
+          </div>
+        </div>
+        <div id="telegramTestStatus" style="font-size:12px;margin-top:6px;display:none;"></div>
       </div>
     </div>
     <div class="modal-footer">
@@ -2031,6 +2049,7 @@ function openTaskModal(taskId, options = {}) {
     document.getElementById('taskReview').checked = task.review
     document.getElementById('taskAutoCommit').checked = task.autoCommit
     document.getElementById('taskDeleteWorktree').checked = task.deleteWorktree !== false
+    document.getElementById('taskSkipPermissionAsking').checked = task.skipPermissionAsking === true
     document.getElementById('taskThinkingLevel').value = task.thinkingLevel || 'default'
     currentReqs = task.requirements || []
     reqExcludeId = task.id
@@ -2070,6 +2089,7 @@ function openTaskModal(taskId, options = {}) {
     document.getElementById('taskReview').checked = seedTask.review
     document.getElementById('taskAutoCommit').checked = seedTask.autoCommit
     document.getElementById('taskDeleteWorktree').checked = seedTask.deleteWorktree !== false
+    document.getElementById('taskSkipPermissionAsking').checked = seedTask.skipPermissionAsking === true
     document.getElementById('taskThinkingLevel').value = seedTask.thinkingLevel || 'default'
     currentReqs = seedTask.requirements || []
     reqExcludeId = seedTask.id
@@ -2091,6 +2111,7 @@ function openTaskModal(taskId, options = {}) {
     document.getElementById('taskReview').checked = true
     document.getElementById('taskAutoCommit').checked = true
     document.getElementById('taskDeleteWorktree').checked = true
+    document.getElementById('taskSkipPermissionAsking').checked = true
     document.getElementById('taskThinkingLevel').value = 'default'
     document.getElementById('taskExecutionStrategy').value = 'standard'
     resetModelInput('bonFinalApplierModel', 'default')
@@ -2200,6 +2221,7 @@ async function saveTask() {
     review: document.getElementById('taskReview').checked,
     autoCommit: document.getElementById('taskAutoCommit').checked,
     deleteWorktree: document.getElementById('taskDeleteWorktree').checked,
+    skipPermissionAsking: document.getElementById('taskSkipPermissionAsking').checked,
     requirements: reqs,
     thinkingLevel: document.getElementById('taskThinkingLevel').value || 'default',
     executionStrategy,
@@ -2458,6 +2480,10 @@ function openOptionsModal() {
   document.getElementById('optAutoDeleteNormalSessions').checked = !!allOptions.autoDeleteNormalSessions
   document.getElementById('optAutoDeleteReviewSessions').checked = !!allOptions.autoDeleteReviewSessions
   document.getElementById('optThinkingLevel').value = allOptions.thinkingLevel || 'default'
+  document.getElementById('optTelegramBotToken').value = allOptions.telegramBotToken || ''
+  document.getElementById('optTelegramChatId').value = allOptions.telegramChatId || ''
+  const telegramTestStatus = document.getElementById('telegramTestStatus')
+  telegramTestStatus.style.display = 'none'
   document.getElementById('optionsModal').classList.remove('hidden')
 }
 
@@ -2484,6 +2510,8 @@ async function saveOptions() {
       autoDeleteNormalSessions: document.getElementById('optAutoDeleteNormalSessions').checked,
       autoDeleteReviewSessions: document.getElementById('optAutoDeleteReviewSessions').checked,
       thinkingLevel: document.getElementById('optThinkingLevel').value || 'default',
+      telegramBotToken: document.getElementById('optTelegramBotToken').value || '',
+      telegramChatId: document.getElementById('optTelegramChatId').value || '',
     })
     closeOptionsModal()
     await loadOptions()

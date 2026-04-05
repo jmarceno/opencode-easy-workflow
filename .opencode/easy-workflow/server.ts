@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "fs"
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
 import { join } from "path"
 import { fileURLToPath } from "url"
 import { dirname } from "path"
@@ -8,6 +8,7 @@ import { KanbanDB } from "./db"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
 import { buildExecutionGraph, getExecutableTasks, isTaskExecutable } from "./execution-plan"
 import { chooseDeterministicRepairAction, getLatestTaggedOutput, getPlanExecutionEligibility, hasCapturedPlanOutput, isTaskAwaitingPlanApproval, type TaskRepairAction } from "./task-state"
+import { sendTelegramNotification } from "./telegram"
 
 const MAX_EXPANDED_WORKER_RUNS = 8
 const MAX_EXPANDED_REVIEWER_RUNS = 4
@@ -50,7 +51,7 @@ function isBoolean(value: unknown): value is boolean {
   return typeof value === "boolean"
 }
 
-const TASK_BOOLEAN_FIELDS = ["planmode", "autoApprovePlan", "review", "autoCommit", "deleteWorktree"] as const
+const TASK_BOOLEAN_FIELDS = ["planmode", "autoApprovePlan", "review", "autoCommit", "deleteWorktree", "skipPermissionAsking"] as const
 
 function getInvalidTaskBooleanField(body: any): string | null {
   for (const field of TASK_BOOLEAN_FIELDS) {
@@ -228,10 +229,11 @@ export class KanbanServer {
   private getExecuting: () => boolean
   private getStartError: StartPreflightFn
   private getServerUrl: ServerUrlFn
+  private ownerDirectory: string
 
   constructor(
     db: KanbanDB,
-    opts: { onStart: StartFn; onStartSingle: StartSingleFn; onStop: StopFn; getExecuting: () => boolean; getStartError?: StartPreflightFn; getServerUrl?: ServerUrlFn }
+    opts: { onStart: StartFn; onStartSingle: StartSingleFn; onStop: StopFn; getExecuting: () => boolean; getStartError?: StartPreflightFn; getServerUrl?: ServerUrlFn; ownerDirectory?: string }
   ) {
     this.db = db
     this.onStart = opts.onStart
@@ -240,6 +242,24 @@ export class KanbanServer {
     this.getExecuting = opts.getExecuting
     this.getStartError = opts.getStartError || (() => null)
     this.getServerUrl = opts.getServerUrl || (() => null)
+    this.ownerDirectory = opts.ownerDirectory || process.cwd()
+
+    // Register Telegram notification listener for task status changes
+    this.db.setTaskStatusChangeListener((taskId: string, oldStatus: string, newStatus: string) => {
+      const task = this.db.getTask(taskId)
+      if (!task) return
+      const opts = this.db.getOptions()
+      if (!opts.telegramBotToken || !opts.telegramChatId) return
+      sendTelegramNotification(
+        { botToken: opts.telegramBotToken, chatId: opts.telegramChatId },
+        task.name,
+        oldStatus,
+        newStatus,
+        (msg: string) => console.debug(msg)
+      ).catch((err: unknown) => {
+        console.error("[telegram] notification failed:", err)
+      })
+    })
   }
 
   broadcast(msg: WSMessage) {
@@ -395,9 +415,27 @@ export class KanbanServer {
       title: `Repair task state: ${task.name}`,
     })
     const session = sessionResponse?.data ?? sessionResponse
+    const repairSessionId = session?.id
+
+    if (repairSessionId) {
+      try {
+        this.db.registerWorkflowSession({
+          sessionId: repairSessionId,
+          taskId,
+          taskRunId: null,
+          sessionKind: "repair",
+          ownerDirectory: this.ownerDirectory,
+          skipPermissionAsking: task.skipPermissionAsking,
+        })
+      } catch (regErr) {
+        console.error("[repair] failed to register session:", regErr)
+      }
+    }
+
+    const repairAgent = task.skipPermissionAsking ? "workflow-repair" : "build-fast"
     const response = await client.session.prompt({
       sessionID: session?.id,
-      agent: "build-fast",
+      agent: repairAgent,
       ...(options.executionModel !== "default" ? { model: options.executionModel } : {}),
       parts: [{ type: "text", text: prompt }],
     })
@@ -571,6 +609,12 @@ export class KanbanServer {
       if (taskMatch) {
         const taskId = taskMatch[1]
 
+        if (method === "GET") {
+          const task = this.db.getTask(taskId)
+          if (!task) return this.json({ error: "Task not found" }, 404)
+          return this.json(task)
+        }
+
         if (method === "PATCH") {
           const existingTask = this.db.getTask(taskId)
           if (!existingTask) return this.json({ error: "Task not found" }, 404)
@@ -684,6 +728,12 @@ export class KanbanServer {
           const canonicalReviewModel = resolveCatalogModel(body.reviewModel, catalog, "Review")
           body.reviewModel = canonicalReviewModel
           this.updateReviewAgentModel(canonicalReviewModel)
+        }
+        if (body?.telegramBotToken !== undefined && typeof body.telegramBotToken !== "string") {
+          return this.json({ error: "Invalid telegramBotToken. Expected a string." }, 400)
+        }
+        if (body?.telegramChatId !== undefined && typeof body.telegramChatId !== "string") {
+          return this.json({ error: "Invalid telegramChatId. Expected a string." }, 400)
         }
         const options = this.db.updateOptions(body)
         this.broadcast({ type: "options_updated", payload: options })

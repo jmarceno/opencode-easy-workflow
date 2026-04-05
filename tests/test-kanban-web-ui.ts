@@ -662,8 +662,291 @@ async function testPlanModeApprovalUI() {
   }
 }
 
+async function testSkipPermissionAskingUI() {
+  const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  const reportDir = join(process.cwd(), ".opencode", "easy-workflow", "test-artifacts");
+  mkdirSync(reportDir, { recursive: true });
+  const reportPath = join(reportDir, `kanban-skip-perm-ui-${runId}.json`);
+
+  type SkipPermReport = {
+    runId: string;
+    timestamp: string;
+    kanbanUrl: string;
+    newTaskSkipPermTrue: boolean;
+    newTaskPayloadSkipPerm: boolean | null;
+    toggleAndSaveSuccess: boolean;
+    toggledTaskSkipPerm: boolean;
+    templateSkipPermFalse: boolean;
+    deployedTaskSkipPerm: boolean;
+    passed: boolean;
+    error: string | null;
+  };
+
+  const report: SkipPermReport = {
+    runId,
+    timestamp: new Date().toISOString(),
+    kanbanUrl: "",
+    newTaskSkipPermTrue: false,
+    newTaskPayloadSkipPerm: null,
+    toggleAndSaveSuccess: false,
+    toggledTaskSkipPerm: false,
+    templateSkipPermFalse: false,
+    deployedTaskSkipPerm: false,
+    passed: false,
+    error: null,
+  };
+
+  const tempDir = mkdtempSync(join(tmpdir(), "ewf-skip-perm-ui-"));
+  const dbPath = join(tempDir, "tasks.db");
+
+  let kanbanDb: KanbanDB | null = null;
+  let kanbanServer: KanbanServer | null = null;
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+
+  try {
+    console.log("=== Skip Permission Asking UI Test ===");
+
+    kanbanDb = new KanbanDB(dbPath);
+    const kanbanPort = getFreePort();
+    report.kanbanUrl = `http://127.0.0.1:${kanbanPort}`;
+    kanbanDb.updateOptions({ port: kanbanPort, parallelTasks: 1, command: "" });
+
+    kanbanServer = new KanbanServer(kanbanDb, {
+      onStart: async () => {},
+      onStop: () => {},
+      getExecuting: () => false,
+      getStartError: () => null,
+      getServerUrl: () => report.kanbanUrl,
+    });
+    kanbanServer.start();
+    console.log(`Kanban UI: ${report.kanbanUrl}`);
+
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+
+    await page.goto(report.kanbanUrl, { waitUntil: "networkidle" });
+    await page.waitForSelector(".conn-status.connected", { timeout: 10000 });
+
+    // Intercept POST /api/tasks to capture the payload
+    let capturedPostPayload: any = null;
+    page.on("response", async (response) => {
+      if (response.url().endsWith("/api/tasks") && response.request().method() === "POST") {
+        try {
+          capturedPostPayload = await response.json();
+        } catch {}
+      }
+    });
+
+    // Test 1: Create a new task via UI and verify POST payload has skipPermissionAsking: true
+    console.log("\n-- Test 1: New task default skipPermissionAsking --");
+    const newTaskName = `Skip Perm New Task ${runId}`;
+    await page.click("#col-backlog .add-task-btn");
+    await page.waitForFunction(
+      () => document.getElementById("taskModal")?.classList.contains("hidden") === false,
+      undefined,
+      { timeout: 5000 },
+    );
+    await page.locator("#taskName input").fill(newTaskName);
+    await page.locator("#taskPrompt textarea").fill("test prompt");
+
+    // Verify checkbox is checked by default
+    const defaultChecked = await page.evaluate(() => {
+      const el = document.getElementById("taskSkipPermissionAsking");
+      return el?.checked;
+    });
+    report.newTaskSkipPermTrue = defaultChecked === true;
+    console.log(`New task checkbox default checked: ${defaultChecked}`);
+    if (defaultChecked !== true) {
+      throw new Error(`Expected skipPermissionAsking default to be true, got ${defaultChecked}`);
+    }
+
+    await page.locator("#taskSaveBtn").click();
+    await page.waitForFunction(
+      () => document.getElementById("taskModal")?.classList.contains("hidden") === true,
+      undefined,
+      { timeout: 5000 },
+    );
+    await page.waitForSelector(`.card-title:has-text("${newTaskName}")`, { timeout: 5000 });
+    console.log(`Task created: ${newTaskName}`);
+
+    // Wait for POST response to be captured
+    await pollFor(async () => capturedPostPayload !== null, 5000, 200);
+    report.newTaskPayloadSkipPerm = capturedPostPayload?.skipPermissionAsking ?? null;
+    console.log(`POST payload skipPermissionAsking: ${report.newTaskPayloadSkipPerm}`);
+    if (report.newTaskPayloadSkipPerm !== true) {
+      throw new Error(`Expected POST payload skipPermissionAsking=true, got ${report.newTaskPayloadSkipPerm}`);
+    }
+
+    // Test 2: Open task for edit, toggle checkbox, save, verify PATCH
+    console.log("\n-- Test 2: Toggle and save skipPermissionAsking --");
+    const createdTask = capturedPostPayload;
+    const taskId = createdTask?.id;
+
+    // Open edit modal
+    await page.click(`.card:has-text("${newTaskName}") button[title="Edit Task"]`);
+    await page.waitForFunction(
+      () => document.getElementById("taskModal")?.classList.contains("hidden") === false,
+      undefined,
+      { timeout: 5000 },
+    );
+
+    // Verify initial state
+    const editInitialChecked = await page.evaluate(() => {
+      const el = document.getElementById("taskSkipPermissionAsking");
+      return el?.checked;
+    });
+    console.log(`Edit initial state: skipPermissionAsking=${editInitialChecked}`);
+    if (editInitialChecked !== true) {
+      throw new Error(`Expected initial edit state to be true, got ${editInitialChecked}`);
+    }
+
+    // Intercept PATCH request
+    let patchPayload: any = null;
+    page.on("response", async (response) => {
+      if (response.url().endsWith(`/api/tasks/${taskId}`) && response.request().method() === "PATCH") {
+        try {
+          patchPayload = await response.json();
+        } catch {}
+      }
+    });
+
+    // Toggle checkbox to false
+    await page.locator("#taskSkipPermissionAsking").click();
+    const afterToggleChecked = await page.evaluate(() => {
+      const el = document.getElementById("taskSkipPermissionAsking");
+      return el?.checked;
+    });
+    console.log(`After toggle: skipPermissionAsking=${afterToggleChecked}`);
+    if (afterToggleChecked !== false) {
+      throw new Error(`Expected toggle to false, got ${afterToggleChecked}`);
+    }
+
+    // Save
+    await page.click("#taskSaveBtn");
+    await page.waitForFunction(
+      () => document.getElementById("taskModal")?.classList.contains("hidden") === true,
+      undefined,
+      { timeout: 5000 },
+    );
+    console.log("Task saved after toggle");
+
+    // Wait for PATCH response
+    await pollFor(async () => patchPayload !== null, 5000, 200);
+    report.toggledTaskSkipPerm = patchPayload?.skipPermissionAsking ?? null;
+    console.log(`PATCH payload skipPermissionAsking: ${report.toggledTaskSkipPerm}`);
+    if (report.toggledTaskSkipPerm !== false) {
+      throw new Error(`Expected PATCH payload skipPermissionAsking=false, got ${report.toggledTaskSkipPerm}`);
+    }
+    report.toggleAndSaveSuccess = true;
+
+    // Test 3: Create template with skipPermissionAsking=false, deploy, verify
+    console.log("\n-- Test 3: Template deploy preserves skipPermissionAsking=false --");
+
+    // Create a template with skipPermissionAsking=false via API
+    const templateResp = await page.request.post(`${report.kanbanUrl}/api/tasks`, {
+      headers: { "Content-Type": "application/json" },
+      data: {
+        name: `Skip Perm Template ${runId}`,
+        prompt: "template prompt",
+        status: "template",
+        skipPermissionAsking: false,
+        review: false,
+        autoCommit: false,
+      },
+    });
+    if (!templateResp.ok()) {
+      throw new Error(`Template creation failed: ${templateResp.status()}`);
+    }
+    const template = await templateResp.json();
+    report.templateSkipPermFalse = template.skipPermissionAsking === false;
+    console.log(`Template created with skipPermissionAsking=false: ${template.id}`);
+    if (template.skipPermissionAsking !== false) {
+      throw new Error(`Template should have skipPermissionAsking=false, got ${template.skipPermissionAsking}`);
+    }
+
+    // Reload to pick up the new template
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForSelector(".conn-status.connected", { timeout: 10000 });
+
+    // Deploy the template
+    await page.click(`.card:has-text("Skip Perm Template ${runId}") button[title="Deploy to Backlog"]`);
+    await page.waitForFunction(
+      () => document.getElementById("taskModal")?.classList.contains("hidden") === false,
+      undefined,
+      { timeout: 5000 },
+    );
+
+    // Verify deployed task has checkbox unchecked
+    const deployedChecked = await page.evaluate(() => {
+      const el = document.getElementById("taskSkipPermissionAsking");
+      return el?.checked;
+    });
+    console.log(`Deployed task skipPermissionAsking: ${deployedChecked}`);
+    report.deployedTaskSkipPerm = deployedChecked === false;
+    if (deployedChecked !== false) {
+      throw new Error(`Expected deployed task to have skipPermissionAsking=false, got ${deployedChecked}`);
+    }
+
+    // Save the deployed task
+    await page.click("#taskSaveBtn");
+    await page.waitForFunction(
+      () => document.getElementById("taskModal")?.classList.contains("hidden") === true,
+      undefined,
+      { timeout: 5000 },
+    );
+    console.log("Deployed task saved");
+
+    // Verify the deployed task persisted correctly - find it in the backlog column
+    const deployedTaskSelector = `#col-backlog .card:has-text("Skip Perm Template ${runId}")`;
+    await page.waitForSelector(deployedTaskSelector, { timeout: 5000 });
+    const deployedTaskCard = page.locator(deployedTaskSelector);
+    await deployedTaskCard.locator(".card-actions button[title='Edit Task']").click();
+    await page.waitForFunction(
+      () => document.getElementById("taskModal")?.classList.contains("hidden") === false,
+      undefined,
+      { timeout: 5000 },
+    );
+
+    const reOpenedChecked = await page.evaluate(() => {
+      const el = document.getElementById("taskSkipPermissionAsking");
+      return el?.checked;
+    });
+    console.log(`Re-opened deployed task skipPermissionAsking: ${reOpenedChecked}`);
+    if (reOpenedChecked !== false) {
+      throw new Error(`Expected re-opened deployed task to have skipPermissionAsking=false, got ${reOpenedChecked}`);
+    }
+
+    await page.locator("#taskModal sl-button:has-text('Cancel')").click();
+    await page.waitForFunction(
+      () => document.getElementById("taskModal")?.classList.contains("hidden") === true,
+      undefined,
+      { timeout: 5000 },
+    );
+
+    report.passed = true;
+    writeFileSync(reportPath, JSON.stringify(report, null, 2), "utf-8");
+    console.log(`\nEvidence report: ${reportPath}`);
+    console.log("\n✓ TEST PASSED");
+
+  } catch (err) {
+    report.error = err instanceof Error ? err.message : String(err);
+    writeFileSync(reportPath, JSON.stringify(report, null, 2), "utf-8");
+    console.error("\n✗ TEST FAILED");
+    console.error(report.error);
+    process.exitCode = 1;
+  } finally {
+    if (browser) await browser.close();
+    if (kanbanServer) kanbanServer.stop();
+    if (kanbanDb) kanbanDb.close();
+    cleanupTempDir(tempDir);
+  }
+}
+
 if (process.env.PLAN_UI_TEST === "1") {
   testPlanModeApprovalUI();
+} else if (process.env.SKIP_PERM_TEST === "1") {
+  testSkipPermissionAskingUI();
 } else {
   await main();
 }

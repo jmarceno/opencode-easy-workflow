@@ -4,6 +4,7 @@ import { fileURLToPath } from "url"
 import { dirname } from "path"
 import { execFileSync } from "child_process"
 import type { Task, Options, ReviewResult, ThinkingLevel, BestOfNConfig, BestOfNSlot, TaskRun, TaskCandidate, ReviewerOutput, AggregatedReviewResult, SelectionMode } from "./types"
+import type { WorkflowSessionKind } from "./db"
 import { KanbanDB } from "./db"
 import { KanbanServer } from "./server"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
@@ -23,7 +24,16 @@ const THINKING_LEVEL_AGENT_MAP: Record<Exclude<ThinkingLevel, "default">, string
   high: "deep-thinker",
 }
 
+const AUTONOMOUS_THINKING_AGENT_MAP: Record<ThinkingLevel, string> = {
+  default: "workflow-build",
+  low: "workflow-build-fast",
+  medium: "workflow-build",
+  high: "workflow-deep-thinker",
+}
+
 const EXPECTED_THINKING_AGENTS = Object.values(THINKING_LEVEL_AGENT_MAP)
+
+export const AUTONOMY_INSTRUCTION = "EXECUTE END-TO-END. Do not ask follow-up questions unless blocked by: missing credentials, missing required external input, or an irreversible product decision. Make reasonable assumptions from the codebase."
 
 // ---- SDK v2 client wrapper ----
 
@@ -33,6 +43,46 @@ function createV2Client(baseUrl: string, directory?: string) {
     directory,
     throwOnError: true,
   })
+}
+
+function registerWorkflowSessionSafe(
+  db: KanbanDB,
+  sessionId: string,
+  taskId: string,
+  sessionKind: WorkflowSessionKind,
+  ownerDirectory: string,
+  skipPermissionAsking: boolean,
+  taskRunId?: string | null,
+): void {
+  try {
+    db.registerWorkflowSession({
+      sessionId,
+      taskId,
+      taskRunId: taskRunId ?? null,
+      sessionKind,
+      ownerDirectory,
+      skipPermissionAsking,
+    })
+    appendDebugLog("info", "workflow session registered", { sessionId, taskId, sessionKind })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    appendDebugLog("warn", "failed to register workflow session", { sessionId, taskId, sessionKind, error: msg })
+  }
+}
+
+function writeRootOwnerPointerSafe(worktreeDirectory: string, ownerDirectory: string, dbPath: string): void {
+  try {
+    const targetDir = join(worktreeDirectory, ".opencode", "easy-workflow")
+    mkdirSync(targetDir, { recursive: true })
+    writeFileSync(
+      join(targetDir, "root-owner.json"),
+      JSON.stringify({ ownerDirectory, rootDbPath: dbPath }, null, 2),
+      "utf-8",
+    )
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    appendDebugLog("warn", "failed to write root-owner pointer", { worktreeDirectory, error: msg })
+  }
 }
 
 // ---- Utility functions (reused from existing plugin) ----
@@ -126,9 +176,20 @@ function resolveThinkingLevel(task: Task, options: Options): ThinkingLevel {
   return "default"
 }
 
-function mapThinkingLevelToAgent(level: ThinkingLevel): string | null {
+export function mapThinkingLevelToAgent(level: ThinkingLevel): string | null {
   if (level === "default") return null
   return THINKING_LEVEL_AGENT_MAP[level] || null
+}
+
+export function resolvePlanningAgent(skipPermissionAsking: boolean): string {
+  return skipPermissionAsking ? "workflow-plan" : "plan"
+}
+
+export function resolveExecutionAgent(skipPermissionAsking: boolean, level: ThinkingLevel): string | null {
+  if (skipPermissionAsking) {
+    return AUTONOMOUS_THINKING_AGENT_MAP[level]
+  }
+  return mapThinkingLevelToAgent(level)
 }
 
 function remapThinkingAgentError(error: unknown, agent: string | null): Error {
@@ -184,15 +245,17 @@ export class Orchestrator {
   private server: KanbanServer
   private serverUrlSource: string | (() => string | null)
   private worktreeDir: string
+  private ownerDirectory: string
   private running = false
   private shouldStop = false
   private providerCatalog: any | null = null
 
-  constructor(db: KanbanDB, server: KanbanServer, serverUrl: string | (() => string | null), worktreeDir: string) {
+  constructor(db: KanbanDB, server: KanbanServer, serverUrl: string | (() => string | null), worktreeDir: string, ownerDirectory?: string) {
     this.db = db
     this.server = server
     this.serverUrlSource = serverUrl
     this.worktreeDir = worktreeDir
+    this.ownerDirectory = ownerDirectory || worktreeDir
     debugLogErrorReporter = (message: string) => {
       this.server.broadcast({ type: "error", payload: { message } })
     }
@@ -696,6 +759,7 @@ export class Orchestrator {
         throw new Error(`Worktree creation returned invalid response: ${JSON.stringify(worktreeInfo)}`)
       }
       this.db.updateTask(task.id, { worktreeDir: worktreeInfo.directory })
+      writeRootOwnerPointerSafe(worktreeInfo.directory, this.ownerDirectory, join(this.ownerDirectory, ".opencode", "easy-workflow", "tasks.db"))
       currentTask = this.getTaskOrThrow(task.id, "saving the worktree location", task.name)
       lastKnownTask = currentTask
       this.server.broadcast({ type: "task_updated", payload: currentTask })
@@ -744,6 +808,7 @@ export class Orchestrator {
       }
       const sessionUrl = buildSessionUrl(resolvedServerUrl, this.worktreeDir, sessionId)
       this.db.updateTask(task.id, { sessionId, sessionUrl })
+      registerWorkflowSessionSafe(this.db, sessionId, task.id, "task", this.ownerDirectory, task.skipPermissionAsking)
       currentTask = this.getTaskOrThrow(task.id, "saving the session metadata", task.name)
       lastKnownTask = currentTask
       this.server.broadcast({ type: "task_updated", payload: currentTask })
@@ -759,9 +824,9 @@ export class Orchestrator {
 
       // 4b. Determine effective thinking level and agent
       const effectiveThinkingLevel = resolveThinkingLevel(task, options)
-      const executionAgent = mapThinkingLevelToAgent(effectiveThinkingLevel)
-      if (effectiveThinkingLevel !== "default") {
-        appendDebugLog("info", "using thinking level", { taskId: task.id, level: effectiveThinkingLevel, agent: executionAgent })
+      const executionAgent = resolveExecutionAgent(task.skipPermissionAsking, effectiveThinkingLevel)
+      if (effectiveThinkingLevel !== "default" || task.skipPermissionAsking) {
+        appendDebugLog("info", "using thinking level", { taskId: task.id, level: effectiveThinkingLevel, agent: executionAgent, skipPermissionAsking: task.skipPermissionAsking })
       }
 
       // 5. Execute: plan mode or direct
@@ -778,9 +843,9 @@ export class Orchestrator {
           appendDebugLog("info", "plan mode: sending planning prompt", { taskId: task.id })
           const planResponse = await client.session.prompt({
             sessionID: sessionId,
-            agent: "plan",
+            agent: resolvePlanningAgent(task.skipPermissionAsking),
             model: planModelParsed,
-            parts: [{ type: "text", text: task.prompt }],
+            parts: [{ type: "text", text: `${AUTONOMY_INSTRUCTION}\n\n${task.prompt}` }],
           })
           const planResult = unwrapResponseDataOrThrow<any>(planResponse, "Planning prompt")
           const planFailure = this.extractExecutionFailure(planResult)
@@ -839,6 +904,8 @@ export class Orchestrator {
             throw new Error("Revision prompt failed: no captured plan output was found to revise")
           }
           const revisionPrompt = [
+            AUTONOMY_INSTRUCTION,
+            "",
             "The user has reviewed your plan and requested changes. Revise the plan based on their feedback.",
             `Original task:\n${task.prompt}`,
             originalPlan ? `Previous plan:\n${originalPlan}` : "",
@@ -847,7 +914,7 @@ export class Orchestrator {
           ].filter(Boolean).join("\n\n")
           const planResponse = await client.session.prompt({
             sessionID: sessionId,
-            agent: "plan",
+            agent: resolvePlanningAgent(task.skipPermissionAsking),
             model: planModelParsed,
             parts: [{ type: "text", text: revisionPrompt }],
           })
@@ -914,6 +981,8 @@ export class Orchestrator {
           parts: [{
             type: "text",
             text: [
+              AUTONOMY_INSTRUCTION,
+              "",
               "The user has approved the plan below. Implement it now.",
               `Original task:\n${task.prompt}`,
               approvedPlanContext ? `Approved plan:\n${approvedPlanContext}` : "",
@@ -945,7 +1014,7 @@ export class Orchestrator {
         const promptOpts: any = {
           sessionID: sessionId,
           model,
-          parts: [{ type: "text", text: task.prompt }],
+          parts: [{ type: "text", text: `${AUTONOMY_INSTRUCTION}\n\n${task.prompt}` }],
         }
         if (executionAgent) promptOpts.agent = executionAgent
         let result: any
@@ -1392,6 +1461,9 @@ export class Orchestrator {
         this.db.updateTaskRun(workerRun.id, { sessionId, sessionUrl })
         this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(workerRun.id) })
 
+        registerWorkflowSessionSafe(this.db, sessionId, task.id, "task_run_worker", this.ownerDirectory, task.skipPermissionAsking, workerRun.id)
+        writeRootOwnerPointerSafe(worktreeInfo.directory, this.ownerDirectory, join(this.ownerDirectory, ".opencode", "easy-workflow", "tasks.db"))
+
         const workerPrompt = this.buildWorkerPrompt(task.prompt, workerRun.taskSuffix)
         const model = await this.resolveModelSelection(workerRun.model, client, "Worker")
 
@@ -1403,7 +1475,7 @@ export class Orchestrator {
           parts: [{ type: "text", text: workerPrompt }],
         }
         const effectiveThinkingLevel = resolveThinkingLevel(task, options)
-        const executionAgent = mapThinkingLevelToAgent(effectiveThinkingLevel)
+        const executionAgent = resolveExecutionAgent(task.skipPermissionAsking, effectiveThinkingLevel)
         if (executionAgent) promptOpts.agent = executionAgent
 
         let result: any
@@ -1503,7 +1575,9 @@ export class Orchestrator {
   }
 
   private buildWorkerPrompt(taskPrompt: string, taskSuffix: string | null): string {
-    let prompt = `You are one candidate implementation worker in a best-of-n workflow.
+    let prompt = `${AUTONOMY_INSTRUCTION}
+
+You are one candidate implementation worker in a best-of-n workflow.
 Produce the best complete solution you can in this worktree.
 
 Task:
@@ -1708,6 +1782,8 @@ ${taskSuffix}`
         const sessionUrl = buildSessionUrl(serverUrl, this.worktreeDir, sessionId)
         this.db.updateTaskRun(reviewerRun.id, { sessionId, sessionUrl })
         this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(reviewerRun.id) })
+
+        registerWorkflowSessionSafe(this.db, sessionId, task.id, "task_run_reviewer", this.ownerDirectory, task.skipPermissionAsking, reviewerRun.id)
 
         const reviewerPrompt = this.buildReviewerPrompt(task.prompt, candidates, reviewerRun.taskSuffix)
         const model = await this.resolveModelSelection(reviewerRun.model, client, "Reviewer")
@@ -1942,13 +2018,16 @@ RECOMMENDED_PROMPT:
       this.db.updateTaskRun(finalApplierRun.id, { sessionId, sessionUrl })
       this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(finalApplierRun.id) })
 
+      registerWorkflowSessionSafe(this.db, sessionId, task.id, "task_run_final_applier", this.ownerDirectory, task.skipPermissionAsking, finalApplierRun.id)
+      writeRootOwnerPointerSafe(worktreeInfo.directory, this.ownerDirectory, join(this.ownerDirectory, ".opencode", "easy-workflow", "tasks.db"))
+
       const finalPrompt = this.buildFinalApplierPrompt(task.prompt, candidates, aggregatedReview, selectionMode, task.bestOfNConfig?.finalApplier?.taskSuffix)
       const model = await this.resolveModelSelection(finalApplierRun.model, client, "Final Applier")
 
       appendDebugLog("info", "running best-of-n final applier", { taskId: task.id, finalApplierRunId: finalApplierRun.id, model: finalApplierRun.model })
 
       const effectiveThinkingLevel = resolveThinkingLevel(task, options)
-      const executionAgent = mapThinkingLevelToAgent(effectiveThinkingLevel)
+      const executionAgent = resolveExecutionAgent(task.skipPermissionAsking, effectiveThinkingLevel)
 
       const promptOpts: any = {
         sessionID: sessionId,
@@ -2101,7 +2180,9 @@ RECOMMENDED_PROMPT:
     selectionMode: SelectionMode,
     taskSuffix?: string | null
   ): string {
-    let prompt = `You are the final applier in a best-of-n workflow.
+    let prompt = `${AUTONOMY_INSTRUCTION}
+
+You are the final applier in a best-of-n workflow.
 Your job is to produce the final implementation based on the original task and the evaluated candidates.
 
 Original Task:
@@ -2185,8 +2266,13 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
           const reviewSession = unwrapResponseDataOrThrow<any>(reviewSessionResponse, "Review session creation")
           reviewSessionId = reviewSession?.id
 
+          if (reviewSessionId) {
+            registerWorkflowSessionSafe(this.db, reviewSessionId, task.id, "review_scratch", this.ownerDirectory, task.skipPermissionAsking)
+          }
+
+          const reviewAgentName = task.skipPermissionAsking ? "workflow-review-autonomous" : config.reviewAgent
           const promptText = [
-            `@${config.reviewAgent}`,
+            `@${reviewAgentName}`,
             "",
             "Review the current repository state against the task below.",
             "Use the task goals as the only source of truth.",
@@ -2199,7 +2285,7 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
 
           const response = await client.session.prompt({
             sessionID: reviewSessionId,
-            agent: config.reviewAgent,
+            agent: reviewAgentName,
             parts: [{ type: "text", text: promptText }],
           })
 
