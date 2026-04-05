@@ -1254,6 +1254,16 @@ async function loadModels() {
       window.dispatchEvent(new Event('easyworkflow:model-catalog-updated'))
       return
     }
+    // Handle warning (e.g., OpenCode server still initializing)
+    if (data.warning) {
+      console.warn('[Kanban] Model catalog warning:', data.warning)
+      modelCatalog = { providers: data.providers || [], defaults: data.defaults || {} }
+      rebuildModelSearchIndex()
+      window.dispatchEvent(new Event('easyworkflow:model-catalog-updated'))
+      // Show info toast instead of error - models will load when ready
+      showToast(data.warning, 'info')
+      return
+    }
     modelCatalog = data
     rebuildModelSearchIndex()
     window.dispatchEvent(new Event('easyworkflow:model-catalog-updated'))

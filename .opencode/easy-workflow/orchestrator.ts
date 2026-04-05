@@ -364,9 +364,28 @@ export class Orchestrator {
 
   private async getProviderCatalog(client: any): Promise<any> {
     if (this.providerCatalog) return this.providerCatalog
-    const response = await client.config.providers()
-    this.providerCatalog = unwrapResponseDataOrThrow<any>(response, "Provider discovery")
-    return this.providerCatalog
+
+    // Retry with exponential backoff - OpenCode server may be initializing
+    const maxRetries = 3
+    let lastError: unknown
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const response = await client.config.providers()
+        this.providerCatalog = unwrapResponseDataOrThrow<any>(response, "Provider discovery")
+        return this.providerCatalog
+      } catch (err) {
+        lastError = err
+        // Wait before retrying (exponential backoff: 1000ms, 2000ms, 4000ms)
+        if (attempt < maxRetries - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1000 * Math.pow(2, attempt)))
+        }
+      }
+    }
+
+    // All retries failed
+    const msg = lastError instanceof Error ? lastError.message : String(lastError)
+    throw new Error(`Failed to fetch provider catalog after ${maxRetries} attempts: ${msg}`)
   }
 
   private async resolveModelSelection(rawModel: string | null, client: any, context: string): Promise<{ providerID: string; modelID: string } | undefined> {

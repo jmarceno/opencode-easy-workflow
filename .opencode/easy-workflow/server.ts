@@ -722,12 +722,18 @@ export class KanbanServer {
             return this.json({ error: "OpenCode server URL is not configured" }, 500)
           }
 
-          const client = createV2Client(serverUrl)
-          const providersResponse = await client.config.providers()
-          const catalog = providersResponse?.data ?? providersResponse
-          const canonicalReviewModel = resolveCatalogModel(body.reviewModel, catalog, "Review")
-          body.reviewModel = canonicalReviewModel
-          this.updateReviewAgentModel(canonicalReviewModel)
+          try {
+            const client = createV2Client(serverUrl)
+            const providersResponse = await client.config.providers()
+            const catalog = providersResponse?.data ?? providersResponse
+            const canonicalReviewModel = resolveCatalogModel(body.reviewModel, catalog, "Review")
+            body.reviewModel = canonicalReviewModel
+            this.updateReviewAgentModel(canonicalReviewModel)
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err)
+            console.error("[Kanban Server] Failed to fetch providers for review model update:", msg)
+            return this.json({ error: `OpenCode server unavailable. Please try again later. Details: ${msg}` }, 503)
+          }
         }
         if (body?.telegramBotToken !== undefined && typeof body.telegramBotToken !== "string") {
           return this.json({ error: "Invalid telegramBotToken. Expected a string." }, 400)
@@ -746,25 +752,66 @@ export class KanbanServer {
         if (!serverUrl) {
           return this.json({ error: "OpenCode server URL is not configured" }, 500)
         }
-        try {
-          const client = createV2Client(serverUrl)
-          const response = await client.config.providers()
-          const catalog = response?.data ?? response
-          const providers = Array.isArray(catalog?.providers) ? catalog.providers : []
-          const normalized = providers.map((p: any) => ({
-            id: p.id,
-            name: p.name || p.id,
-            models: Object.entries(p.models || {}).map(([id, model]: [string, any]) => ({
-              id,
-              label: typeof model === "object" && model?.label ? model.label : id,
-              value: `${p.id}/${id}`,
-            })),
-          }))
-          return this.json({ providers: normalized, defaults: normalizeDefaultModelMap(catalog) })
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err)
-          return this.json({ error: `Failed to fetch model catalog: ${msg}` }, 500)
+
+        // Helper to extract meaningful error message
+        const extractErrorMessage = (err: unknown): string => {
+          if (err instanceof Error) return err.message
+          if (typeof err === "string") return err
+          if (err && typeof err === "object") {
+            // Try to extract message from common error object shapes
+            const e = err as Record<string, unknown>
+            if (typeof e.message === "string") return e.message
+            if (typeof e.error === "string") return e.error
+            if (typeof e.error === "object" && e.error) {
+              const inner = e.error as Record<string, unknown>
+              if (typeof inner.message === "string") return inner.message
+            }
+            // Return JSON representation for debugging instead of [object Object]
+            try {
+              return JSON.stringify(err)
+            } catch {
+              return "Unknown error (failed to serialize)"
+            }
+          }
+          return String(err)
         }
+
+        // Retry with exponential backoff
+        const maxRetries = 3
+        let lastError: unknown
+
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+          try {
+            const client = createV2Client(serverUrl)
+            const response = await client.config.providers()
+            const catalog = response?.data ?? response
+            const providers = Array.isArray(catalog?.providers) ? catalog.providers : []
+            const normalized = providers.map((p: any) => ({
+              id: p.id,
+              name: p.name || p.id,
+              models: Object.entries(p.models || {}).map(([id, model]: [string, any]) => ({
+                id,
+                label: typeof model === "object" && model?.label ? model.label : id,
+                value: `${p.id}/${id}`,
+              })),
+            }))
+            return this.json({ providers: normalized, defaults: normalizeDefaultModelMap(catalog) })
+          } catch (err) {
+            lastError = err
+            // Wait before retrying (exponential backoff: 500ms, 1000ms, 2000ms)
+            if (attempt < maxRetries - 1) {
+              await new Promise((resolve) => setTimeout(resolve, 500 * Math.pow(2, attempt)))
+            }
+          }
+        }
+
+        // All retries failed - return empty catalog with warning instead of error
+        console.error("[Kanban Server] Failed to fetch model catalog after", maxRetries, "attempts:", extractErrorMessage(lastError))
+        return this.json({
+          providers: [],
+          defaults: {},
+          warning: "Model catalog temporarily unavailable. Models will load when OpenCode server is ready."
+        }, 200)
       }
 
       // Execution
