@@ -22,9 +22,9 @@ export function registerBeforeAgentStartHook(pi: ExtensionAPI): void {
       return undefined;
     }
 
-    pi.logger.info("Running pending review before agent start", {
-      sessionId: ctx.sessionId,
+    console.info("Running pending review before agent start", {
       runPath: pendingReview.runPath,
+      sessionFile: ctx.sessionManager.getSessionFile?.() ?? null,
     });
 
     try {
@@ -45,7 +45,7 @@ export function registerBeforeAgentStartHook(pi: ExtensionAPI): void {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      pi.logger.error("Review failed", { error: message });
+      console.error("Review failed", { error: message });
 
       // Still inject error context
       return {

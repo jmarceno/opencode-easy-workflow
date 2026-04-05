@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { configLoader } from "../config";
+import { getKanbanDb, getOrchestrator } from "../kanban/runtime";
 
 /**
  * Register the /task command.
@@ -79,8 +80,20 @@ async function createTask(args: string, ctx: ExtensionContext): Promise<void> {
 
   const [, name, prompt] = match;
 
-  // TODO: Implement - create task via kanban API
-  ctx.ui.notify(`Creating task: ${name}`, "info");
+  const config = configLoader.getConfig();
+  const task = getKanbanDb().createTask({
+    id: `task_${Date.now()}`,
+    name,
+    prompt,
+    branch: config.defaultBranch,
+    planModel: config.planModel,
+    executionModel: config.executionModel,
+    review: true,
+    autoCommit: config.autoCommit,
+    deleteWorktree: config.deleteWorktree,
+    status: "backlog",
+  });
+  ctx.ui.notify(`Created task ${task.id}: ${name}`, "info");
 }
 
 /**
@@ -98,8 +111,14 @@ async function updateTask(args: string, ctx: ExtensionContext): Promise<void> {
   const taskId = parts[0];
   const updates = parts.slice(1).join(" ");
 
-  // TODO: Implement - update task via kanban API
-  ctx.ui.notify(`Updating task ${taskId}: ${updates}`, "info");
+  const patch = Object.fromEntries(
+    parts.slice(1).map((entry) => {
+      const [key, ...valueParts] = entry.split("=");
+      return [key, valueParts.join("=")];
+    }),
+  );
+  const updated = getKanbanDb().updateTask(taskId, patch as any);
+  ctx.ui.notify(updated ? `Updated task ${taskId}` : `Task ${taskId} not found`, updated ? "info" : "warning");
 }
 
 /**
@@ -111,8 +130,8 @@ async function deleteTask(taskId: string, ctx: ExtensionContext): Promise<void> 
     return;
   }
 
-  // TODO: Implement - delete task via kanban API
-  ctx.ui.notify(`Deleting task ${taskId}...`, "info");
+  const deleted = getKanbanDb().deleteTask(taskId.trim());
+  ctx.ui.notify(deleted ? `Deleted task ${taskId}` : `Task ${taskId} not found`, deleted ? "info" : "warning");
 }
 
 /**
@@ -121,8 +140,9 @@ async function deleteTask(taskId: string, ctx: ExtensionContext): Promise<void> 
 async function listTasks(args: string, ctx: ExtensionContext): Promise<void> {
   const statusFilter = args.trim() || undefined;
 
-  // TODO: Implement - list tasks via kanban API
-  ctx.ui.notify(`Listing tasks${statusFilter ? ` (${statusFilter})` : ""}...`, "info");
+  const tasks = getKanbanDb().getTasks(statusFilter as any);
+  const lines = tasks.map((task) => `[${task.status}] ${task.id} ${task.name}`);
+  ctx.ui.notify(lines.length > 0 ? lines.join("\n") : "No tasks found", "info");
 }
 
 /**
@@ -134,8 +154,8 @@ async function startTask(taskId: string, ctx: ExtensionContext): Promise<void> {
     return;
   }
 
-  // TODO: Implement - start task execution
-  ctx.ui.notify(`Starting task ${taskId}...`, "info");
+  const task = await getOrchestrator().startTask(taskId.trim());
+  ctx.ui.notify(`Started task ${task.id} -> ${task.status}/${task.executionPhase}`, "info");
 }
 
 /**
@@ -147,6 +167,6 @@ async function approvePlan(taskId: string, ctx: ExtensionContext): Promise<void>
     return;
   }
 
-  // TODO: Implement - approve plan
-  ctx.ui.notify(`Approving plan for task ${taskId}...`, "info");
+  const task = await getOrchestrator().approvePlan(taskId.trim());
+  ctx.ui.notify(`Approved plan for task ${task.id}`, "info");
 }

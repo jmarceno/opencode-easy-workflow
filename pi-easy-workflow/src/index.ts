@@ -20,11 +20,11 @@ export default async function (pi: ExtensionAPI) {
   const config = configLoader.getConfig();
 
   if (!config.enabled) {
-    pi.logger.debug("Easy Workflow extension is disabled");
+    console.debug("Easy Workflow extension is disabled");
     return;
   }
 
-  pi.logger.info("Easy Workflow extension initializing", {
+  console.info("Easy Workflow extension initializing", {
     reviewAgent: config.reviewAgent,
     maxReviewRuns: config.maxReviewRuns,
     port: config.port,
@@ -35,5 +35,5 @@ export default async function (pi: ExtensionAPI) {
   registerCommands(pi);
   registerHooks(pi);
 
-  pi.logger.info("Easy Workflow extension initialized");
+  console.info("Easy Workflow extension initialized");
 }

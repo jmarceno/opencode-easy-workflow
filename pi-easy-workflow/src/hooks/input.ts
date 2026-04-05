@@ -15,11 +15,11 @@ export function registerInputHook(pi: ExtensionAPI): void {
     const { valid, cleanedPrompt } = parseWorkflowPrompt(text);
 
     if (!valid || !cleanedPrompt) {
-      return undefined;
+      return { action: "continue" };
     }
 
     // Workflow activation requested
-    ctx.ui.notify("Workflow mode enabled", "success");
+    ctx.ui.notify("Workflow mode enabled", "info");
 
     // TODO: Implement workflow activation logic
     // - Extract goals from cleanedPrompt
@@ -27,7 +27,7 @@ export function registerInputHook(pi: ExtensionAPI): void {
     // - Set up review triggers
     // - Update system context
 
-    return undefined;
+    return { action: "continue" };
   });
 }
 
@@ -45,14 +45,14 @@ export function registerInputTransformer(pi: ExtensionAPI): void {
     // Check if #workflow marker is at start or end
     if (firstToken === WORKFLOW_MARKER) {
       const cleaned = tokens.slice(1).join(" ");
-      return cleaned || undefined;
+      return cleaned ? { action: "transform", text: cleaned, images: event.images } : { action: "continue" };
     }
 
     if (lastToken === WORKFLOW_MARKER) {
       const cleaned = tokens.slice(0, -1).join(" ");
-      return cleaned || undefined;
+      return cleaned ? { action: "transform", text: cleaned, images: event.images } : { action: "continue" };
     }
 
-    return undefined;
+    return { action: "continue" };
   });
 }

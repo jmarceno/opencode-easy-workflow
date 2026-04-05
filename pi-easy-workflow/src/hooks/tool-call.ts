@@ -1,5 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { configLoader } from "../config";
+import { getKanbanDb } from "../kanban/runtime";
+import type { WorkflowSessionKind } from "../kanban/types";
 import { findActiveRunForCurrentSession, shouldRunReview } from "../utils/run-state";
 
 /**
@@ -23,9 +25,9 @@ export function registerToolCallHook(pi: ExtensionAPI): void {
     const gate = shouldRunReview(activeRun.state, Date.now());
 
     if (!gate.allowed) {
-      pi.logger.debug("Review skipped", {
+      console.debug("Review skipped", {
         reason: gate.reason,
-        sessionId: ctx.sessionId,
+        sessionFile: ctx.sessionManager.getSessionFile?.() ?? null,
       });
       return undefined;
     }
@@ -41,9 +43,9 @@ export function registerToolCallHook(pi: ExtensionAPI): void {
     // - Set flag for before_agent_start hook
     // - Notify user that review is pending
 
-    pi.logger.info("Review will run after current task", {
+    console.info("Review will run after current task", {
       toolName: event.toolName,
-      sessionId: ctx.sessionId,
+      sessionFile: ctx.sessionManager.getSessionFile?.() ?? null,
     });
 
     return undefined;
@@ -81,7 +83,7 @@ export function registerPermissionHook(pi: ExtensionAPI): void {
 /**
  * Check if a tool is allowed for a given session kind.
  */
-function isAllowedTool(toolName: string, sessionKind: string): boolean {
+function isAllowedTool(toolName: string, sessionKind: WorkflowSessionKind): boolean {
   // Define allowed tools per session type
   const allowedByKind: Record<string, string[]> = {
     review: ["read", "bash"],
@@ -99,9 +101,17 @@ function isAllowedTool(toolName: string, sessionKind: string): boolean {
  */
 async function getWorkflowSessionOwner(
   ctx: ExtensionContext,
-): Promise<{ taskId: string; sessionKind: string; skipPermissionAsking: boolean } | null> {
-  // TODO: Implement - query the kanban DB for session metadata
-  // This requires access to the database which should be initialized
-  // when the kanban server starts
-  return null;
+): Promise<{ taskId: string; sessionKind: WorkflowSessionKind; skipPermissionAsking: boolean } | null> {
+  const db = getKanbanDb();
+  const sessionId = ctx.sessionManager.getSessionFile?.() ?? "";
+  const session = sessionId ? db.getWorkflowSession(sessionId) : null;
+  if (!session) {
+    return null;
+  }
+
+  return {
+    taskId: session.taskId,
+    sessionKind: session.sessionKind,
+    skipPermissionAsking: session.skipPermissionAsking,
+  };
 }

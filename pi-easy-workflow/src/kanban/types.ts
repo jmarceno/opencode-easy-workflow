@@ -12,6 +12,7 @@ export type TaskStatus =
 export type ExecutionPhase =
   | "not_started"
   | "plan_complete_waiting_approval"
+  | "plan_revision_pending"
   | "implementation_pending"
   | "implementation_done";
 
@@ -27,6 +28,18 @@ export type BestOfNSubstage =
 
 export type ThinkingLevel = "default" | "low" | "medium" | "high";
 
+export type RunPhase = "worker" | "reviewer" | "final_applier";
+
+export type RunStatus = "pending" | "running" | "done" | "failed" | "skipped";
+
+export type WorkflowSessionKind =
+  | "task"
+  | "task_run_worker"
+  | "review"
+  | "plan"
+  | "build"
+  | "repair";
+
 export interface KanbanTask {
   id: string;
   name: string;
@@ -36,6 +49,7 @@ export interface KanbanTask {
   planModel: string;
   executionModel: string;
   planmode: boolean;
+  autoApprovePlan: boolean;
   review: boolean;
   autoCommit: boolean;
   deleteWorktree: boolean;
@@ -53,9 +67,30 @@ export interface KanbanTask {
   thinkingLevel: ThinkingLevel;
   executionPhase: ExecutionPhase;
   awaitingPlanApproval: boolean;
+  planRevisionCount: number;
   executionStrategy: ExecutionStrategy;
   bestOfNConfig: BestOfNConfig | null;
   bestOfNSubstage: BestOfNSubstage;
+  skipPermissionAsking: boolean;
+}
+
+export type Task = KanbanTask;
+
+export interface Options {
+  commitPrompt: string;
+  branch: string;
+  planModel: string;
+  executionModel: string;
+  reviewModel: string;
+  command: string;
+  parallelTasks: number;
+  autoDeleteNormalSessions: boolean;
+  autoDeleteReviewSessions: boolean;
+  showExecutionGraph: boolean;
+  port: number;
+  thinkingLevel: ThinkingLevel;
+  telegramBotToken: string;
+  telegramChatId: string;
 }
 
 export interface BestOfNWorker {
@@ -99,6 +134,9 @@ export interface TaskRun {
   errorMessage: string | null;
   candidateId: string | null;
   metadataJson: string | null;
+  createdAt: number;
+  updatedAt: number;
+  completedAt: number | null;
 }
 
 export interface TaskCandidate {
@@ -111,6 +149,8 @@ export interface TaskCandidate {
   verificationJson: string | null;
   summary: string;
   errorMessage: string | null;
+  createdAt: number;
+  updatedAt: number;
 }
 
 // Workflow run types (for #workflow sessions)

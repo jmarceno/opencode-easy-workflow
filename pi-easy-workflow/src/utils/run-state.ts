@@ -1,7 +1,6 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { WorkflowRunState, ReviewResult } from "../kanban/types";
+import type { ReviewResult } from "../kanban/types";
 
-// Import from kanban types
 export interface WorkflowRunState {
   reviewAgent?: string | null;
   runreview: boolean;

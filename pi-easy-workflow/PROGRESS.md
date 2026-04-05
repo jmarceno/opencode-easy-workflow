@@ -2,7 +2,7 @@
 
 **Branch:** `pi-extension`  
 **Started:** 2026-04-05  
-**Status:** In Progress (Core structure complete)
+**Status:** In Progress (exact HTML copied; compatibility API surface expanded)
 
 ## Overview
 
@@ -26,9 +26,9 @@ Converting `opencode-easy-workflow` OpenCode plugin to a pi extension.
 ### Phase 3: Kanban System ✅
 - [x] `src/kanban/types.ts` - Types (adapted from OpenCode)
 - [x] `src/kanban/db.ts` - Database layer (adapted, uses better-sqlite3)
-- [x] `src/kanban/server.ts` - HTTP API server (simplified)
+- [x] `src/kanban/server.ts` - HTTP API server (now serving in-package kanban HTML)
 - [x] `src/kanban/index.ts` - Re-exports
-- [ ] `src/kanban/orchestrator.ts` - Task orchestration (STUB NEEDED)
+- [x] `src/kanban/orchestrator.ts` - Initial task state machine implemented
 - [ ] `src/kanban/task-state.ts` - Task state (NOT COPIED - simplify)
 - [ ] `src/kanban/execution-plan.ts` - Execution planning (NOT COPIED - simplify)
 
@@ -41,19 +41,19 @@ Converting `opencode-easy-workflow` OpenCode plugin to a pi extension.
 
 ### Phase 5: Tools ✅
 - [x] `src/tools/index.ts` - Tool registration
-- [x] `src/tools/workflow-tools.ts` - Main workflow tools (stubs)
+- [x] `src/tools/workflow-tools.ts` - Main workflow tools wired to DB/orchestrator
 - [x] `src/tools/kanban-tools.ts` - Kanban CRUD tools (stubs)
 
 ### Phase 6: Commands ✅
 - [x] `src/commands/index.ts` - Command registration
 - [x] `src/commands/board.ts` - Kanban board command
 - [x] `src/commands/workflow.ts` - Workflow management
-- [x] `src/commands/task.ts` - Task CRUD commands
+- [x] `src/commands/task.ts` - Task CRUD/start/approve commands wired to DB/orchestrator
 
 ### Phase 7: Utilities ✅
 - [x] `src/utils/workflow-parser.ts` - `#workflow` parsing
 - [x] `src/utils/run-state.ts` - Run file state management
-- [x] `src/utils/review.ts` - Review logic (stubs)
+- [x] `src/utils/review.ts` - Initial review logic implemented
 - [ ] `src/utils/goals.ts` - Goal extraction (merged into review.ts)
 
 ### Phase 8: Prompts ✅
@@ -69,7 +69,7 @@ Converting `opencode-easy-workflow` OpenCode plugin to a pi extension.
 - [x] `src/skills/workflow-task-setup/SKILL.md`
 
 ### Phase 10: Testing & Polish 🔄
-- [ ] TypeScript type checking
+- [x] TypeScript type checking
 - [ ] Biome linting
 - [ ] Fix any compilation errors
 - [ ] Manual testing in Interactive mode
@@ -110,7 +110,7 @@ export default async function (pi: ExtensionAPI) {
 1. **Orchestrator session creation**: How to create sub-sessions in pi? **Status: RESOLVED** — Use `createAgentSession()` from `@mariozechner/pi-coding-agent` with `SessionManager.inMemory()`. See the [Orchestrator Design](plans/orchestrator-design.md) document for full details. The `pi-subagents` package (tintinweb) proves this pattern works in production.
 2. **Permission system**: Pi's permission model differs from OpenCode. **Status: RESOLVED** — Pi has no built-in permission gate. Use `tool_call` hook to intercept and auto-allow tools for workflow-owned sessions. Set `skip_permission_asking` flag in `workflow_sessions` DB table. The `tool_call` hook returns `undefined` (no block) for workflow-owned sessions, effectively bypassing all permission prompts. See [Orchestrator Design](plans/orchestrator-design.md).
 3. **HTTP server**: Kept simplified version. Works but may conflict with pi's port usage. **Status: WORKS**
-4. **Kanban orchestrator**: **Status: DESIGN COMPLETE** — State machine design documented in [Orchestrator Design](plans/orchestrator-design.md). Uses `createAgentSession()` for sub-sessions, `tool_call` hook for permission bypass, and a 7-state FSM for task lifecycle.
+4. **Kanban orchestrator**: **Status: PARTIALLY IMPLEMENTED** — Added a first-pass state machine in `src/kanban/orchestrator.ts` and wired task/workflow entry points to it. Still needs the full sub-session execution flow from [Orchestrator Design](plans/orchestrator-design.md).
 
 ## File Dependencies
 
@@ -134,20 +134,22 @@ src/kanban/ (standalone dependencies)
 ├── src/kanban/db.ts ✅
 ├── src/kanban/server.ts ✅
 ├── src/kanban/types.ts ✅
-└── src/kanban/index.ts ✅
+├── src/kanban/index.ts ✅
+└── src/kanban/index.html ✅
 
-⚠️ Missing/Stubbed:
-├── src/kanban/orchestrator.ts (stub)
-├── src/utils/review.ts (stub)
+⚠️ Missing/Partial:
+├── src/kanban/orchestrator.ts (initial implementation; sub-session execution still pending)
+├── src/utils/review.ts (heuristic implementation; real scratch-review flow still pending)
 ├── src/utils/run-state.ts (partial)
 ```
 
 ## Next Steps
 
-1. **Type check**: Run `pnpm typecheck` and fix errors
-2. **Linting**: Run `pnpm lint` and fix issues
-3. **Implement stubs**: Fill in kanban orchestrator and review logic
-4. **Test**: Try loading the extension in pi
+1. **Manual/UI validation**: load the copied kanban page through the extension server and exercise create/edit/delete/start/approve/revision/repair flows to catch any remaining behavioral mismatches
+2. **Deepen orchestrator**: replace the current DB-only transitions with real sub-session execution
+3. **Review persistence**: store/update pending review state and run results from hooks
+4. **Lint + polish**: run `npm run lint` and clean up any remaining issues
+5. **Test**: run integration tests and then try loading the extension in pi
 
 ## Files Created
 
@@ -199,7 +201,21 @@ pi-easy-workflow/
             └── SKILL.md ✅
 ```
 
-**Total: 31 files created**
+**Total: 32 files created**
+
+## Latest Progress Log
+
+- 2026-04-05: Confirmed the local package install state was blocking meaningful type-checking (`node_modules` missing entirely), installed dependencies, added `better-sqlite3`, and got `npm run typecheck` passing.
+- 2026-04-05: Copied `.opencode/easy-workflow/kanban/index.html` verbatim into `pi-easy-workflow/src/kanban/index.html` so the page is now available from inside the Pi extension directory with exact visual/functional parity target.
+- 2026-04-05: Expanded `src/kanban/server.ts` to serve the copied page plus a broader compatibility API surface expected by the original UI (`/api/models`, `/api/branches`, `/api/start`, `/api/stop`, `/api/execution-graph`, task start/repair/revision endpoints, runs/candidates/summary endpoints, and `/ws`).
+- 2026-04-05: Performed a parity pass against the copied kanban HTML and tightened server behavior to better match the original OpenCode server: restored old-style validation/error cases, fixed `/api/start` and task-start behavior, returned `204` for deletes, accepted old reorder payloads, added plan approval/revision semantics, and aligned execution graph + best-of-n summary response shapes more closely with the legacy page.
+- 2026-04-05: Fixed core kanban type mismatches in `src/kanban/types.ts` (`Task`, `WorkflowSessionKind`, `RunPhase`, `RunStatus`, `Options`, `plan_revision_pending`, and missing task fields).
+- 2026-04-05: Updated `src/kanban/db.ts` to persist the newly required task fields and reuse `WorkflowSessionKind` from shared types.
+- 2026-04-05: Added `src/kanban/orchestrator.ts` with an initial task lifecycle state machine and `src/kanban/runtime.ts` for shared DB/orchestrator access.
+- 2026-04-05: Wired orchestrator usage into `src/tools/workflow-tools.ts` and `src/commands/task.ts`.
+- 2026-04-05: Aligned extension code with the actual Pi SDK typings (`@mariozechner/pi-ai` schemas, `input` hook return shape, required tool labels, and removal of incompatible render helpers).
+- 2026-04-05: Implemented `getWorkflowSessionOwner()` in `src/hooks/tool-call.ts` using the kanban DB workflow session table.
+- 2026-04-05: Replaced `src/utils/review.ts` placeholders with a first-pass pending-review detector, heuristic review runner, and goal extraction.
 
 ## How to Continue
 

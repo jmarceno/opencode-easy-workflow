@@ -21,6 +21,7 @@ import type {
   TaskCandidate,
   RunPhase,
   RunStatus,
+  WorkflowSessionKind,
 } from "./types";
 
 const DEFAULT_OPTIONS: Options = {
@@ -125,8 +126,6 @@ function normalizeExecutionPhase(value: unknown): ExecutionPhase {
   }
   return "not_started";
 }
-
-export type WorkflowSessionKind = "task" | "task_run_worker" | "review" | "plan" | "build" | "repair";
 
 export interface WorkflowSessionEntry {
   taskId: string;
@@ -324,12 +323,14 @@ export class KanbanDB {
         id, name, idx, prompt, branch, plan_model, execution_model,
         planmode, auto_approve_plan, review, auto_commit, delete_worktree,
         status, requirements, created_at, updated_at, thinking_level,
-        execution_strategy, execution_phase
+        execution_strategy, execution_phase, awaiting_plan_approval,
+      plan_revision_count, best_of_n_config, best_of_n_substage, skip_permission_asking
       ) VALUES (
         @id, @name, @idx, @prompt, @branch, @planModel, @executionModel,
         @planmode, @autoApprovePlan, @review, @autoCommit, @deleteWorktree,
         @status, @requirements, @createdAt, @updatedAt, @thinkingLevel,
-        @executionStrategy, @executionPhase
+        @executionStrategy, @executionPhase, @awaitingPlanApproval,
+        @planRevisionCount, @bestOfNConfig, @bestOfNSubstage, @skipPermissionAsking
       )
     `).run({
       id: task.id,
@@ -351,6 +352,11 @@ export class KanbanDB {
       thinkingLevel: task.thinkingLevel ?? "default",
       executionStrategy: task.executionStrategy ?? "standard",
       executionPhase: task.executionPhase ?? "not_started",
+      awaitingPlanApproval: task.awaitingPlanApproval ? 1 : 0,
+      planRevisionCount: task.planRevisionCount ?? 0,
+      bestOfNConfig: task.bestOfNConfig ? JSON.stringify(task.bestOfNConfig) : null,
+      bestOfNSubstage: task.bestOfNSubstage ?? "idle",
+      skipPermissionAsking: task.skipPermissionAsking ? 1 : 0,
     });
 
     return this.getTask(task.id)!;
@@ -375,7 +381,7 @@ export class KanbanDB {
     if (updates.status !== undefined) {
       fields.push("status = @status");
       params.status = updates.status;
-      if (updates.status === "done" || updates.status === "completed") {
+      if (updates.status === "done") {
         fields.push("completed_at = @completedAt");
         params.completedAt = now;
       }
@@ -396,6 +402,10 @@ export class KanbanDB {
       fields.push("execution_phase = @executionPhase");
       params.executionPhase = updates.executionPhase;
     }
+    if (updates.agentOutput !== undefined) {
+      fields.push("agent_output = @agentOutput");
+      params.agentOutput = updates.agentOutput;
+    }
     if (updates.awaitingPlanApproval !== undefined) {
       fields.push("awaiting_plan_approval = @awaitingPlanApproval");
       params.awaitingPlanApproval = updates.awaitingPlanApproval ? 1 : 0;
@@ -404,6 +414,10 @@ export class KanbanDB {
       fields.push("review_count = @reviewCount");
       params.reviewCount = updates.reviewCount;
     }
+    if (updates.planRevisionCount !== undefined) {
+      fields.push("plan_revision_count = @planRevisionCount");
+      params.planRevisionCount = updates.planRevisionCount;
+    }
     if (updates.errorMessage !== undefined) {
       fields.push("error_message = @errorMessage");
       params.errorMessage = updates.errorMessage;
@@ -411,6 +425,10 @@ export class KanbanDB {
     if (updates.bestOfNSubstage !== undefined) {
       fields.push("best_of_n_substage = @bestOfNSubstage");
       params.bestOfNSubstage = updates.bestOfNSubstage;
+    }
+    if (updates.skipPermissionAsking !== undefined) {
+      fields.push("skip_permission_asking = @skipPermissionAsking");
+      params.skipPermissionAsking = updates.skipPermissionAsking ? 1 : 0;
     }
 
     this.db.prepare(`UPDATE tasks SET ${fields.join(", ")} WHERE id = @id`).run(params);

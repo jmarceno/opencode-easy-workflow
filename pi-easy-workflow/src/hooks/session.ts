@@ -13,8 +13,8 @@ export function registerSessionStartHook(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, ctx) => {
     const config = configLoader.getConfig();
 
-    pi.logger.debug("New session started", {
-      sessionId: ctx.sessionId,
+    console.debug("New session started", {
+      sessionFile: ctx.sessionManager.getSessionFile?.() ?? null,
       cwd: ctx.cwd,
     });
 
@@ -26,7 +26,7 @@ export function registerSessionStartHook(pi: ExtensionAPI): void {
 
 export function registerSessionShutdownHook(pi: ExtensionAPI): void {
   pi.on("session_shutdown", async (_event, _ctx) => {
-    pi.logger.debug("Session shutdown");
+    console.debug("Session shutdown");
 
     // TODO: Cleanup workflow state
     // - Close any open workflow runs for this session
@@ -36,8 +36,8 @@ export function registerSessionShutdownHook(pi: ExtensionAPI): void {
 
 export function registerSessionSwitchHook(pi: ExtensionAPI): void {
   pi.on("session_switch", async (event, ctx) => {
-    pi.logger.debug("Session switched", {
-      sessionId: ctx.sessionId,
+    console.debug("Session switched", {
+      sessionFile: ctx.sessionManager.getSessionFile?.() ?? null,
       reason: event.reason,
     });
 
@@ -47,8 +47,8 @@ export function registerSessionSwitchHook(pi: ExtensionAPI): void {
 
 export function registerSessionForkHook(pi: ExtensionAPI): void {
   pi.on("session_fork", async (_event, ctx) => {
-    pi.logger.debug("Session forked", {
-      originalSessionId: ctx.sessionId,
+    console.debug("Session forked", {
+      originalSessionFile: ctx.sessionManager.getSessionFile?.() ?? null,
     });
 
     // TODO: Copy workflow context to forked session

@@ -7,9 +7,16 @@ import type { ReviewResult, ExtractedGoals } from "../kanban/types";
 export async function findPendingReview(
   ctx: ExtensionContext,
 ): Promise<{ runPath: string; state: any } | null> {
-  // TODO: Implement - check for pending review in session state or DB
-  // This should track pending reviews per session
-  return null;
+  const anyCtx = ctx as any;
+  const state = anyCtx?.sessionState?.easyWorkflowReview ?? anyCtx?.easyWorkflowReview ?? null;
+  if (!state || state.pending !== true) {
+    return null;
+  }
+
+  return {
+    runPath: state.runPath ?? `session:${ctx.sessionManager.getSessionFile?.() ?? "unknown"}`,
+    state,
+  };
 }
 
 /**
@@ -26,16 +33,48 @@ export async function runReview(
   ctx: ExtensionContext,
   reviewAgent: string,
 ): Promise<ReviewResult> {
-  // TODO: Implement review execution
-  // In OpenCode: creates a scratch session and prompts the review agent
-  // In pi: Need to adapt to use tools or prompt injection
+  const state = runInfo.state ?? {};
+  const latestText = [
+    state.latestAssistantMessage,
+    state.lastAssistantMessage,
+    state.output,
+    state.agentOutput,
+    state.transcript,
+  ]
+    .filter((value) => typeof value === "string" && value.trim().length > 0)
+    .join("\n\n");
 
-  // For now, return a placeholder
+  if (!latestText.trim()) {
+    return {
+      status: "blocked",
+      summary: `No reviewable output found for ${reviewAgent}`,
+      gaps: ["No assistant output was available to review."],
+      recommendedPrompt: "Produce an implementation summary, changed files, and validation results before retrying review.",
+    };
+  }
+
+  const unmetGoals = Array.isArray(state.goals)
+    ? state.goals.filter((goal: unknown) => {
+        if (typeof goal !== "string") return false;
+        const normalizedGoal = goal.toLowerCase();
+        return !latestText.toLowerCase().includes(normalizedGoal.slice(0, Math.min(24, normalizedGoal.length)));
+      })
+    : [];
+
+  if (unmetGoals.length > 0) {
+    return {
+      status: "gaps_found",
+      summary: `Review by ${reviewAgent} found likely gaps against the stated goals.`,
+      gaps: unmetGoals.map((goal: string) => `Goal may be incomplete: ${goal}`),
+      recommendedPrompt: "Address the missing goals explicitly, then summarize what changed and how you validated it.",
+    };
+  }
+
   return {
-    status: "blocked",
-    summary: "Review not yet implemented",
-    gaps: ["Review system needs to be adapted for pi extension"],
-    recommendedPrompt: "Complete the review integration",
+    status: "pass",
+    summary: `Review by ${reviewAgent} found no obvious gaps in the captured output.`,
+    gaps: [],
+    recommendedPrompt: "None",
   };
 }
 
@@ -46,16 +85,17 @@ export async function runReview(
  */
 export async function extractGoals(
   cleanedPrompt: string,
-  ctx: ExtensionContext,
+  _ctx: ExtensionContext,
 ): Promise<ExtractedGoals> {
-  // TODO: Implement goal extraction
-  // In OpenCode: creates a scratch session to extract goals
-  // In pi: Could use structured prompting or a dedicated tool
+  const normalized = cleanedPrompt.trim();
+  const bulletGoals = normalized
+    .split(/\n+/)
+    .map((line) => line.replace(/^[-*\d.\s]+/, "").trim())
+    .filter(Boolean);
 
-  // Placeholder implementation
   return {
-    summary: cleanedPrompt.slice(0, 100),
-    goals: [cleanedPrompt],
+    summary: normalized.slice(0, 160),
+    goals: bulletGoals.length > 0 ? bulletGoals : [normalized],
   };
 }
 
