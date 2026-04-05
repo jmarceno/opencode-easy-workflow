@@ -3,18 +3,18 @@
  * Plugin-level integration tests for permission auto-reply.
  *
  * These tests invoke the REAL handlePermissionAutoReply function from the plugin,
- * with a real KanbanDB and a mock SDK client that intercepts permission.respond calls.
- *
- * This is NOT a unit test of isolated helpers — it exercises the actual event-handler
- * code path that runs when the OpenCode server dispatches a permission.asked event.
+ * with a real KanbanDB and a mock SDK client that intercepts permission.reply and
+ * permission.respond calls.
  *
  * Coverage:
- * 1. Workflow-owned task session with skipPermissionAsking=true  → permission.respond called once, mode "once"
- * 2. Workflow-owned task_run session with skipPermissionAsking=true → same
- * 3. Workflow-owned session with skipPermissionAsking=false        → no permission.respond call
- * 4. Non-workflow (unknown) session                              → no permission.respond call
- * 5. permission.asked with missing sessionId                     → no call, no crash
- * 6. permission.asked with missing permissionId                 → no call, no crash
+ * 1. Workflow-owned task session registered in registry with skipPermissionAsking=true → permission.reply called with "always"
+ * 2. Workflow-owned task_run session registered in registry with skipPermissionAsking=true → same
+ * 3. Workflow-owned session with skipPermissionAsking=false → no reply/respond call
+ * 4. Non-workflow (unknown) session → no reply/respond call
+ * 5. permission.asked with missing sessionId → no call, no crash
+ * 6. permission.asked with missing permissionId → no call, no crash
+ * 7. permission.reply preferred over permission.respond
+ * 8. permission.respond fallback when reply is unavailable
  */
 
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "fs"
@@ -23,7 +23,12 @@ import { join } from "path"
 import { KanbanDB } from "../.opencode/easy-workflow/db"
 import { handlePermissionAutoReply } from "../.opencode/plugins/easy-workflow"
 
-// ---- Mock SDK client that intercepts permission.respond ----
+// ---- Mock SDK client that intercepts permission.reply and permission.respond ----
+
+interface PermissionReplyCall {
+  requestID: string
+  reply: string
+}
 
 interface PermissionRespondCall {
   sessionID: string
@@ -33,34 +38,35 @@ interface PermissionRespondCall {
 
 const CLEANUP = process.env.EWF_CLEANUP_TEST_ARTIFACTS === "1"
 
-function makeMockClient(calls: PermissionRespondCall[]) {
+function makeMockClient(replyCalls: PermissionReplyCall[], respondCalls: PermissionRespondCall[], throwOnReply = false, permissionListData?: any[]) {
   return {
     permission: {
+      reply(
+        params: { requestID: string; reply: string },
+        _options?: { throwOnError?: boolean },
+      ) {
+        if (throwOnReply) {
+          return Promise.reject(new Error("reply() not available"))
+        }
+        replyCalls.push({ ...params })
+        return Promise.resolve({ data: true })
+      },
       respond(
         params: { sessionID: string; permissionID: string; response: string },
         _options?: { throwOnError?: boolean },
       ) {
-        calls.push({ ...params })
+        respondCalls.push({ ...params })
         return Promise.resolve({ data: true })
+      },
+      list() {
+        if (permissionListData !== undefined) {
+          return Promise.resolve({ data: permissionListData })
+        }
+        return Promise.resolve({ data: [] })
       },
     },
   }
 }
-
-// ---- Evidence capture: permission.asked event structure ----
-//
-// When an autonomous agent session hits a permission gate, OpenCode emits:
-//   event = { type: "permission.asked", properties: { sessionID, permissionID, permission, patterns } }
-//
-// SDK endpoint: POST /session/{sessionID}/permissions/{permissionID}
-//               body: { response: "once" | "always" | "reject" }
-//
-// Relevant SDK types (from @opencode-ai/sdk v2/gen/types.gen.ts):
-//   EventPermissionAsked = { type: "permission.asked", properties: PermissionRequest }
-//   PermissionRequest = { id, sessionID, permission, patterns, metadata, always, tool? }
-//   PermissionRespondData = { sessionID, permissionID, response: "once" | "always" | "reject" }
-//
-// The following tests exercise the real plugin handler against this event structure.
 
 // ---- Test helpers ----
 
@@ -82,21 +88,28 @@ async function test_autoReply_workflowOwnedTaskSession_withSkipPermissionAskingT
   console.log("=== [plugin] auto-reply: workflow-owned task session, skipPermissionAsking=true ===")
   const tempDir = mkdtempSync(join(tmpdir(), "ewf-plugin-task-"))
   const dbPath = join(tempDir, "tasks.db")
+  let db: KanbanDB | null = null
 
   try {
-    const db = new KanbanDB(dbPath)
-    const calls: PermissionRespondCall[] = []
-    const mockClient: any = makeMockClient(calls)
+    db = new KanbanDB(dbPath)
+    const replyCalls: PermissionReplyCall[] = []
+    const respondCalls: PermissionRespondCall[] = []
+    const mockClient: any = makeMockClient(replyCalls, respondCalls)
 
-    // Create a task with a sessionId and skipPermissionAsking=true (the autonomy flag)
     const task = db.createTask({ name: "Autonomous task", prompt: "do work", skipPermissionAsking: true })
-    db.updateTask(task.id, { sessionId: "wf-task-session-001" })
+    db.registerWorkflowSession({
+      sessionId: "wf-task-session-001",
+      taskId: task.id,
+      sessionKind: "task",
+      ownerDirectory: tempDir,
+      skipPermissionAsking: true,
+    })
 
     const event = {
       type: "permission.asked",
       properties: {
+        id: "perm-abc-123",
         sessionID: "wf-task-session-001",
-        permissionID: "perm-abc-123",
         permission: "bash",
         patterns: ["**"],
         metadata: {},
@@ -104,19 +117,18 @@ async function test_autoReply_workflowOwnedTaskSession_withSkipPermissionAskingT
       },
     }
 
-    // Call the REAL plugin handler (not a mock/stub)
     await handlePermissionAutoReply(event, mockClient, db)
 
-    assert(calls.length === 1, `Expected exactly 1 permission.respond call; got ${calls.length}`)
-    assert(calls[0].sessionID === "wf-task-session-001", `Wrong sessionID: ${calls[0].sessionID}`)
-    assert(calls[0].permissionID === "perm-abc-123", `Wrong permissionID: ${calls[0].permissionID}`)
-    assert(calls[0].response === "once", `Expected response="once", got="${calls[0].response}"`)
+    assert(replyCalls.length === 1, `Expected exactly 1 permission.reply call; got ${replyCalls.length}`)
+    assert(replyCalls[0].requestID === "perm-abc-123", `Wrong requestID: ${replyCalls[0].requestID}`)
+    assert(replyCalls[0].reply === "always", `Expected reply="always", got="${replyCalls[0].reply}"`)
+    assert(respondCalls.length === 0, `Expected 0 respond calls when reply succeeds; got ${respondCalls.length}`)
 
     db.close()
     cleanupTempDir(tempDir)
-    console.log("  ✓ permission.respond called exactly once with response='once'")
+    console.log("  ✓ permission.reply called with reply='always'")
   } catch (err) {
-    db.close?.()
+    db?.close()
     cleanupTempDir(tempDir)
     throw err
   }
@@ -126,13 +138,14 @@ async function test_autoReply_workflowOwnedTaskRunSession_withSkipPermissionAski
   console.log("=== [plugin] auto-reply: workflow-owned task_run session, skipPermissionAsking=true ===")
   const tempDir = mkdtempSync(join(tmpdir(), "ewf-plugin-run-"))
   const dbPath = join(tempDir, "tasks.db")
+  let db: KanbanDB | null = null
 
   try {
-    const db = new KanbanDB(dbPath)
-    const calls: PermissionRespondCall[] = []
-    const mockClient: any = makeMockClient(calls)
+    db = new KanbanDB(dbPath)
+    const replyCalls: PermissionReplyCall[] = []
+    const respondCalls: PermissionRespondCall[] = []
+    const mockClient: any = makeMockClient(replyCalls, respondCalls)
 
-    // Create a task with skipPermissionAsking=true, then a worker task-run with its own sessionId
     const task = db.createTask({ name: "Autonomous run task", prompt: "do work", skipPermissionAsking: true })
     const run = db.createTaskRun({
       taskId: task.id,
@@ -141,13 +154,20 @@ async function test_autoReply_workflowOwnedTaskRunSession_withSkipPermissionAski
       attemptIndex: 0,
       model: "test-model",
     })
-    db.updateTaskRun(run.id, { sessionId: "wf-run-session-002" })
+    db.registerWorkflowSession({
+      sessionId: "wf-run-session-002",
+      taskId: task.id,
+      taskRunId: run.id,
+      sessionKind: "task_run_worker",
+      ownerDirectory: tempDir,
+      skipPermissionAsking: true,
+    })
 
     const event = {
       type: "permission.asked",
       properties: {
+        id: "perm-def-456",
         sessionID: "wf-run-session-002",
-        permissionID: "perm-def-456",
         permission: "edit",
         patterns: ["src/**/*.ts"],
         metadata: {},
@@ -155,19 +175,16 @@ async function test_autoReply_workflowOwnedTaskRunSession_withSkipPermissionAski
       },
     }
 
-    // Call the REAL plugin handler
     await handlePermissionAutoReply(event, mockClient, db)
 
-    assert(calls.length === 1, `Expected exactly 1 permission.respond call; got ${calls.length}`)
-    assert(calls[0].sessionID === "wf-run-session-002", `Wrong sessionID: ${calls[0].sessionID}`)
-    assert(calls[0].permissionID === "perm-def-456", `Wrong permissionID: ${calls[0].permissionID}`)
-    assert(calls[0].response === "once", `Expected response="once", got="${calls[0].response}"`)
+    assert(replyCalls.length === 1, `Expected exactly 1 permission.reply call; got ${replyCalls.length}`)
+    assert(replyCalls[0].reply === "always", `Expected reply="always", got="${replyCalls[0].reply}"`)
 
     db.close()
     cleanupTempDir(tempDir)
-    console.log("  ✓ permission.respond called exactly once for task_run session with response='once'")
+    console.log("  ✓ permission.reply called for task_run session with reply='always'")
   } catch (err) {
-    db.close?.()
+    db?.close()
     cleanupTempDir(tempDir)
     throw err
   }
@@ -177,21 +194,28 @@ async function test_noAutoReply_workflowOwnedTaskSession_withSkipPermissionAskin
   console.log("=== [plugin] NO auto-reply: skipPermissionAsking=false ===")
   const tempDir = mkdtempSync(join(tmpdir(), "ewf-plugin-false-"))
   const dbPath = join(tempDir, "tasks.db")
+  let db: KanbanDB | null = null
 
   try {
-    const db = new KanbanDB(dbPath)
-    const calls: PermissionRespondCall[] = []
-    const mockClient: any = makeMockClient(calls)
+    db = new KanbanDB(dbPath)
+    const replyCalls: PermissionReplyCall[] = []
+    const respondCalls: PermissionRespondCall[] = []
+    const mockClient: any = makeMockClient(replyCalls, respondCalls)
 
-    // Task with skipPermissionAsking=false (interactive — should NOT auto-reply)
     const task = db.createTask({ name: "Interactive task", prompt: "ask me", skipPermissionAsking: false })
-    db.updateTask(task.id, { sessionId: "interactive-session-003" })
+    db.registerWorkflowSession({
+      sessionId: "interactive-session-003",
+      taskId: task.id,
+      sessionKind: "task",
+      ownerDirectory: tempDir,
+      skipPermissionAsking: false,
+    })
 
     const event = {
       type: "permission.asked",
       properties: {
+        id: "perm-ghi-789",
         sessionID: "interactive-session-003",
-        permissionID: "perm-ghi-789",
         permission: "bash",
         patterns: [],
         metadata: {},
@@ -201,13 +225,14 @@ async function test_noAutoReply_workflowOwnedTaskSession_withSkipPermissionAskin
 
     await handlePermissionAutoReply(event, mockClient, db)
 
-    assert(calls.length === 0, `Expected 0 calls (guardrail blocks); got ${calls.length}`)
+    assert(replyCalls.length === 0, `Expected 0 reply calls (guardrail blocks); got ${replyCalls.length}`)
+    assert(respondCalls.length === 0, `Expected 0 respond calls (guardrail blocks); got ${respondCalls.length}`)
 
     db.close()
     cleanupTempDir(tempDir)
-    console.log("  ✓ no permission.respond call — guardrail correctly blocks for skipPermissionAsking=false")
+    console.log("  ✓ no reply/respond call — guardrail correctly blocks for skipPermissionAsking=false")
   } catch (err) {
-    db.close?.()
+    db?.close()
     cleanupTempDir(tempDir)
     throw err
   }
@@ -217,22 +242,28 @@ async function test_noAutoReply_nonWorkflowSession() {
   console.log("=== [plugin] NO auto-reply: non-workflow (unknown) session ===")
   const tempDir = mkdtempSync(join(tmpdir(), "ewf-plugin-unknown-"))
   const dbPath = join(tempDir, "tasks.db")
+  let db: KanbanDB | null = null
 
   try {
-    const db = new KanbanDB(dbPath)
-    const calls: PermissionRespondCall[] = []
-    const mockClient: any = makeMockClient(calls)
+    db = new KanbanDB(dbPath)
+    const replyCalls: PermissionReplyCall[] = []
+    const respondCalls: PermissionRespondCall[] = []
+    const mockClient: any = makeMockClient(replyCalls, respondCalls)
 
-    // Create a task in the DB but use a completely different session ID (simulating a user session)
     const task = db.createTask({ name: "DB task", prompt: "db task", skipPermissionAsking: true })
-    db.updateTask(task.id, { sessionId: "known-task-session" })
+    db.registerWorkflowSession({
+      sessionId: "known-task-session",
+      taskId: task.id,
+      sessionKind: "task",
+      ownerDirectory: tempDir,
+      skipPermissionAsking: true,
+    })
 
-    // Event from a session not in the DB at all
     const event = {
       type: "permission.asked",
       properties: {
+        id: "perm-xyz-999",
         sessionID: "completely-unrelated-user-session",
-        permissionID: "perm-xyz-999",
         permission: "webfetch",
         patterns: [],
         metadata: {},
@@ -242,13 +273,14 @@ async function test_noAutoReply_nonWorkflowSession() {
 
     await handlePermissionAutoReply(event, mockClient, db)
 
-    assert(calls.length === 0, `Expected 0 calls (non-workflow session); got ${calls.length}`)
+    assert(replyCalls.length === 0, `Expected 0 reply calls (non-workflow session); got ${replyCalls.length}`)
+    assert(respondCalls.length === 0, `Expected 0 respond calls (non-workflow session); got ${respondCalls.length}`)
 
     db.close()
     cleanupTempDir(tempDir)
-    console.log("  ✓ no permission.respond call — unrelated user session not affected")
+    console.log("  ✓ no reply/respond call — unrelated user session not affected")
   } catch (err) {
-    db.close?.()
+    db?.close()
     cleanupTempDir(tempDir)
     throw err
   }
@@ -258,13 +290,14 @@ async function test_noAutoReply_missingSessionId() {
   console.log("=== [plugin] NO auto-reply: missing sessionId in event ===")
   const tempDir = mkdtempSync(join(tmpdir(), "ewf-plugin-nosess-"))
   const dbPath = join(tempDir, "tasks.db")
+  let db: KanbanDB | null = null
 
   try {
-    const db = new KanbanDB(dbPath)
-    const calls: PermissionRespondCall[] = []
-    const mockClient: any = makeMockClient(calls)
+    db = new KanbanDB(dbPath)
+    const replyCalls: PermissionReplyCall[] = []
+    const respondCalls: PermissionRespondCall[] = []
+    const mockClient: any = makeMockClient(replyCalls, respondCalls)
 
-    // Event with permissionId but no sessionId
     const event: any = {
       type: "permission.asked",
       properties: {
@@ -276,16 +309,16 @@ async function test_noAutoReply_missingSessionId() {
       },
     }
 
-    // Must not throw
     await handlePermissionAutoReply(event, mockClient, db)
 
-    assert(calls.length === 0, `Expected 0 calls (missing sessionId); got ${calls.length}`)
+    assert(replyCalls.length === 0, `Expected 0 reply calls (missing sessionId); got ${replyCalls.length}`)
+    assert(respondCalls.length === 0, `Expected 0 respond calls (missing sessionId); got ${respondCalls.length}`)
 
     db.close()
     cleanupTempDir(tempDir)
-    console.log("  ✓ no permission.respond call — missing sessionId safely ignored, no crash")
+    console.log("  ✓ no reply/respond call — missing sessionId safely ignored, no crash")
   } catch (err) {
-    db.close?.()
+    db?.close()
     cleanupTempDir(tempDir)
     throw err
   }
@@ -295,16 +328,23 @@ async function test_noAutoReply_missingPermissionId() {
   console.log("=== [plugin] NO auto-reply: missing permissionId in event ===")
   const tempDir = mkdtempSync(join(tmpdir(), "ewf-plugin-noperm-"))
   const dbPath = join(tempDir, "tasks.db")
+  let db: KanbanDB | null = null
 
   try {
-    const db = new KanbanDB(dbPath)
-    const calls: PermissionRespondCall[] = []
-    const mockClient: any = makeMockClient(calls)
+    db = new KanbanDB(dbPath)
+    const replyCalls: PermissionReplyCall[] = []
+    const respondCalls: PermissionRespondCall[] = []
+    const mockClient: any = makeMockClient(replyCalls, respondCalls)
 
     const task = db.createTask({ name: "Sess task", prompt: "task", skipPermissionAsking: true })
-    db.updateTask(task.id, { sessionId: "sess-without-permid" })
+    db.registerWorkflowSession({
+      sessionId: "sess-without-permid",
+      taskId: task.id,
+      sessionKind: "task",
+      ownerDirectory: tempDir,
+      skipPermissionAsking: true,
+    })
 
-    // Event with sessionId but no permissionId
     const event: any = {
       type: "permission.asked",
       properties: {
@@ -318,44 +358,45 @@ async function test_noAutoReply_missingPermissionId() {
 
     await handlePermissionAutoReply(event, mockClient, db)
 
-    assert(calls.length === 0, `Expected 0 calls (missing permissionId); got ${calls.length}`)
+    assert(replyCalls.length === 0, `Expected 0 reply calls (missing permissionId); got ${replyCalls.length}`)
+    assert(respondCalls.length === 0, `Expected 0 respond calls (missing permissionId); got ${respondCalls.length}`)
 
     db.close()
     cleanupTempDir(tempDir)
-    console.log("  ✓ no permission.respond call — missing permissionId safely ignored, no crash")
+    console.log("  ✓ no reply/respond call — missing permissionId safely ignored, no crash")
   } catch (err) {
-    db.close?.()
+    db?.close()
     cleanupTempDir(tempDir)
     throw err
   }
 }
 
-async function test_noAutoReply_reviewerTaskRunSession() {
-  console.log("=== [plugin] NO auto-reply: reviewer task_run session (skipPermissionAsking=false) ===")
-  const tempDir = mkdtempSync(join(tmpdir(), "ewf-plugin-review-"))
+async function test_autoReply_reviewScratchSession() {
+  console.log("=== [plugin] auto-reply: review scratch session, skipPermissionAsking=true ===")
+  const tempDir = mkdtempSync(join(tmpdir(), "ewf-plugin-review-scratch-"))
   const dbPath = join(tempDir, "tasks.db")
+  let db: KanbanDB | null = null
 
   try {
-    const db = new KanbanDB(dbPath)
-    const calls: PermissionRespondCall[] = []
-    const mockClient: any = makeMockClient(calls)
+    db = new KanbanDB(dbPath)
+    const replyCalls: PermissionReplyCall[] = []
+    const respondCalls: PermissionRespondCall[] = []
+    const mockClient: any = makeMockClient(replyCalls, respondCalls)
 
-    // Create a task with skipPermissionAsking=false (reviewer sessions inherit this)
-    const task = db.createTask({ name: "Review task", prompt: "review", skipPermissionAsking: false })
-    const reviewerRun = db.createTaskRun({
+    const task = db.createTask({ name: "Review task", prompt: "review", skipPermissionAsking: true })
+    db.registerWorkflowSession({
+      sessionId: "review-scratch-session-005",
       taskId: task.id,
-      phase: "reviewer",
-      slotIndex: 0,
-      attemptIndex: 0,
-      model: "test-model",
+      sessionKind: "review_scratch",
+      ownerDirectory: tempDir,
+      skipPermissionAsking: true,
     })
-    db.updateTaskRun(reviewerRun.id, { sessionId: "reviewer-session-005" })
 
     const event = {
       type: "permission.asked",
       properties: {
-        sessionID: "reviewer-session-005",
-        permissionID: "perm-review-555",
+        id: "perm-review-555",
+        sessionID: "review-scratch-session-005",
         permission: "bash",
         patterns: [],
         metadata: {},
@@ -365,36 +406,45 @@ async function test_noAutoReply_reviewerTaskRunSession() {
 
     await handlePermissionAutoReply(event, mockClient, db)
 
-    assert(calls.length === 0, `Expected 0 calls (reviewer skipPermissionAsking=false); got ${calls.length}`)
+    assert(replyCalls.length === 1, `Expected 1 reply call for review scratch; got ${replyCalls.length}`)
+    assert(replyCalls[0].reply === "always", `Expected reply="always", got="${replyCalls[0].reply}"`)
 
     db.close()
     cleanupTempDir(tempDir)
-    console.log("  ✓ no permission.respond call — reviewer session inherits skipPermissionAsking=false")
+    console.log("  ✓ permission.reply called for review scratch session with reply='always'")
   } catch (err) {
-    db.close?.()
+    db?.close()
     cleanupTempDir(tempDir)
     throw err
   }
 }
 
-async function test_responseModeIsExactlyOnce() {
-  console.log("=== [plugin] response mode is exactly 'once', not 'always' ===")
-  const tempDir = mkdtempSync(join(tmpdir(), "ewf-plugin-once-"))
+async function test_autoReply_repairSession() {
+  console.log("=== [plugin] auto-reply: repair session, skipPermissionAsking=true ===")
+  const tempDir = mkdtempSync(join(tmpdir(), "ewf-plugin-repair-"))
   const dbPath = join(tempDir, "tasks.db")
+  let db: KanbanDB | null = null
 
   try {
-    const db = new KanbanDB(dbPath)
-    const calls: PermissionRespondCall[] = []
-    const mockClient: any = makeMockClient(calls)
+    db = new KanbanDB(dbPath)
+    const replyCalls: PermissionReplyCall[] = []
+    const respondCalls: PermissionRespondCall[] = []
+    const mockClient: any = makeMockClient(replyCalls, respondCalls)
 
-    const task = db.createTask({ name: "Once mode task", prompt: "task", skipPermissionAsking: true })
-    db.updateTask(task.id, { sessionId: "once-mode-session" })
+    const task = db.createTask({ name: "Repair task", prompt: "repair", skipPermissionAsking: true })
+    db.registerWorkflowSession({
+      sessionId: "repair-session-006",
+      taskId: task.id,
+      sessionKind: "repair",
+      ownerDirectory: tempDir,
+      skipPermissionAsking: true,
+    })
 
     const event = {
       type: "permission.asked",
       properties: {
-        sessionID: "once-mode-session",
-        permissionID: "perm-once-xyz",
+        id: "perm-repair-666",
+        sessionID: "repair-session-006",
         permission: "bash",
         patterns: [],
         metadata: {},
@@ -404,17 +454,170 @@ async function test_responseModeIsExactlyOnce() {
 
     await handlePermissionAutoReply(event, mockClient, db)
 
-    assert(calls.length === 1, `Expected 1 call`)
+    assert(replyCalls.length === 1, `Expected 1 reply call for repair; got ${replyCalls.length}`)
+    assert(replyCalls[0].reply === "always", `Expected reply="always", got="${replyCalls[0].reply}"`)
+
+    db.close()
+    cleanupTempDir(tempDir)
+    console.log("  ✓ permission.reply called for repair session with reply='always'")
+  } catch (err) {
+    db?.close()
+    cleanupTempDir(tempDir)
+    throw err
+  }
+}
+
+async function test_respondFallback_whenReplyThrows() {
+  console.log("=== [plugin] respond fallback when reply() throws ===")
+  const tempDir = mkdtempSync(join(tmpdir(), "ewf-plugin-fallback-"))
+  const dbPath = join(tempDir, "tasks.db")
+  let db: KanbanDB | null = null
+
+  try {
+    db = new KanbanDB(dbPath)
+    const replyCalls: PermissionReplyCall[] = []
+    const respondCalls: PermissionRespondCall[] = []
+    const mockClient: any = makeMockClient(replyCalls, respondCalls, true)
+
+    const task = db.createTask({ name: "Fallback task", prompt: "task", skipPermissionAsking: true })
+    db.registerWorkflowSession({
+      sessionId: "fallback-session-007",
+      taskId: task.id,
+      sessionKind: "task",
+      ownerDirectory: tempDir,
+      skipPermissionAsking: true,
+    })
+
+    const event = {
+      type: "permission.asked",
+      properties: {
+        id: "perm-fallback-777",
+        sessionID: "fallback-session-007",
+        permission: "bash",
+        patterns: [],
+        metadata: {},
+        always: [],
+      },
+    }
+
+    await handlePermissionAutoReply(event, mockClient, db)
+
+    assert(replyCalls.length === 0, `Expected 0 reply calls when reply throws; got ${replyCalls.length}`)
+    assert(respondCalls.length === 1, `Expected 1 respond call as fallback; got ${respondCalls.length}`)
+    assert(respondCalls[0].response === "always", `Expected respond response="always", got="${respondCalls[0].response}"`)
+
+    db.close()
+    cleanupTempDir(tempDir)
+    console.log("  ✓ permission.respond fallback used with response='always' when reply() throws")
+  } catch (err) {
+    db?.close()
+    cleanupTempDir(tempDir)
+    throw err
+  }
+}
+
+async function test_permissionListRecovery_whenSessionIdMissing() {
+  console.log("=== [plugin] permission.list() recovery when sessionId missing ===")
+  const tempDir = mkdtempSync(join(tmpdir(), "ewf-plugin-recovery-"))
+  const dbPath = join(tempDir, "tasks.db")
+  let db: KanbanDB | null = null
+
+  try {
+    db = new KanbanDB(dbPath)
+    const replyCalls: PermissionReplyCall[] = []
+    const respondCalls: PermissionRespondCall[] = []
+    const mockClient: any = makeMockClient(replyCalls, respondCalls, false, [
+      {
+        id: "perm-recovery-888",
+        sessionID: "recovered-session-008",
+        permission: "bash",
+        patterns: [],
+        metadata: {},
+        always: [],
+      },
+    ])
+
+    const task = db.createTask({ name: "Recovery task", prompt: "task", skipPermissionAsking: true })
+    db.registerWorkflowSession({
+      sessionId: "recovered-session-008",
+      taskId: task.id,
+      sessionKind: "task",
+      ownerDirectory: tempDir,
+      skipPermissionAsking: true,
+    })
+
+    const event = {
+      type: "permission.asked",
+      properties: {
+        id: "perm-recovery-888",
+        permission: "bash",
+        patterns: [],
+        metadata: {},
+        always: [],
+      },
+    }
+
+    await handlePermissionAutoReply(event, mockClient, db)
+
+    assert(replyCalls.length === 1, `Expected 1 reply call after recovery; got ${replyCalls.length}`)
+    assert(replyCalls[0].reply === "always", `Expected reply="always", got="${replyCalls[0].reply}"`)
+
+    db.close()
+    cleanupTempDir(tempDir)
+    console.log("  ✓ permission.list() recovered sessionId and auto-replied with 'always'")
+  } catch (err) {
+    db?.close()
+    cleanupTempDir(tempDir)
+    throw err
+  }
+}
+
+async function test_responseModeIsAlways() {
+  console.log("=== [plugin] response mode is 'always', not 'once' ===")
+  const tempDir = mkdtempSync(join(tmpdir(), "ewf-plugin-always-"))
+  const dbPath = join(tempDir, "tasks.db")
+  let db: KanbanDB | null = null
+
+  try {
+    db = new KanbanDB(dbPath)
+    const replyCalls: PermissionReplyCall[] = []
+    const respondCalls: PermissionRespondCall[] = []
+    const mockClient: any = makeMockClient(replyCalls, respondCalls)
+
+    const task = db.createTask({ name: "Always mode task", prompt: "task", skipPermissionAsking: true })
+    db.registerWorkflowSession({
+      sessionId: "always-mode-session",
+      taskId: task.id,
+      sessionKind: "task",
+      ownerDirectory: tempDir,
+      skipPermissionAsking: true,
+    })
+
+    const event = {
+      type: "permission.asked",
+      properties: {
+        id: "perm-always-xyz",
+        sessionID: "always-mode-session",
+        permission: "bash",
+        patterns: [],
+        metadata: {},
+        always: [],
+      },
+    }
+
+    await handlePermissionAutoReply(event, mockClient, db)
+
+    assert(replyCalls.length === 1, `Expected 1 call`)
     assert(
-      calls[0].response === "once",
-      `Expected response="once", got="${calls[0].response}" — must NOT be "always"`,
+      replyCalls[0].reply === "always",
+      `Expected reply="always", got="${replyCalls[0].reply}" — must NOT be "once"`,
     )
 
     db.close()
     cleanupTempDir(tempDir)
-    console.log("  ✓ response mode is 'once' (not 'always' or 'reject')")
+    console.log("  ✓ response mode is 'always' (not 'once' or 'reject')")
   } catch (err) {
-    db.close?.()
+    db?.close()
     cleanupTempDir(tempDir)
     throw err
   }
@@ -433,8 +636,11 @@ async function main() {
     test_noAutoReply_nonWorkflowSession,
     test_noAutoReply_missingSessionId,
     test_noAutoReply_missingPermissionId,
-    test_noAutoReply_reviewerTaskRunSession,
-    test_responseModeIsExactlyOnce,
+    test_autoReply_reviewScratchSession,
+    test_autoReply_repairSession,
+    test_respondFallback_whenReplyThrows,
+    test_permissionListRecovery_whenSessionIdMissing,
+    test_responseModeIsAlways,
   ]
 
   let passed = 0

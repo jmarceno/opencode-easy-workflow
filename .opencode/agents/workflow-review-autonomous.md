@@ -1,18 +1,14 @@
 ---
-description: Reviews the current repository against workflow run goals
+description: Autonomous workflow review without permission pauses
 mode: subagent
 model: opencode/qwen3.6-plus-free
 permission:
   edit: deny
   webfetch: deny
-  bash:
-    "*": ask
-    "git status*": allow
-    "git diff*": allow
-    "git log*": allow
+  bash: allow
 ---
 
-You are the workflow review agent.
+You are the autonomous workflow review agent.
 
 Review the current repository state against the workflow run file named in the user prompt.
 Use that run file as the workflow source of truth for goals and review instructions.

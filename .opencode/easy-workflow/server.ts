@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "fs"
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
 import { join } from "path"
 import { fileURLToPath } from "url"
 import { dirname } from "path"
@@ -229,10 +229,11 @@ export class KanbanServer {
   private getExecuting: () => boolean
   private getStartError: StartPreflightFn
   private getServerUrl: ServerUrlFn
+  private ownerDirectory: string
 
   constructor(
     db: KanbanDB,
-    opts: { onStart: StartFn; onStartSingle: StartSingleFn; onStop: StopFn; getExecuting: () => boolean; getStartError?: StartPreflightFn; getServerUrl?: ServerUrlFn }
+    opts: { onStart: StartFn; onStartSingle: StartSingleFn; onStop: StopFn; getExecuting: () => boolean; getStartError?: StartPreflightFn; getServerUrl?: ServerUrlFn; ownerDirectory?: string }
   ) {
     this.db = db
     this.onStart = opts.onStart
@@ -241,6 +242,7 @@ export class KanbanServer {
     this.getExecuting = opts.getExecuting
     this.getStartError = opts.getStartError || (() => null)
     this.getServerUrl = opts.getServerUrl || (() => null)
+    this.ownerDirectory = opts.ownerDirectory || process.cwd()
 
     // Register Telegram notification listener for task status changes
     this.db.setTaskStatusChangeListener((taskId: string, oldStatus: string, newStatus: string) => {
@@ -413,9 +415,27 @@ export class KanbanServer {
       title: `Repair task state: ${task.name}`,
     })
     const session = sessionResponse?.data ?? sessionResponse
+    const repairSessionId = session?.id
+
+    if (repairSessionId) {
+      try {
+        this.db.registerWorkflowSession({
+          sessionId: repairSessionId,
+          taskId,
+          taskRunId: null,
+          sessionKind: "repair",
+          ownerDirectory: this.ownerDirectory,
+          skipPermissionAsking: task.skipPermissionAsking,
+        })
+      } catch (regErr) {
+        console.error("[repair] failed to register session:", regErr)
+      }
+    }
+
+    const repairAgent = task.skipPermissionAsking ? "workflow-repair" : "build-fast"
     const response = await client.session.prompt({
       sessionID: session?.id,
-      agent: "build-fast",
+      agent: repairAgent,
       ...(options.executionModel !== "default" ? { model: options.executionModel } : {}),
       parts: [{ type: "text", text: prompt }],
     })

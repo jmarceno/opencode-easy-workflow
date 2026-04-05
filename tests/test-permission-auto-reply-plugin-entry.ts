@@ -14,6 +14,11 @@ interface PermissionRespondCall {
   response: string
 }
 
+interface PermissionReplyCall {
+  requestID: string
+  reply: string
+}
+
 function assert(condition: unknown, message: string) {
   if (!condition) throw new Error(message)
 }
@@ -33,7 +38,7 @@ function cleanupTempDir(tempDir: string) {
   rmSync(tempDir, { recursive: true, force: true })
 }
 
-function makeMockClient(calls: PermissionRespondCall[]) {
+function makeMockClient(respondCalls: PermissionRespondCall[], replyCalls: PermissionReplyCall[]) {
   return {
     app: {
       log: async (_payload: unknown) => ({ data: true }),
@@ -46,7 +51,14 @@ function makeMockClient(calls: PermissionRespondCall[]) {
         params: { sessionID: string; permissionID: string; response: string },
         _options?: { throwOnError?: boolean },
       ) => {
-        calls.push({ ...params })
+        respondCalls.push({ ...params })
+        return { data: true }
+      },
+      reply: async (
+        params: { requestID: string; reply: string },
+        _options?: { throwOnError?: boolean },
+      ) => {
+        replyCalls.push({ ...params })
         return { data: true }
       },
     },
@@ -72,6 +84,13 @@ async function main() {
       skipPermissionAsking: true,
     })
     db.updateTask(workflowOwnedTask.id, { sessionId: "wf-owned-session-entry" })
+    db.registerWorkflowSession({
+      sessionId: "wf-owned-session-entry",
+      taskId: workflowOwnedTask.id,
+      sessionKind: "task",
+      ownerDirectory: tempDir,
+      skipPermissionAsking: true,
+    })
 
     const interactiveTask = db.createTask({
       name: "Workflow-owned interactive task",
@@ -79,11 +98,55 @@ async function main() {
       skipPermissionAsking: false,
     })
     db.updateTask(interactiveTask.id, { sessionId: "wf-owned-session-interactive" })
+    db.registerWorkflowSession({
+      sessionId: "wf-owned-session-interactive",
+      taskId: interactiveTask.id,
+      sessionKind: "task",
+      ownerDirectory: tempDir,
+      skipPermissionAsking: false,
+    })
+
+    const workerRun = db.createTaskRun({
+      taskId: workflowOwnedTask.id,
+      phase: "worker",
+      slotIndex: 0,
+      attemptIndex: 0,
+      model: "test-model",
+    })
+    db.updateTaskRun(workerRun.id, { sessionId: "wf-worker-session" })
+    db.registerWorkflowSession({
+      sessionId: "wf-worker-session",
+      taskId: workflowOwnedTask.id,
+      taskRunId: workerRun.id,
+      sessionKind: "task_run_worker",
+      ownerDirectory: tempDir,
+      skipPermissionAsking: true,
+    })
+
+    const reviewScratchSessionId = "wf-review-scratch-session"
+    db.registerWorkflowSession({
+      sessionId: reviewScratchSessionId,
+      taskId: workflowOwnedTask.id,
+      sessionKind: "review_scratch",
+      ownerDirectory: tempDir,
+      skipPermissionAsking: true,
+    })
+
+    const repairSessionId = "wf-repair-session"
+    db.registerWorkflowSession({
+      sessionId: repairSessionId,
+      taskId: workflowOwnedTask.id,
+      sessionKind: "repair",
+      ownerDirectory: tempDir,
+      skipPermissionAsking: true,
+    })
+
     db.close()
     db = null
 
-    const calls: PermissionRespondCall[] = []
-    const client: any = makeMockClient(calls)
+    const respondCalls: PermissionRespondCall[] = []
+    const replyCalls: PermissionReplyCall[] = []
+    const client: any = makeMockClient(respondCalls, replyCalls)
 
     const hooks: any = await EasyWorkflowPlugin({
       client,
@@ -93,8 +156,7 @@ async function main() {
 
     assert(typeof hooks?.event === "function", "Expected plugin to expose event hook")
 
-    // Runtime evidence: autonomous workflow-owned sessions still emit permission.asked.
-    // This event is a permission gate and requires an explicit response to proceed.
+    // Test 1: autonomous workflow-owned task session auto-replies with "always"
     await hooks.event({
       event: {
         type: "permission.asked",
@@ -109,10 +171,63 @@ async function main() {
       },
     })
 
-    assert(calls.length === 1, `Expected 1 auto-reply call for workflow-owned autonomous session; got ${calls.length}`)
-    assert(calls[0].sessionID === "wf-owned-session-entry", `Unexpected sessionID: ${calls[0].sessionID}`)
-    assert(calls[0].permissionID === "perm-entry-001", `Unexpected permissionID: ${calls[0].permissionID}`)
-    assert(calls[0].response === "once", `Expected response='once', got '${calls[0].response}'`)
+    assert(replyCalls.length === 1, `Expected 1 reply() call for workflow-owned autonomous session; got ${replyCalls.length}`)
+    assert(replyCalls[0].requestID === "perm-entry-001", `Unexpected requestID: ${replyCalls[0].requestID}`)
+    assert(replyCalls[0].reply === "always", `Expected reply='always', got '${replyCalls[0].reply}'`)
+
+    // Test 2: worker session auto-replies with "always"
+    await hooks.event({
+      event: {
+        type: "permission.asked",
+        properties: {
+          id: "perm-worker-001",
+          sessionID: "wf-worker-session",
+          permission: "bash",
+          patterns: ["**"],
+          metadata: {},
+          always: [],
+        },
+      },
+    })
+
+    assert(replyCalls.length === 2, `Expected 2 reply() calls after worker; got ${replyCalls.length}`)
+    assert(replyCalls[1].reply === "always", `Expected reply='always' for worker, got '${replyCalls[1].reply}'`)
+
+    // Test 3: review scratch session auto-replies with "always"
+    await hooks.event({
+      event: {
+        type: "permission.asked",
+        properties: {
+          id: "perm-review-001",
+          sessionID: "wf-review-scratch-session",
+          permission: "bash",
+          patterns: ["**"],
+          metadata: {},
+          always: [],
+        },
+      },
+    })
+
+    assert(replyCalls.length === 3, `Expected 3 reply() calls after review scratch; got ${replyCalls.length}`)
+    assert(replyCalls[2].reply === "always", `Expected reply='always' for review scratch, got '${replyCalls[2].reply}'`)
+
+    // Test 4: repair session auto-replies with "always"
+    await hooks.event({
+      event: {
+        type: "permission.asked",
+        properties: {
+          id: "perm-repair-001",
+          sessionID: "wf-repair-session",
+          permission: "bash",
+          patterns: ["**"],
+          metadata: {},
+          always: [],
+        },
+      },
+    })
+
+    assert(replyCalls.length === 4, `Expected 4 reply() calls after repair; got ${replyCalls.length}`)
+    assert(replyCalls[3].reply === "always", `Expected reply='always' for repair, got '${replyCalls[3].reply}'`)
 
     // Guardrail: unrelated/non-workflow sessions are ignored.
     await hooks.event({
@@ -129,7 +244,7 @@ async function main() {
       },
     })
 
-    assert(calls.length === 1, `Expected no additional call for non-workflow session; got ${calls.length}`)
+    assert(replyCalls.length === 4 && respondCalls.length === 0, `Expected no additional calls for non-workflow session; got ${replyCalls.length} reply, ${respondCalls.length} respond`)
 
     // Guardrail: workflow-owned tasks with skipPermissionAsking=false are ignored.
     await hooks.event({
@@ -146,12 +261,13 @@ async function main() {
       },
     })
 
-    assert(calls.length === 1, `Expected no additional call for skipPermissionAsking=false; got ${calls.length}`)
+    assert(replyCalls.length === 4 && respondCalls.length === 0, `Expected no additional calls for skipPermissionAsking=false; got ${replyCalls.length} reply, ${respondCalls.length} respond`)
 
     console.log("✓ Observed runtime permission.asked event for workflow-owned autonomous session")
-    console.log("✓ Plugin entrypoint auto-replies once for workflow-owned skipPermissionAsking=true")
+    console.log("✓ Plugin entrypoint auto-replies 'always' for workflow-owned skipPermissionAsking=true")
     console.log("✓ Plugin entrypoint does not auto-reply for non-workflow sessions")
     console.log("✓ Plugin entrypoint does not auto-reply for skipPermissionAsking=false")
+    console.log("✓ Worker, review scratch, and repair sessions all auto-reply with 'always'")
   } finally {
     try {
       db?.close()

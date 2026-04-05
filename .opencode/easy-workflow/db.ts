@@ -95,6 +95,46 @@ function normalizeExecutionPhase(value: unknown): ExecutionPhase {
   return "not_started"
 }
 
+export type WorkflowSessionKind =
+  | "task"
+  | "task_run_worker"
+  | "task_run_reviewer"
+  | "task_run_final_applier"
+  | "review_scratch"
+  | "repair"
+  | "plan"
+  | "plan_revision"
+
+export type WorkflowSessionStatus = "active" | "completed" | "deleted" | "stale"
+
+export interface WorkflowSession {
+  sessionId: string
+  taskId: string
+  taskRunId: string | null
+  sessionKind: WorkflowSessionKind
+  ownerDirectory: string
+  skipPermissionAsking: boolean
+  permissionMode: string
+  status: WorkflowSessionStatus
+  createdAt: number
+  updatedAt: number
+}
+
+function rowToWorkflowSession(row: any): WorkflowSession {
+  return {
+    sessionId: row.session_id,
+    taskId: row.task_id,
+    taskRunId: row.task_run_id,
+    sessionKind: row.session_kind as WorkflowSessionKind,
+    ownerDirectory: row.owner_directory,
+    skipPermissionAsking: row.skip_permission_asking !== 0,
+    permissionMode: row.permission_mode,
+    status: row.status as WorkflowSessionStatus,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
 export type TaskStatusChangeListener = (taskId: string, oldStatus: TaskStatus, newStatus: TaskStatus) => void
 
 export class KanbanDB {
@@ -197,6 +237,23 @@ export class KanbanDB {
       CREATE INDEX IF NOT EXISTS idx_task_runs_phase ON task_runs(phase);
       CREATE INDEX IF NOT EXISTS idx_task_runs_status ON task_runs(status);
       CREATE INDEX IF NOT EXISTS idx_task_candidates_task_id ON task_candidates(task_id);
+
+      CREATE TABLE IF NOT EXISTS workflow_sessions (
+        session_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        task_run_id TEXT,
+        session_kind TEXT NOT NULL,
+        owner_directory TEXT NOT NULL,
+        skip_permission_asking INTEGER NOT NULL,
+        permission_mode TEXT NOT NULL DEFAULT 'always',
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_workflow_sessions_task_id ON workflow_sessions(task_id);
+      CREATE INDEX IF NOT EXISTS idx_workflow_sessions_status ON workflow_sessions(status);
+      CREATE INDEX IF NOT EXISTS idx_workflow_sessions_session_kind ON workflow_sessions(session_kind);
     `)
 
     // Migration: add session_url column if missing
@@ -307,6 +364,27 @@ export class KanbanDB {
     const hasTelegramChatIdKey = this.db.prepare("SELECT COUNT(*) as cnt FROM options WHERE key = 'telegram_chat_id'").get() as any
     if (hasTelegramChatIdKey.cnt === 0) {
       this.db.prepare("INSERT OR IGNORE INTO options (key, value) VALUES ('telegram_chat_id', '')").run()
+    }
+
+    const hasWorkflowSessionsTable = this.db.prepare("SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name='workflow_sessions'").get() as any
+    if (hasWorkflowSessionsTable.cnt === 0) {
+      this.db.exec(`
+        CREATE TABLE workflow_sessions (
+          session_id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL,
+          task_run_id TEXT,
+          session_kind TEXT NOT NULL,
+          owner_directory TEXT NOT NULL,
+          skip_permission_asking INTEGER NOT NULL,
+          permission_mode TEXT NOT NULL DEFAULT 'always',
+          status TEXT NOT NULL DEFAULT 'active',
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        CREATE INDEX idx_workflow_sessions_task_id ON workflow_sessions(task_id);
+        CREATE INDEX idx_workflow_sessions_status ON workflow_sessions(status);
+        CREATE INDEX idx_workflow_sessions_session_kind ON workflow_sessions(session_kind);
+      `)
     }
   }
 
@@ -899,6 +977,63 @@ export class KanbanDB {
       hasFinalApplier: finalApplierRuns.length > 0,
       finalApplierDone: finalApplierRuns.some(f => f.status === "done"),
     }
+  }
+
+  registerWorkflowSession(data: {
+    sessionId: string
+    taskId: string
+    taskRunId?: string | null
+    sessionKind: WorkflowSessionKind
+    ownerDirectory: string
+    skipPermissionAsking: boolean
+    permissionMode?: string
+  }): WorkflowSession {
+    const now = Math.floor(Date.now() / 1000)
+    this.db.prepare(`
+      INSERT INTO workflow_sessions (session_id, task_id, task_run_id, session_kind, owner_directory, skip_permission_asking, permission_mode, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET
+        task_id = excluded.task_id,
+        task_run_id = excluded.task_run_id,
+        session_kind = excluded.session_kind,
+        owner_directory = excluded.owner_directory,
+        skip_permission_asking = excluded.skip_permission_asking,
+        permission_mode = excluded.permission_mode,
+        status = 'active',
+        updated_at = excluded.updated_at
+    `).run(
+      data.sessionId,
+      data.taskId,
+      data.taskRunId ?? null,
+      data.sessionKind,
+      data.ownerDirectory,
+      data.skipPermissionAsking ? 1 : 0,
+      data.permissionMode ?? "always",
+      now,
+      now,
+    )
+    return this.getWorkflowSession(data.sessionId)!
+  }
+
+  getWorkflowSession(sessionId: string): WorkflowSession | null {
+    const row = this.db.prepare("SELECT * FROM workflow_sessions WHERE session_id = ?").get(sessionId) as any
+    return row ? rowToWorkflowSession(row) : null
+  }
+
+  getWorkflowSessionsByTask(taskId: string): WorkflowSession[] {
+    const rows = this.db.prepare("SELECT * FROM workflow_sessions WHERE task_id = ? ORDER BY created_at ASC").all(taskId) as any[]
+    return rows.map(rowToWorkflowSession)
+  }
+
+  markWorkflowSessionStatus(sessionId: string, status: WorkflowSessionStatus): void {
+    this.db.prepare("UPDATE workflow_sessions SET status = ?, updated_at = unixepoch() WHERE session_id = ?").run(status, sessionId)
+  }
+
+  cleanupStaleWorkflowSessions(maxAgeSeconds = 86400 * 7): void {
+    const now = Math.floor(Date.now() / 1000)
+    const cutoff = now - maxAgeSeconds
+    this.db.prepare("UPDATE workflow_sessions SET status = 'stale', updated_at = ? WHERE status = 'active' AND created_at < ?").run(now, cutoff)
+    this.db.prepare("DELETE FROM workflow_sessions WHERE status IN ('deleted', 'stale')").run()
   }
 
   close() {

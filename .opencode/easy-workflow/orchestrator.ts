@@ -4,6 +4,7 @@ import { fileURLToPath } from "url"
 import { dirname } from "path"
 import { execFileSync } from "child_process"
 import type { Task, Options, ReviewResult, ThinkingLevel, BestOfNConfig, BestOfNSlot, TaskRun, TaskCandidate, ReviewerOutput, AggregatedReviewResult, SelectionMode } from "./types"
+import type { WorkflowSessionKind } from "./db"
 import { KanbanDB } from "./db"
 import { KanbanServer } from "./server"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
@@ -42,6 +43,46 @@ function createV2Client(baseUrl: string, directory?: string) {
     directory,
     throwOnError: true,
   })
+}
+
+function registerWorkflowSessionSafe(
+  db: KanbanDB,
+  sessionId: string,
+  taskId: string,
+  sessionKind: WorkflowSessionKind,
+  ownerDirectory: string,
+  skipPermissionAsking: boolean,
+  taskRunId?: string | null,
+): void {
+  try {
+    db.registerWorkflowSession({
+      sessionId,
+      taskId,
+      taskRunId: taskRunId ?? null,
+      sessionKind,
+      ownerDirectory,
+      skipPermissionAsking,
+    })
+    appendDebugLog("info", "workflow session registered", { sessionId, taskId, sessionKind })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    appendDebugLog("warn", "failed to register workflow session", { sessionId, taskId, sessionKind, error: msg })
+  }
+}
+
+function writeRootOwnerPointerSafe(worktreeDirectory: string, ownerDirectory: string, dbPath: string): void {
+  try {
+    const targetDir = join(worktreeDirectory, ".opencode", "easy-workflow")
+    mkdirSync(targetDir, { recursive: true })
+    writeFileSync(
+      join(targetDir, "root-owner.json"),
+      JSON.stringify({ ownerDirectory, rootDbPath: dbPath }, null, 2),
+      "utf-8",
+    )
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    appendDebugLog("warn", "failed to write root-owner pointer", { worktreeDirectory, error: msg })
+  }
 }
 
 // ---- Utility functions (reused from existing plugin) ----
@@ -204,15 +245,17 @@ export class Orchestrator {
   private server: KanbanServer
   private serverUrlSource: string | (() => string | null)
   private worktreeDir: string
+  private ownerDirectory: string
   private running = false
   private shouldStop = false
   private providerCatalog: any | null = null
 
-  constructor(db: KanbanDB, server: KanbanServer, serverUrl: string | (() => string | null), worktreeDir: string) {
+  constructor(db: KanbanDB, server: KanbanServer, serverUrl: string | (() => string | null), worktreeDir: string, ownerDirectory?: string) {
     this.db = db
     this.server = server
     this.serverUrlSource = serverUrl
     this.worktreeDir = worktreeDir
+    this.ownerDirectory = ownerDirectory || worktreeDir
     debugLogErrorReporter = (message: string) => {
       this.server.broadcast({ type: "error", payload: { message } })
     }
@@ -716,6 +759,7 @@ export class Orchestrator {
         throw new Error(`Worktree creation returned invalid response: ${JSON.stringify(worktreeInfo)}`)
       }
       this.db.updateTask(task.id, { worktreeDir: worktreeInfo.directory })
+      writeRootOwnerPointerSafe(worktreeInfo.directory, this.ownerDirectory, join(this.ownerDirectory, ".opencode", "easy-workflow", "tasks.db"))
       currentTask = this.getTaskOrThrow(task.id, "saving the worktree location", task.name)
       lastKnownTask = currentTask
       this.server.broadcast({ type: "task_updated", payload: currentTask })
@@ -764,6 +808,7 @@ export class Orchestrator {
       }
       const sessionUrl = buildSessionUrl(resolvedServerUrl, this.worktreeDir, sessionId)
       this.db.updateTask(task.id, { sessionId, sessionUrl })
+      registerWorkflowSessionSafe(this.db, sessionId, task.id, "task", this.ownerDirectory, task.skipPermissionAsking)
       currentTask = this.getTaskOrThrow(task.id, "saving the session metadata", task.name)
       lastKnownTask = currentTask
       this.server.broadcast({ type: "task_updated", payload: currentTask })
@@ -1416,6 +1461,9 @@ export class Orchestrator {
         this.db.updateTaskRun(workerRun.id, { sessionId, sessionUrl })
         this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(workerRun.id) })
 
+        registerWorkflowSessionSafe(this.db, sessionId, task.id, "task_run_worker", this.ownerDirectory, task.skipPermissionAsking, workerRun.id)
+        writeRootOwnerPointerSafe(worktreeInfo.directory, this.ownerDirectory, join(this.ownerDirectory, ".opencode", "easy-workflow", "tasks.db"))
+
         const workerPrompt = this.buildWorkerPrompt(task.prompt, workerRun.taskSuffix)
         const model = await this.resolveModelSelection(workerRun.model, client, "Worker")
 
@@ -1735,6 +1783,8 @@ ${taskSuffix}`
         this.db.updateTaskRun(reviewerRun.id, { sessionId, sessionUrl })
         this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(reviewerRun.id) })
 
+        registerWorkflowSessionSafe(this.db, sessionId, task.id, "task_run_reviewer", this.ownerDirectory, task.skipPermissionAsking, reviewerRun.id)
+
         const reviewerPrompt = this.buildReviewerPrompt(task.prompt, candidates, reviewerRun.taskSuffix)
         const model = await this.resolveModelSelection(reviewerRun.model, client, "Reviewer")
 
@@ -1967,6 +2017,9 @@ RECOMMENDED_PROMPT:
       const sessionUrl = buildSessionUrl(serverUrl, this.worktreeDir, sessionId)
       this.db.updateTaskRun(finalApplierRun.id, { sessionId, sessionUrl })
       this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(finalApplierRun.id) })
+
+      registerWorkflowSessionSafe(this.db, sessionId, task.id, "task_run_final_applier", this.ownerDirectory, task.skipPermissionAsking, finalApplierRun.id)
+      writeRootOwnerPointerSafe(worktreeInfo.directory, this.ownerDirectory, join(this.ownerDirectory, ".opencode", "easy-workflow", "tasks.db"))
 
       const finalPrompt = this.buildFinalApplierPrompt(task.prompt, candidates, aggregatedReview, selectionMode, task.bestOfNConfig?.finalApplier?.taskSuffix)
       const model = await this.resolveModelSelection(finalApplierRun.model, client, "Final Applier")
@@ -2213,8 +2266,13 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
           const reviewSession = unwrapResponseDataOrThrow<any>(reviewSessionResponse, "Review session creation")
           reviewSessionId = reviewSession?.id
 
+          if (reviewSessionId) {
+            registerWorkflowSessionSafe(this.db, reviewSessionId, task.id, "review_scratch", this.ownerDirectory, task.skipPermissionAsking)
+          }
+
+          const reviewAgentName = task.skipPermissionAsking ? "workflow-review-autonomous" : config.reviewAgent
           const promptText = [
-            `@${config.reviewAgent}`,
+            `@${reviewAgentName}`,
             "",
             "Review the current repository state against the task below.",
             "Use the task goals as the only source of truth.",
@@ -2227,7 +2285,7 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
 
           const response = await client.session.prompt({
             sessionID: reviewSessionId,
-            agent: config.reviewAgent,
+            agent: reviewAgentName,
             parts: [{ type: "text", text: promptText }],
           })
 
