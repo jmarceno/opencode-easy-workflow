@@ -107,10 +107,10 @@ export default async function (pi: ExtensionAPI) {
 
 ## Blockers / Open Questions
 
-1. **Orchestrator session creation**: How to create sub-sessions in pi? Need to investigate `pi.createSession()` vs other approaches. **Status: NOT YET INVESTIGATED**
-2. **Permission system**: Pi's permission model differs from OpenCode. `tool_call` hook handles blocking, but auto-reply needs more work. **Status: PARTIAL**
+1. **Orchestrator session creation**: How to create sub-sessions in pi? **Status: RESOLVED** — Use `createAgentSession()` from `@mariozechner/pi-coding-agent` with `SessionManager.inMemory()`. See the [Orchestrator Design](plans/orchestrator-design.md) document for full details. The `pi-subagents` package (tintinweb) proves this pattern works in production.
+2. **Permission system**: Pi's permission model differs from OpenCode. **Status: RESOLVED** — Pi has no built-in permission gate. Use `tool_call` hook to intercept and auto-allow tools for workflow-owned sessions. Set `skip_permission_asking` flag in `workflow_sessions` DB table. The `tool_call` hook returns `undefined` (no block) for workflow-owned sessions, effectively bypassing all permission prompts. See [Orchestrator Design](plans/orchestrator-design.md).
 3. **HTTP server**: Kept simplified version. Works but may conflict with pi's port usage. **Status: WORKS**
-4. **Kanban orchestrator**: Original orchestrator.ts was complex with OpenCode session management. Simplified to stubs. **Status: NEEDS IMPLEMENTATION**
+4. **Kanban orchestrator**: **Status: DESIGN COMPLETE** — State machine design documented in [Orchestrator Design](plans/orchestrator-design.md). Uses `createAgentSession()` for sub-sessions, `tool_call` hook for permission bypass, and a 7-state FSM for task lifecycle.
 
 ## File Dependencies
 
