@@ -151,6 +151,7 @@ export const DEFAULT_COMMIT_PROMPT = `You are in a worktree on a detached HEAD. 
 
 - Do not run destructive commands: git reset --hard, git clean -fdx, git worktree remove, rm/mv on repository paths.
 - Do not edit files outside git workflows unless required for conflict resolution.
+- **CRITICAL: Never push changes to remote repositories unless explicitly instructed to do so.**
 - Preserve any pre-existing user uncommitted changes in the base worktree.
 
 Steps:
