@@ -26,11 +26,15 @@ const PLUGIN_NAME = "easy-workflow"
 const __filename = fileURLToPath(import.meta.url)
 const PROJECT_ROOT = dirname(__filename)
 
-// Source directories (in the project repo)
-const SOURCE_PLUGIN_DIR = join(PROJECT_ROOT, ".opencode", "plugins")
-const SOURCE_AGENTS_DIR = join(PROJECT_ROOT, ".opencode", "agents")
-const SOURCE_SKILL_DIR = join(PROJECT_ROOT, ".opencode", "skills", "workflow-task-setup")
-const SOURCE_WORKFLOW_DIR = join(PROJECT_ROOT, ".opencode", "easy-workflow")
+// Source directories (in the project repo) - NEW STRUCTURE
+// Plugin is now in root directory (not in .opencode/plugins/)
+const SOURCE_PLUGIN_FILE = join(PROJECT_ROOT, "easy-workflow-bridge.ts")
+// Agents are in root agents/ directory
+const SOURCE_AGENTS_DIR = join(PROJECT_ROOT, "agents")
+// Skills are in root skills/ directory
+const SOURCE_SKILL_DIR = join(PROJECT_ROOT, "skills", "workflow-task-setup")
+// Workflow files are in src/ directory (not in .opencode/easy-workflow/)
+const SOURCE_WORKFLOW_DIR = join(PROJECT_ROOT, "src")
 
 // Destination directories (in user's home)
 const DEST_PLUGIN_DIR = join(OPENCODE_DIR, "plugins")  // Directly in plugins/, NOT in a subdirectory
@@ -172,15 +176,15 @@ function install(): void {
   console.log("\n=== Installing Easy Workflow ===\n")
   
   // 1. Copy plugin - directly to plugins/, NOT in a subdirectory
-  const pluginSource = join(SOURCE_PLUGIN_DIR, "easy-workflow.ts")
-  if (!existsSync(pluginSource)) {
-    console.error(`✗ Plugin file not found: ${pluginSource}`)
+  // Source is now in project root as easy-workflow-bridge.ts
+  if (!existsSync(SOURCE_PLUGIN_FILE)) {
+    console.error(`✗ Plugin file not found: ${SOURCE_PLUGIN_FILE}`)
     process.exit(1)
   }
   
   ensureDir(DEST_PLUGIN_DIR)
   const pluginDestPath = join(DEST_PLUGIN_DIR, "easy-workflow.ts")
-  copyFileSync(pluginSource, pluginDestPath)
+  copyFileSync(SOURCE_PLUGIN_FILE, pluginDestPath)
   console.log(`✓ Copied plugin to ${pluginDestPath}`)
   console.log(`  ⚠️  IMPORTANT: You must manually add this to ~/.config/opencode/opencode.json:`)
   console.log(`     "plugin": ["file://${pluginDestPath}"]`)

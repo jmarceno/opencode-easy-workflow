@@ -272,14 +272,48 @@ When debugging plugin issues, verify:
 
 ## Reference Files
 
-- Plugin implementation: `.opencode/plugins/easy-workflow.ts`
-- Agent definitions: `.opencode/agents/`
-- Workflow template: `.opencode/easy-workflow/workflow.md`
-- Test script: `test-workflow.ts`
+- Plugin implementation: `easy-workflow-bridge.ts` (in project root, not in .opencode/)
+- Standalone server: `src/` directory (standalone.ts, server.ts, orchestrator.ts, etc.)
+- Agent definitions: `agents/`
+- Workflow template: `src/workflow.md`
+- Test scripts: `tests/` directory
 - OpenCode source: `/home/jmarceno/Projects/cloned/opencode/`
 - SDK docs: `ref-docs/opencode.ai-sdk.md`
 - Plugin docs: `ref-docs/opencode.ai-plugins.md`
 - Agent docs: `ref-docs/opencode.ai-agents.md`
+
+---
+
+## Project Structure
+
+**Important:** The project uses a split structure to avoid OpenCode's auto-loading behavior:
+
+**Source Files (version controlled):**
+- `easy-workflow-bridge.ts` - Plugin source (in project root)
+- `src/` - Standalone server source files
+- `agents/` - Agent definitions
+- `skills/` - Skill definitions
+
+**Runtime Files (NOT version controlled, in `.opencode/`):**
+- `.opencode/easy-workflow/config.json` - Server configuration (auto-created)
+- `.opencode/easy-workflow/tasks.db` - Task database (auto-created)
+- `.opencode/easy-workflow/.server.pid` - Server process tracking (auto-created)
+
+**Why this structure?**
+
+Previously, plugin source was in `.opencode/plugins/easy-workflow.ts`, which caused OpenCode to auto-load the local copy when running `opencode serve` from the project directory. This made development confusing.
+
+**Now:**
+- Source is in the project root (`easy-workflow-bridge.ts`) and `src/` directory
+- Running `opencode serve` from the project directory loads the **global** installed version
+- To test changes: `./install.ts install` then restart OpenCode
+- The `.opencode/` directory only contains runtime data (config, database)
+
+**Development workflow:**
+1. Edit `easy-workflow-bridge.ts` or files in `src/` directory
+2. Run `./install.ts install` to copy to global location
+3. Test by running `opencode serve` from project directory (loads global version)
+4. The database and config for development are in `.opencode/easy-workflow/`
 
 ---
 

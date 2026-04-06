@@ -38,16 +38,25 @@ mkdir -p ~/.config/opencode/agents
 mkdir -p ~/.config/opencode/skills
 
 # Copy plugin - IMPORTANT: Copy directly to plugins/, NOT to plugins/easy-workflow/
-cp .opencode/plugins/easy-workflow.ts ~/.config/opencode/plugins/
+cp easy-workflow-bridge.ts ~/.config/opencode/plugins/easy-workflow.ts
 
-# Copy core easy-workflow directory
-cp -r .opencode/easy-workflow ~/.config/opencode/
+# Copy core easy-workflow files (from src/ directory)
+mkdir -p ~/.config/opencode/easy-workflow/kanban
+cp src/*.ts ~/.config/opencode/easy-workflow/
+cp src/workflow.md ~/.config/opencode/easy-workflow/
+cp src/kanban/index.html ~/.config/opencode/easy-workflow/kanban/
 
 # Copy all agents
-cp .opencode/agents/*.md ~/.config/opencode/agents/
+cp agents/*.md ~/.config/opencode/agents/
 
 # Copy skill
-cp -r .opencode/skills/workflow-task-setup ~/.config/opencode/skills/
+cp -r skills/workflow-task-setup ~/.config/opencode/skills/
+
+# Add to ~/.config/opencode/opencode.json:
+# {
+#   "$schema": "https://opencode.ai/config.json",
+#   "plugin": ["file:///home/USERNAME/.config/opencode/plugins/easy-workflow.ts"]
+# }
 ```
 
 ## Remove

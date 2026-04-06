@@ -21,22 +21,24 @@ It also includes a project-local skill for agents that need to translate user-pr
 #
 # Also ensure OPENCODE_PURE is NOT set in your environment (check with: env | grep PURE)
 
-# Or manually copy files
+# Or manually copy files (source files are in root and src/ directories)
 mkdir -p ~/.config/opencode/plugins
 mkdir -p ~/.config/opencode/agents
 mkdir -p ~/.config/opencode/skills
 
-# Copy plugin - IMPORTANT: Copy directly to plugins/, NOT to plugins/easy-workflow/
-cp .opencode/plugins/easy-workflow.ts ~/.config/opencode/plugins/
+# Copy plugin
+cp easy-workflow-bridge.ts ~/.config/opencode/plugins/easy-workflow.ts
 
-# Copy core easy-workflow directory
-cp -r .opencode/easy-workflow ~/.config/opencode/
+# Copy core easy-workflow files from src/
+mkdir -p ~/.config/opencode/easy-workflow/kanban
+cp src/*.ts src/workflow.md ~/.config/opencode/easy-workflow/
+cp src/kanban/index.html ~/.config/opencode/easy-workflow/kanban/
 
 # Copy all agents
-cp .opencode/agents/*.md ~/.config/opencode/agents/
+cp agents/*.md ~/.config/opencode/agents/
 
 # Copy skill
-cp -r .opencode/skills/workflow-task-setup ~/.config/opencode/skills/
+cp -r skills/workflow-task-setup ~/.config/opencode/skills/
 
 # Add to ~/.config/opencode/opencode.json:
 # {
@@ -311,26 +313,35 @@ To reconfigure, delete this file and restart the server.
 
 ## Files
 
+**Source Files (for development):**
 ```
-.opencode/
-├── plugins/
-│   └── easy-workflow.ts          # Bridge plugin (forwards events)
-├── agents/
-│   └── workflow-review.md        # Review agent definition
-├── skills/
-│   └── workflow-task-setup/
-│       └── SKILL.md              # Agent guidance for plan-to-task setup
-├── easy-workflow/
+.
+├── easy-workflow-bridge.ts       # Bridge plugin (forwards events)
+├── src/                          # Standalone server source
 │   ├── standalone.ts             # STANDALONE SERVER ENTRY POINT
 │   ├── workflow.md               # Workflow template
 │   ├── db.ts                     # SQLite database
 │   ├── server.ts                 # HTTP/WebSocket server
 │   ├── orchestrator.ts           # Task orchestration
 │   ├── types.ts                  # TypeScript types
-│   ├── config.json               # Server configuration (auto-created)
 │   └── kanban/
 │       └── index.html            # Kanban UI
+├── agents/                       # Agent definitions
+│   └── workflow-*.md
+└── skills/
+    └── workflow-task-setup/      # Agent skill
+        └── SKILL.md
 ```
+
+**Runtime Files (created on first run):**
+```
+.opencode/
+└── easy-workflow/
+    ├── config.json               # Server configuration (auto-created)
+    └── tasks.db                  # Production task database
+```
+
+The `.opencode/` directory in this project is for **runtime only** - it contains config and database for development/testing. The source files are in the root directory and `src/` directory, which get installed globally via `./install.ts install`.
 
 ## Testing
 
