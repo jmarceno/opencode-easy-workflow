@@ -470,24 +470,46 @@ export class Orchestrator {
 
   private resolveTargetBranch(task: Task, options: Options, worktreeInfo?: any): string {
     const worktreeDirectory = typeof worktreeInfo?.directory === "string" ? worktreeInfo.directory : undefined
+    appendDebugLog("info", "resolveTargetBranch called", { taskId: task.id, worktreeDir: worktreeDirectory, taskBranch: task.branch, worktreeInfoBranch: worktreeInfo?.branch, worktreeInfoBaseRef: worktreeInfo?.baseRef, optionBranch: options.branch })
     const taskBranch = typeof task.branch === "string" ? task.branch.trim() : ""
-    if (this.gitBranchExists(taskBranch, worktreeDirectory)) return taskBranch
+    if (this.gitBranchExists(taskBranch, worktreeDirectory)) {
+      appendDebugLog("info", "resolveTargetBranch using task branch", { taskId: task.id, branch: taskBranch })
+      return taskBranch
+    }
 
     const worktreeBaseRef = typeof worktreeInfo?.baseRef === "string" ? worktreeInfo.baseRef.trim() : ""
     if (this.gitBranchExists(worktreeBaseRef, worktreeDirectory)) return worktreeBaseRef
 
     const optionBranch = typeof options.branch === "string" ? options.branch.trim() : ""
-    if (this.gitBranchExists(optionBranch, worktreeDirectory)) return optionBranch
+    if (this.gitBranchExists(optionBranch, worktreeDirectory)) {
+      appendDebugLog("info", "resolveTargetBranch using options branch", { taskId: task.id, branch: optionBranch })
+      return optionBranch
+    }
 
     const remoteDefaultBranch = this.readRemoteDefaultBranch(worktreeDirectory)
-    if (this.gitBranchExists(remoteDefaultBranch || "", worktreeDirectory)) return remoteDefaultBranch!
+    if (this.gitBranchExists(remoteDefaultBranch || "", worktreeDirectory)) {
+      appendDebugLog("info", "resolveTargetBranch using remote default branch", { taskId: task.id, branch: remoteDefaultBranch })
+      return remoteDefaultBranch!
+    }
 
     const worktreeBranch = typeof worktreeInfo?.branch === "string" ? worktreeInfo.branch.trim() : ""
     const localBranches = this.readLocalBranches(worktreeDirectory)
       .filter((branch) => branch !== worktreeBranch)
       .filter((branch) => !branch.startsWith("opencode/"))
-    if (localBranches.length > 0) return localBranches[0]
+    if (localBranches.length > 0) {
+      appendDebugLog("info", "resolveTargetBranch using local branch", { taskId: task.id, branch: localBranches[0], allLocalBranches: localBranches })
+      return localBranches[0]
+    }
 
+    appendDebugLog("error", "resolveTargetBranch failed", { 
+      taskId: task.id, 
+      worktreeDir: worktreeDirectory,
+      taskBranch,
+      worktreeBranch,
+      optionBranch,
+      remoteDefaultBranch,
+      localBranches 
+    })
     throw new Error("Could not determine target branch from git metadata")
   }
 
@@ -1127,76 +1149,94 @@ export class Orchestrator {
       // 8. Merge worktree
       if (worktreeInfo) {
         try {
-          appendDebugLog("info", "merging worktree", { taskId: task.id, branch: worktreeInfo.branch })
+          // Check if worktree branch still exists (it may have been merged and deleted by the agent)
+          const worktreeBranch = typeof worktreeInfo.branch === "string" ? worktreeInfo.branch.trim() : ""
+          let branchExists = false
+          if (worktreeBranch) {
+            try {
+              execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${worktreeBranch}`], {
+                cwd: worktreeInfo.directory,
+                stdio: "ignore",
+              })
+              branchExists = true
+            } catch {
+              branchExists = false
+            }
+          }
 
-          // Resolve merge target branch from task/options first, then git defaults.
-          let mainBranch = this.resolveTargetBranch(currentTask, options, worktreeInfo)
-          let hasTargetBranch = false
-          if (mainBranch) {
+          if (!branchExists) {
+            appendDebugLog("info", "worktree branch already merged or deleted, skipping merge", { taskId: task.id, worktreeBranch })
+          } else {
+            appendDebugLog("info", "merging worktree", { taskId: task.id, branch: worktreeInfo.branch })
+
+            // Resolve merge target branch from task/options first, then git defaults.
+            let mainBranch = this.resolveTargetBranch(currentTask, options, worktreeInfo)
+            let hasTargetBranch = false
+            if (mainBranch) {
+              try {
+                execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${mainBranch}`], {
+                  cwd: worktreeInfo.directory,
+                  stdio: "ignore",
+                })
+                hasTargetBranch = true
+              } catch (showRefErr) {
+                appendDebugLog("warn", "target branch lookup failed before fallback", {
+                  taskId: task.id,
+                  branch: mainBranch,
+                  error: showRefErr instanceof Error ? showRefErr.message : String(showRefErr),
+                })
+                hasTargetBranch = false
+              }
+            }
+
+            if (!hasTargetBranch) {
+              try {
+                const defaultBranch = execFileSync("git", ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], {
+                  cwd: worktreeInfo.directory,
+                  encoding: "utf-8",
+                  stdio: "pipe",
+                }).trim()
+                if (defaultBranch.startsWith("origin/")) {
+                  mainBranch = defaultBranch.slice("origin/".length)
+                } else if (defaultBranch) {
+                  mainBranch = defaultBranch
+                }
+              } catch (e) {
+                appendDebugLog("warn", "could not resolve origin HEAD for merge target", {
+                  taskId: task.id,
+                  error: e instanceof Error ? e.message : String(e),
+                })
+              }
+
+              if (!mainBranch) {
+                try {
+                  mainBranch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+                    cwd: worktreeInfo.directory,
+                    encoding: "utf-8",
+                    stdio: "pipe",
+                  }).trim()
+                } catch (e) {
+                  throw new Error(`Failed to get current branch: ${e}`);
+                }
+              }
+            }
+
             try {
               execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${mainBranch}`], {
                 cwd: worktreeInfo.directory,
                 stdio: "ignore",
               })
-              hasTargetBranch = true
-            } catch (showRefErr) {
-              appendDebugLog("warn", "target branch lookup failed before fallback", {
+            } catch (e) {
+              throw new Error(`Branch ${mainBranch} does not exist: ${e}`);
+            }
+
+            appendDebugLog("info", "merge target branch selected", { taskId: task.id, mainBranch })
+            try {
+              execFileSync("git", ["checkout", mainBranch], { cwd: worktreeInfo.directory, stdio: "ignore" })
+            } catch (checkoutErr) {
+              appendDebugLog("warn", "branch checkout skipped before merge", {
                 taskId: task.id,
                 branch: mainBranch,
-                error: showRefErr instanceof Error ? showRefErr.message : String(showRefErr),
-              })
-              hasTargetBranch = false
-            }
-          }
-
-          if (!hasTargetBranch) {
-            try {
-              const defaultBranch = execFileSync("git", ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], {
-                cwd: worktreeInfo.directory,
-                encoding: "utf-8",
-                stdio: "pipe",
-              }).trim()
-              if (defaultBranch.startsWith("origin/")) {
-                mainBranch = defaultBranch.slice("origin/".length)
-              } else if (defaultBranch) {
-                mainBranch = defaultBranch
-              }
-            } catch (e) {
-              appendDebugLog("warn", "could not resolve origin HEAD for merge target", {
-                taskId: task.id,
-                error: e instanceof Error ? e.message : String(e),
-              })
-            }
-
-            if (!mainBranch) {
-              try {
-                mainBranch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-                  cwd: worktreeInfo.directory,
-                  encoding: "utf-8",
-                  stdio: "pipe",
-                }).trim()
-              } catch (e) {
-                throw new Error(`Failed to get current branch: ${e}`);
-              }
-            }
-          }
-
-          try {
-            execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${mainBranch}`], {
-              cwd: worktreeInfo.directory,
-              stdio: "ignore",
-            })
-          } catch (e) {
-            throw new Error(`Branch ${mainBranch} does not exist: ${e}`);
-          }
-
-          appendDebugLog("info", "merge target branch selected", { taskId: task.id, mainBranch })
-          try {
-            execFileSync("git", ["checkout", mainBranch], { cwd: worktreeInfo.directory, stdio: "ignore" })
-          } catch (checkoutErr) {
-            appendDebugLog("warn", "branch checkout skipped before merge", {
-              taskId: task.id,
-              branch: mainBranch,
               error: checkoutErr instanceof Error ? checkoutErr.message : String(checkoutErr),
             })
             // Branch may be checked out in another worktree.
@@ -1206,6 +1246,7 @@ export class Orchestrator {
             encoding: "utf-8",
             stdio: "pipe",
           })
+          }
         } catch (mergeErr) {
           const msg = `Merge failed: ${mergeErr instanceof Error ? mergeErr.message : String(mergeErr)}`
           throw new Error(msg)
@@ -2494,7 +2535,8 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
   }
 
   private parseReviewResponse(result: any): ReviewResult {
-    const textPart = result?.parts?.find(
+    const parts = result?.parts ?? result?.data?.parts
+    const textPart = parts?.find(
       (p: any) => p?.type === "text" && typeof p.text === "string"
     )
     const text = textPart?.text ?? ""
