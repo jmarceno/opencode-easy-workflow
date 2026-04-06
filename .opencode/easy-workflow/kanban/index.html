@@ -1587,7 +1587,23 @@ function renderBoard() {
     else if (t.status === 'failed' || t.status === 'stuck') groups.review.push(t)
   }
   for (const [status, tasks] of Object.entries(groups)) {
-    tasks.sort((a, b) => a.idx - b.idx)
+    if (status === 'done') {
+      // Sort done tasks by most recently completed first
+      tasks.sort((a, b) => {
+        // Primary: completedAt descending (most recent first)
+        const aCompleted = a.completedAt ?? 0
+        const bCompleted = b.completedAt ?? 0
+        if (bCompleted !== aCompleted) return bCompleted - aCompleted
+        // Fallback: updatedAt descending
+        const aUpdated = a.updatedAt ?? 0
+        const bUpdated = b.updatedAt ?? 0
+        if (bUpdated !== aUpdated) return bUpdated - aUpdated
+        // Fallback: idx ascending (legacy/repaired tasks)
+        return a.idx - b.idx
+      })
+    } else {
+      tasks.sort((a, b) => a.idx - b.idx)
+    }
   }
   for (const status of ['template', 'backlog', 'executing', 'review', 'done']) {
     document.getElementById(`count-${status}`).textContent = groups[status].length

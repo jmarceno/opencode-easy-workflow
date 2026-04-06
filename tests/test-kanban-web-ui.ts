@@ -1447,6 +1447,177 @@ async function testReviewActivityUI() {
   }
 }
 
+async function testDoneColumnNewestFirstOrdering() {
+  const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  const reportDir = join(process.cwd(), ".opencode", "easy-workflow", "test-artifacts");
+  mkdirSync(reportDir, { recursive: true });
+  const reportPath = join(reportDir, `kanban-done-ordering-${runId}.json`);
+
+  type DoneOrderingReport = {
+    runId: string;
+    timestamp: string;
+    kanbanUrl: string;
+    taskNames: string[];
+    completedAts: number[];
+    doneCardOrder: string[];
+    newestFirstCorrect: boolean;
+    passed: boolean;
+    error: string | null;
+  };
+
+  const report: DoneOrderingReport = {
+    runId,
+    timestamp: new Date().toISOString(),
+    kanbanUrl: "",
+    taskNames: [],
+    completedAts: [],
+    doneCardOrder: [],
+    newestFirstCorrect: false,
+    passed: false,
+    error: null,
+  };
+
+  const tempDir = mkdtempSync(join(tmpdir(), "ewf-done-ordering-"));
+  const dbPath = join(tempDir, "tasks.db");
+
+  let kanbanDb: KanbanDB | null = null;
+  let kanbanServer: KanbanServer | null = null;
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+
+  try {
+    console.log("=== Done Column Newest-First Ordering Test ===");
+
+    kanbanDb = new KanbanDB(dbPath);
+    const kanbanPort = getFreePort();
+    report.kanbanUrl = `http://127.0.0.1:${kanbanPort}`;
+    kanbanDb.updateOptions({ port: kanbanPort, parallelTasks: 1, command: "" });
+
+    kanbanServer = new KanbanServer(kanbanDb, {
+      onStart: async () => {},
+      onStop: () => {},
+      getExecuting: () => false,
+      getStartError: () => null,
+      getServerUrl: () => report.kanbanUrl,
+    });
+    kanbanServer.start();
+    console.log(`Kanban UI: ${report.kanbanUrl}`);
+
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+
+    await page.goto(report.kanbanUrl, { waitUntil: "networkidle" });
+    await page.waitForSelector(".conn-status.connected", { timeout: 10000 });
+
+    // Create 4 tasks via API as "done", then PATCH each with different completedAt timestamps
+    // Note: createTask doesn't accept completedAt, so we set it via PATCH after creation
+    const baseTime = Math.floor(Date.now() / 1000);
+    const taskNames = [];
+    const completedAts = [];
+    const taskIds: string[] = [];
+
+    // First create all 4 tasks as done (without completedAt - will be set via PATCH)
+    for (let i = 0; i < 4; i++) {
+      const taskName = `Done Ordering Task ${i + 1} ${runId}`;
+      taskNames.push(taskName);
+      // completedAts: [baseTime - 300, baseTime - 200, baseTime - 100, baseTime]
+      // So taskNames[0] is oldest, taskNames[3] is newest
+      completedAts.push(baseTime - (300 - i * 100));
+
+      const createResp = await page.request.post(`${report.kanbanUrl}/api/tasks`, {
+        headers: { "Content-Type": "application/json" },
+        data: {
+          name: taskName,
+          prompt: `Test prompt for task ${i + 1}`,
+          status: "done",
+        },
+      });
+      if (!createResp.ok()) {
+        throw new Error(`Failed to create task ${i + 1}: ${createResp.status()}`);
+      }
+      const createdTask = await createResp.json();
+      taskIds.push(createdTask.id);
+    }
+
+    // Now PATCH each task to set completedAt (and updatedAt for proper fallback testing)
+    for (let i = 0; i < 4; i++) {
+      const patchResp = await page.request.patch(`${report.kanbanUrl}/api/tasks/${taskIds[i]}`, {
+        headers: { "Content-Type": "application/json" },
+        data: {
+          completedAt: completedAts[i],
+          updatedAt: completedAts[i],
+        },
+      });
+      if (!patchResp.ok()) {
+        throw new Error(`Failed to patch task ${i + 1}: ${patchResp.status()}`);
+      }
+    }
+
+    report.taskNames = taskNames;
+    report.completedAts = completedAts;
+    console.log(`Created ${taskNames.length} done tasks with staggered completedAt values`);
+
+    // Reload the page to pick up the new tasks
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForSelector(".conn-status.connected", { timeout: 10000 });
+
+    // Wait for done column to be populated
+    await page.waitForFunction(
+      () => document.querySelectorAll("#col-done .card").length === 4,
+      undefined,
+      { timeout: 5000 },
+    );
+
+    // Read the done card order by reading the card-title text content
+    const doneCardOrder: string[] = await page.evaluate(() => {
+      const cards = document.querySelectorAll("#col-done .card");
+      const names: string[] = [];
+      for (const card of cards) {
+        const titleEl = card.querySelector(".card-title");
+        if (titleEl) names.push(titleEl.textContent || "");
+      }
+      return names;
+    });
+
+    report.doneCardOrder = doneCardOrder;
+    console.log(`Done card order: ${JSON.stringify(doneCardOrder)}`);
+    console.log(`Expected order (newest first): ${JSON.stringify([taskNames[3], taskNames[2], taskNames[1], taskNames[0]])}`);
+
+    // Verify newest-first ordering: taskNames[3] (newest) should be first, taskNames[0] (oldest) last
+    const newestFirstCorrect =
+      doneCardOrder[0] === taskNames[3] &&
+      doneCardOrder[1] === taskNames[2] &&
+      doneCardOrder[2] === taskNames[1] &&
+      doneCardOrder[3] === taskNames[0];
+
+    report.newestFirstCorrect = newestFirstCorrect;
+    console.log(`Newest-first correct: ${newestFirstCorrect}`);
+
+    if (!newestFirstCorrect) {
+      throw new Error(
+        `Done column not ordered newest-first. Got: ${JSON.stringify(doneCardOrder)}, expected: ${JSON.stringify([taskNames[3], taskNames[2], taskNames[1], taskNames[0]])}`,
+      );
+    }
+
+    report.passed = true;
+    writeFileSync(reportPath, JSON.stringify(report, null, 2), "utf-8");
+    console.log(`\nEvidence report: ${reportPath}`);
+    console.log("\n✓ TEST PASSED");
+
+  } catch (err) {
+    report.error = err instanceof Error ? err.message : String(err);
+    writeFileSync(reportPath, JSON.stringify(report, null, 2), "utf-8");
+    console.error("\n✗ TEST FAILED");
+    console.error(report.error);
+    process.exitCode = 1;
+  } finally {
+    if (browser) await browser.close();
+    if (kanbanServer) kanbanServer.stop();
+    if (kanbanDb) kanbanDb.close();
+    cleanupTempDir(tempDir);
+  }
+}
+
 if (process.env.PLAN_UI_TEST === "1") {
   testPlanModeApprovalUI();
 } else if (process.env.SKIP_PERM_TEST === "1") {
@@ -1455,6 +1626,8 @@ if (process.env.PLAN_UI_TEST === "1") {
   testKeyboardShortcutsDoNotFireInModalsOrInputs();
 } else if (process.env.REVIEW_ACTIVITY_UI_TEST === "1") {
   testReviewActivityUI();
+} else if (process.env.DONE_ORDERING_TEST === "1") {
+  testDoneColumnNewestFirstOrdering();
 } else {
   await main();
 }
