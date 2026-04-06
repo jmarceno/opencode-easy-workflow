@@ -96,21 +96,41 @@ interface BridgeConfig {
   projectDirectory: string
 }
 
-function findProjectRoot(startDir: string): string {
-  let current = resolve(startDir)
+function findProjectRoot(startDir: string): { projectRoot: string; isWorktreeContext: boolean } {
+  const resolvedStart = resolve(startDir)
+  
+  // Check if we're in a worktree with root-owner.json
+  const rootOwnerPath = join(resolvedStart, ".opencode", "easy-workflow", "root-owner.json")
+  if (existsSync(rootOwnerPath)) {
+    try {
+      const rootOwner = JSON.parse(readFileSync(rootOwnerPath, "utf-8"))
+      if (rootOwner.ownerDirectory && existsSync(join(rootOwner.ownerDirectory, ".opencode", "easy-workflow", "config.json"))) {
+        console.log(`[easy-workflow-bridge] Detected worktree context`)
+        console.log(`[easy-workflow-bridge] Worktree directory: ${resolvedStart}`)
+        console.log(`[easy-workflow-bridge] Owner directory: ${rootOwner.ownerDirectory}`)
+        return { projectRoot: rootOwner.ownerDirectory, isWorktreeContext: true }
+      }
+    } catch {
+      // Failed to parse root-owner.json, fall through to normal detection
+    }
+  }
+  
+  // Normal detection - traverse up looking for .opencode/easy-workflow
+  let current = resolvedStart
   while (current !== "/") {
     if (existsSync(join(current, ".opencode", "easy-workflow"))) {
-      return current
+      return { projectRoot: current, isWorktreeContext: false }
     }
     const parent = resolve(current, "..")
     if (parent === current) break
     current = parent
   }
-  return resolve(startDir)
+  
+  return { projectRoot: resolvedStart, isWorktreeContext: false }
 }
 
 function loadBridgeConfig(directory: string): BridgeConfig | null {
-  const projectRoot = findProjectRoot(directory)
+  const { projectRoot } = findProjectRoot(directory)
   const configPath = join(projectRoot, ".opencode", "easy-workflow", "config.json")
   
   if (!existsSync(configPath)) {
@@ -760,11 +780,11 @@ function startTelegramPolling(
 
 export const EasyWorkflowBridgePlugin = async (input: any) => {
   const { client, directory } = input
-  const projectRoot = findProjectRoot(directory)
+  const { projectRoot, isWorktreeContext } = findProjectRoot(directory)
 
-  // Auto-start standalone server if not running
+  // Auto-start standalone server if not running (only in main project context, not worktrees)
   let serverPid: number | null = null
-  if (projectRoot) {
+  if (projectRoot && !isWorktreeContext) {
     const existingPid = readServerPid(projectRoot)
 
     if (existingPid && isServerRunning(existingPid)) {
@@ -781,25 +801,23 @@ export const EasyWorkflowBridgePlugin = async (input: any) => {
     }
 
     // Register shutdown handlers - kill server immediately without waiting
-    if (serverPid || telegramConfig) {
-      const cleanup = () => {
-        if (serverPid) killStandaloneServer(projectRoot!)
-        if (stopTelegramPolling) stopTelegramPolling()
-      }
+    if (serverPid) {
+      const cleanup = () => killStandaloneServer(projectRoot!)
       process.on("exit", cleanup)
 
       process.on("SIGINT", () => {
-        if (serverPid) killStandaloneServer(projectRoot!)
-        if (stopTelegramPolling) stopTelegramPolling()
+        killStandaloneServer(projectRoot!)
         process.exit(0)
       })
 
       process.on("SIGTERM", () => {
-        if (serverPid) killStandaloneServer(projectRoot!)
-        if (stopTelegramPolling) stopTelegramPolling()
+        killStandaloneServer(projectRoot!)
         process.exit(0)
       })
     }
+  } else if (isWorktreeContext) {
+    console.log(`[easy-workflow-bridge] Skipping server auto-start (worktree context)`)
+    console.log(`[easy-workflow-bridge] Using main project server`)
   }
 
   // Load bridge configuration
