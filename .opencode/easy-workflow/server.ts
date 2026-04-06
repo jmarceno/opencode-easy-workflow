@@ -991,11 +991,10 @@ export class KanbanServer {
         this.db.updateTask(taskId, {
           awaitingPlanApproval: false,
           executionPhase: "implementation_pending",
-          status: "backlog",
+          status: "executing",
         })
         const updated = this.db.getTask(taskId)!
         this.broadcast({ type: "task_updated", payload: updated })
-        await this.maybeAutoStartExecution()
         return this.json({ ok: true })
       }
 

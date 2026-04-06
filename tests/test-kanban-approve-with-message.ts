@@ -81,7 +81,7 @@ async function testApprovePlanWithMessage() {
     const updated = db.getTask(planTask.id)!
     assert(updated.awaitingPlanApproval === false, "Expected awaitingPlanApproval to be false")
     assert(updated.executionPhase === "implementation_pending", "Expected executionPhase to be implementation_pending")
-    assert(updated.status === "backlog", "Expected status to be backlog")
+    assert(updated.status === "executing", "Expected status to be executing")
     assert(updated.agentOutput.includes("[user-approval-note] Please implement carefully"), "Expected agentOutput to contain user-approval-note")
 
     const hasAgentOutputBroadcast = broadcastMessages.some(
