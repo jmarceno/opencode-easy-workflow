@@ -6,6 +6,7 @@ temp
 .opencode/easy-workflow/test-artifacts
 kanban.sqlite*
 *.bak
+.server.pid
 
 # Logs
 logs
