@@ -943,10 +943,362 @@ async function testSkipPermissionAskingUI() {
   }
 }
 
+async function testKeyboardShortcutsDoNotFireInModalsOrInputs() {
+  const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  const reportDir = join(process.cwd(), ".opencode", "easy-workflow", "test-artifacts");
+  mkdirSync(reportDir, { recursive: true });
+  const reportPath = join(reportDir, `kanban-shortcuts-ui-${runId}.json`);
+
+  type ShortcutsReport = {
+    runId: string;
+    timestamp: string;
+    kanbanUrl: string;
+    shortcutsBlockedInModal: boolean;
+    shortcutsBlockedInInput: boolean;
+    shortcutsBlockedInTextarea: boolean;
+    shortcutsBlockedInSelect: boolean;
+    shortcutsBlockedInContenteditable: boolean;
+    escapeClosesModal: boolean;
+    shortcutsWorkWhenNoModalOrInput: boolean;
+    passed: boolean;
+    error: string | null;
+  };
+
+  const report: ShortcutsReport = {
+    runId,
+    timestamp: new Date().toISOString(),
+    kanbanUrl: "",
+    shortcutsBlockedInModal: false,
+    shortcutsBlockedInInput: false,
+    shortcutsBlockedInTextarea: false,
+    shortcutsBlockedInSelect: false,
+    shortcutsBlockedInContenteditable: false,
+    escapeClosesModal: false,
+    shortcutsWorkWhenNoModalOrInput: false,
+    passed: false,
+    error: null,
+  };
+
+  const tempDir = mkdtempSync(join(tmpdir(), "ewf-shortcuts-ui-"));
+  const dbPath = join(tempDir, "tasks.db");
+
+  let kanbanDb: KanbanDB | null = null;
+  let kanbanServer: KanbanServer | null = null;
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+
+  try {
+    console.log("=== Keyboard Shortcuts UI Test ===");
+
+    kanbanDb = new KanbanDB(dbPath);
+    const kanbanPort = getFreePort();
+    report.kanbanUrl = `http://127.0.0.1:${kanbanPort}`;
+    kanbanDb.updateOptions({ port: kanbanPort, parallelTasks: 1, command: "" });
+
+    kanbanServer = new KanbanServer(kanbanDb, {
+      onStart: async () => {},
+      onStop: () => {},
+      getExecuting: () => false,
+      getStartError: () => null,
+      getServerUrl: () => report.kanbanUrl,
+    });
+    kanbanServer.start();
+    console.log(`Kanban UI: ${report.kanbanUrl}`);
+
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+
+    await page.goto(report.kanbanUrl, { waitUntil: "networkidle" });
+    await page.waitForSelector(".conn-status.connected", { timeout: 10000 });
+
+    // Helper: check if a modal is open
+    const isModalOpen = async (modalId: string) =>
+      page.evaluate((id) => {
+        const el = document.getElementById(id);
+        return el && !el.classList.contains("hidden");
+      }, modalId);
+
+    // Helper: check if getOpenModalIds returns non-empty
+    const isAnyModalOpen = async () =>
+      page.evaluate(() => {
+        try {
+          // @ts-ignore - getOpenModalIds is a global function in the kanban page
+          const openModals = typeof getOpenModalIds === "function" ? getOpenModalIds() : [];
+          return Array.isArray(openModals) && openModals.length > 0;
+        } catch {
+          return false;
+        }
+      });
+
+    // Helper: press a key and return whether a modal opened (or the board state changed)
+    const pressKeyAndCheckNoSideEffect = async (key: string) => {
+      const modalCountBefore = await page.evaluate(() =>
+        document.querySelectorAll(".modal-overlay:not(.hidden)").length
+      );
+      await page.keyboard.press(key);
+      await page.waitForTimeout(100);
+      const modalCountAfter = await page.evaluate(() =>
+        document.querySelectorAll(".modal-overlay:not(.hidden)").length
+      );
+      return modalCountBefore === modalCountAfter;
+    };
+
+    // ---- Test 1: Shortcuts blocked when modal is open ----
+    console.log("\n-- Test 1: Shortcuts blocked when modal is open --");
+
+    // Open the task modal via click (not a shortcut)
+    await page.click("#col-backlog .add-task-btn");
+    await page.waitForFunction(
+      () => document.getElementById("taskModal")?.classList.contains("hidden") === false,
+      undefined,
+      { timeout: 5000 }
+    );
+
+    // Verify modal is open
+    const modalOpen = await isModalOpen("taskModal");
+    if (!modalOpen) {
+      throw new Error("Task modal should be open");
+    }
+
+    // Try T, B, S, D keys - none should open a new modal
+    for (const key of ["T", "B", "S", "D"]) {
+      const noSideEffect = await pressKeyAndCheckNoSideEffect(key);
+      if (!noSideEffect) {
+        throw new Error(`Key ${key} should not open a modal when task modal is already open`);
+      }
+    }
+
+    // Modal should still be open
+    const modalStillOpen = await isModalOpen("taskModal");
+    if (!modalStillOpen) {
+      throw new Error("Task modal should still be open after shortcut keys");
+    }
+    report.shortcutsBlockedInModal = true;
+    console.log("Shortcuts blocked while modal open: PASS");
+
+    // ---- Test 2: Escape closes the modal ----
+    console.log("\n-- Test 2: Escape closes the topmost modal --");
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(200);
+    const modalClosedByEscape = !(await isModalOpen("taskModal"));
+    if (!modalClosedByEscape) {
+      throw new Error("Escape should close the task modal");
+    }
+    report.escapeClosesModal = true;
+    console.log("Escape closes modal: PASS");
+
+    // ---- Test 3: Shortcuts blocked when focus is in an input ----
+    console.log("\n-- Test 3: Shortcuts blocked when focus is in input --");
+
+    // Create a task first so we have a card to edit
+    await page.click("#col-backlog .add-task-btn");
+    await page.waitForFunction(
+      () => document.getElementById("taskModal")?.classList.contains("hidden") === false,
+      undefined,
+      { timeout: 5000 }
+    );
+    await page.fill("#taskName", "Shortcut Test Task");
+    await page.fill("#taskPrompt", "Test prompt");
+
+    // Focus the taskName input
+    const taskNameInput = page.locator("#taskName input");
+    await taskNameInput.focus();
+
+    // Verify focus is in input
+    const inputFocused = await page.evaluate(() => {
+      const el = document.getElementById("taskName");
+      const active = el?.shadowRoot?.activeElement || document.activeElement;
+      return el?.shadowRoot?.activeElement?.tagName === "INPUT" || document.activeElement?.tagName === "INPUT";
+    });
+    if (!inputFocused) {
+      throw new Error("taskName input should be focused");
+    }
+
+    // Press shortcut keys - modal count should not change
+    for (const key of ["T", "B", "S", "D"]) {
+      const noSideEffect = await pressKeyAndCheckNoSideEffect(key);
+      if (!noSideEffect) {
+        throw new Error(`Key ${key} should not open a modal when input is focused`);
+      }
+    }
+    report.shortcutsBlockedInInput = true;
+    console.log("Shortcuts blocked while input focused: PASS");
+
+    // ---- Test 4: Shortcuts blocked when focus is in a textarea ----
+    console.log("\n-- Test 4: Shortcuts blocked when focus is in textarea --");
+
+    const taskPromptTextarea = page.locator("#taskPrompt textarea");
+    await taskPromptTextarea.focus();
+
+    const textareaFocused = await page.evaluate(() => {
+      const el = document.getElementById("taskPrompt");
+      const active = el?.shadowRoot?.activeElement || document.activeElement;
+      return el?.shadowRoot?.activeElement?.tagName === "TEXTAREA" || document.activeElement?.tagName === "TEXTAREA";
+    });
+    if (!textareaFocused) {
+      throw new Error("taskPrompt textarea should be focused");
+    }
+
+    for (const key of ["T", "B", "S", "D"]) {
+      const noSideEffect = await pressKeyAndCheckNoSideEffect(key);
+      if (!noSideEffect) {
+        throw new Error(`Key ${key} should not open a modal when textarea is focused`);
+      }
+    }
+    report.shortcutsBlockedInTextarea = true;
+    console.log("Shortcuts blocked while textarea focused: PASS");
+
+    // Close modal
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(200);
+
+    // ---- Test 5: Shortcuts blocked when focus is in a select (sl-select) ----
+    console.log("\n-- Test 5: Shortcuts blocked when focus is in sl-select --");
+
+    await page.click("#col-backlog .add-task-btn");
+    await page.waitForFunction(
+      () => document.getElementById("taskModal")?.classList.contains("hidden") === false,
+      undefined,
+      { timeout: 5000 }
+    );
+
+    // Open the thinking level select
+    const selectTrigger = page.locator("#taskThinkingLevel").locator("sl-select");
+    const selectEl = page.locator("#taskThinkingLevel");
+    await selectEl.click();
+    await page.waitForTimeout(200);
+
+    // Check if a dropdown is open
+    const selectOpened = await page.evaluate(() => {
+      const el = document.getElementById("taskThinkingLevel");
+      const listbox = el?.shadowRoot?.querySelector('[slot="trigger"]') || el?.shadowRoot?.querySelector("sl-button");
+      return listbox !== null;
+    });
+
+    // Press shortcut keys
+    for (const key of ["T", "B", "S", "D"]) {
+      const noSideEffect = await pressKeyAndCheckNoSideEffect(key);
+      if (!noSideEffect) {
+        throw new Error(`Key ${key} should not open a modal when select is focused`);
+      }
+    }
+    report.shortcutsBlockedInSelect = true;
+    console.log("Shortcuts blocked while select focused: PASS");
+
+    // Close modal
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(200);
+
+    // ---- Test 6: Shortcuts blocked when focus is in a contenteditable element ----
+    console.log("\n-- Test 6: Shortcuts blocked when focus is in contenteditable --");
+
+    // Inject a temporary contenteditable div
+    await page.evaluate(() => {
+      const div = document.createElement("div");
+      div.id = "test-contenteditable";
+      div.contentEditable = "true";
+      div.style.cssText = "position:fixed;top:0;left:0;width:100px;height:100px;opacity:0;z-index:-1;";
+      div.textContent = "test element";
+      document.body.appendChild(div);
+    });
+
+    // Focus the contenteditable element
+    await page.evaluate(() => {
+      const el = document.getElementById("test-contenteditable");
+      if (el) el.focus();
+    });
+
+    // Verify focus is in contenteditable
+    const contenteditableFocused = await page.evaluate(() => {
+      const active = document.activeElement;
+      return active?.id === "test-contenteditable" && active?.isContentEditable === true;
+    });
+    if (!contenteditableFocused) {
+      throw new Error("contenteditable element should be focused");
+    }
+
+    // Press shortcut keys - modal count should not change
+    for (const key of ["T", "B", "S", "D"]) {
+      const noSideEffect = await pressKeyAndCheckNoSideEffect(key);
+      if (!noSideEffect) {
+        throw new Error(`Key ${key} should not open a modal when contenteditable is focused`);
+      }
+    }
+    report.shortcutsBlockedInContenteditable = true;
+    console.log("Shortcuts blocked while contenteditable focused: PASS");
+
+    // Clean up the injected element
+    await page.evaluate(() => {
+      const el = document.getElementById("test-contenteditable");
+      if (el) el.remove();
+    });
+
+    // ---- Test 7: Shortcuts work when no modal is open and no input is focused ----
+    console.log("\n-- Test 7: Shortcuts work when no modal or input is focused --");
+
+    // Click on the board background to ensure no input is focused
+    await page.click(".board", { position: { x: 10, y: 10 } });
+    await page.waitForTimeout(100);
+
+    // Verify no modal is open
+    const noModalOpen = !(await isAnyModalOpen());
+    if (!noModalOpen) {
+      throw new Error("No modal should be open at start of this test");
+    }
+
+    // Press T - should open template modal
+    const templateOpened = await pressKeyAndCheckNoSideEffect("t");
+    if (templateOpened) {
+      throw new Error("Key T should open the template modal when no modal/input is active");
+    }
+
+    const templateModalOpen = await isModalOpen("taskModal");
+    if (!templateModalOpen) {
+      throw new Error("Template modal (taskModal) should open on T key");
+    }
+
+    // Close it
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(200);
+
+    // Press B - should open backlog modal
+    const backlogOpened = await pressKeyAndCheckNoSideEffect("b");
+    if (backlogOpened) {
+      throw new Error("Key B should open the backlog modal when no modal/input is active");
+    }
+
+    const backlogModalOpen = await isModalOpen("taskModal");
+    if (!backlogModalOpen) {
+      throw new Error("Task modal (backlog) should open on B key");
+    }
+
+    report.shortcutsWorkWhenNoModalOrInput = true;
+    console.log("Shortcuts work when no modal/input: PASS");
+
+    report.passed = true;
+    writeFileSync(reportPath, JSON.stringify(report, null, 2), "utf-8");
+    console.log(`\nEvidence report: ${reportPath}`);
+    console.log("\n✓ TEST PASSED");
+  } catch (err) {
+    report.error = err instanceof Error ? err.message : String(err);
+    writeFileSync(reportPath, JSON.stringify(report, null, 2), "utf-8");
+    console.error("\n✗ TEST FAILED");
+    console.error(report.error);
+    process.exitCode = 1;
+  } finally {
+    if (browser) await browser.close();
+    if (kanbanServer) kanbanServer.stop();
+    if (kanbanDb) kanbanDb.close();
+    cleanupTempDir(tempDir);
+  }
+}
+
 if (process.env.PLAN_UI_TEST === "1") {
   testPlanModeApprovalUI();
 } else if (process.env.SKIP_PERM_TEST === "1") {
   testSkipPermissionAskingUI();
+} else if (process.env.SHORTCUTS_TEST === "1") {
+  testKeyboardShortcutsDoNotFireInModalsOrInputs();
 } else {
   await main();
 }
