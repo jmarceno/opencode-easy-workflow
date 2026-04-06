@@ -33,7 +33,7 @@ const SOURCE_SKILL_DIR = join(PROJECT_ROOT, ".opencode", "skills", "workflow-tas
 const SOURCE_WORKFLOW_DIR = join(PROJECT_ROOT, ".opencode", "easy-workflow")
 
 // Destination directories (in user's home)
-const DEST_PLUGIN_DIR = join(OPENCODE_DIR, "plugins", PLUGIN_NAME)
+const DEST_PLUGIN_DIR = join(OPENCODE_DIR, "plugins")  // Directly in plugins/, NOT in a subdirectory
 const DEST_AGENTS_DIR = join(OPENCODE_DIR, "agents")
 const DEST_SKILL_DIR = join(OPENCODE_DIR, "skills", "workflow-task-setup")
 const DEST_WORKFLOW_DIR = join(OPENCODE_DIR, "easy-workflow")
@@ -111,12 +111,16 @@ function status(): void {
   console.log(`Global opencode directory: ${OPENCODE_DIR}`)
   console.log("")
   
-  // Plugin status
-  if (existsSync(DEST_PLUGIN_DIR)) {
+  // Plugin status - check directly in plugins/
+  const pluginDestPath = join(DEST_PLUGIN_DIR, "easy-workflow.ts")
+  if (existsSync(pluginDestPath)) {
     console.log(`Plugin (${PLUGIN_NAME}): INSTALLED`)
-    console.log(`  Location: ${DEST_PLUGIN_DIR}`)
+    console.log(`  Location: ${pluginDestPath}`)
+    console.log(`  IMPORTANT: Must be registered in ~/.config/opencode/opencode.json with:`)
+    console.log(`    "plugin": ["file://${pluginDestPath}"]`)
   } else {
     console.log(`Plugin (${PLUGIN_NAME}): NOT INSTALLED`)
+    console.log(`  Expected at: ${pluginDestPath}`)
   }
   
   // Easy-workflow dir status
@@ -167,7 +171,7 @@ function status(): void {
 function install(): void {
   console.log("\n=== Installing Easy Workflow ===\n")
   
-  // 1. Copy plugin
+  // 1. Copy plugin - directly to plugins/, NOT in a subdirectory
   const pluginSource = join(SOURCE_PLUGIN_DIR, "easy-workflow.ts")
   if (!existsSync(pluginSource)) {
     console.error(`✗ Plugin file not found: ${pluginSource}`)
@@ -175,8 +179,11 @@ function install(): void {
   }
   
   ensureDir(DEST_PLUGIN_DIR)
-  copyFileSync(pluginSource, join(DEST_PLUGIN_DIR, "easy-workflow.ts"))
-  console.log(`✓ Copied plugin to ${DEST_PLUGIN_DIR}`)
+  const pluginDestPath = join(DEST_PLUGIN_DIR, "easy-workflow.ts")
+  copyFileSync(pluginSource, pluginDestPath)
+  console.log(`✓ Copied plugin to ${pluginDestPath}`)
+  console.log(`  ⚠️  IMPORTANT: You must manually add this to ~/.config/opencode/opencode.json:`)
+  console.log(`     "plugin": ["file://${pluginDestPath}"]`)
   
   // 2. Copy easy-workflow files (explicit list - NO recursive copy)
   ensureDir(DEST_WORKFLOW_DIR)
@@ -224,6 +231,12 @@ function install(): void {
   console.log("\n=== Installation Complete ===\n")
   console.log("Easy Workflow is now installed globally.")
   console.log("")
+  console.log("⚠️  ACTION REQUIRED:")
+  console.log("   Add this line to your ~/.config/opencode/opencode.json:")
+  console.log(`   "plugin": ["file://${pluginDestPath}"]`)
+  console.log("")
+  console.log("   Ensure OPENCODE_PURE is NOT set (it prevents external plugins)")
+  console.log("")
   console.log("To uninstall: ./install.ts remove")
   console.log("")
 }
@@ -231,12 +244,14 @@ function install(): void {
 function remove(): void {
   console.log("\n=== Removing Easy Workflow ===\n")
   
-  // 1. Remove plugin
-  if (existsSync(DEST_PLUGIN_DIR)) {
-    removeRecursive(DEST_PLUGIN_DIR)
-    console.log(`✓ Removed plugin: ${DEST_PLUGIN_DIR}`)
+  // 1. Remove plugin (directly from plugins/, not from subdirectory)
+  const pluginDestPath = join(DEST_PLUGIN_DIR, "easy-workflow.ts")
+  if (existsSync(pluginDestPath)) {
+    unlinkSync(pluginDestPath)
+    console.log(`✓ Removed plugin: ${pluginDestPath}`)
+    console.log(`  ⚠️  Remember to remove from ~/.config/opencode/opencode.json`)
   } else {
-    console.log(`○ Plugin not installed: ${DEST_PLUGIN_DIR}`)
+    console.log(`○ Plugin not installed: ${pluginDestPath}`)
   }
   
   // 2. Remove easy-workflow directory and all its files

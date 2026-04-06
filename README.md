@@ -15,12 +15,34 @@ It also includes a project-local skill for agents that need to translate user-pr
 # Install globally (copies plugin, easy-workflow/, agents, and skills to ~/.config/opencode/)
 ./install.ts install
 
+# IMPORTANT: After installation, you MUST manually add the plugin to your opencode.json:
+# Edit ~/.config/opencode/opencode.json and add:
+#   "plugin": ["file:///home/USERNAME/.config/opencode/plugins/easy-workflow.ts"]
+#
+# Also ensure OPENCODE_PURE is NOT set in your environment (check with: env | grep PURE)
+
 # Or manually copy files
-mkdir -p ~/.config/opencode/plugins/easy-workflow
-cp .opencode/plugins/easy-workflow.ts ~/.config/opencode/plugins/easy-workflow/
+mkdir -p ~/.config/opencode/plugins
+mkdir -p ~/.config/opencode/agents
+mkdir -p ~/.config/opencode/skills
+
+# Copy plugin - IMPORTANT: Copy directly to plugins/, NOT to plugins/easy-workflow/
+cp .opencode/plugins/easy-workflow.ts ~/.config/opencode/plugins/
+
+# Copy core easy-workflow directory
 cp -r .opencode/easy-workflow ~/.config/opencode/
+
+# Copy all agents
 cp .opencode/agents/*.md ~/.config/opencode/agents/
+
+# Copy skill
 cp -r .opencode/skills/workflow-task-setup ~/.config/opencode/skills/
+
+# Add to ~/.config/opencode/opencode.json:
+# {
+#   "$schema": "https://opencode.ai/config.json",
+#   "plugin": ["file:///home/USERNAME/.config/opencode/plugins/easy-workflow.ts"]
+# }
 ```
 
 To remove: `./install.ts remove`
@@ -29,27 +51,34 @@ See [INSTALL.md](INSTALL.md) for details.
 
 ## Quick Start
 
-### 1. Start the Standalone Server
+### 0. Configure OpenCode
 
-```bash
-# From the project root
-bun run start
+Add the plugin to your OpenCode configuration (`~/.config/opencode/opencode.json`):
 
-# On first run, it will prompt for your OpenCode server URL
-# e.g., http://localhost:4096
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["file:///home/USERNAME/.config/opencode/plugins/easy-workflow.ts"]
+}
 ```
 
-This creates `.opencode/easy-workflow/config.json` with your settings.
+Replace `USERNAME` with your actual username. The plugin MUST be registered with `file://` protocol.
 
-### 2. Start OpenCode
+Ensure `OPENCODE_PURE` is NOT set in your environment:
+```bash
+env | grep PURE  # Should return nothing
+# If set, unset it: unset OPENCODE_PURE
+```
+
+### 1. Start OpenCode
 
 ```bash
 opencode serve
 ```
 
-The bridge plugin (`.opencode/plugins/easy-workflow.ts`) will automatically connect to the standalone server.
+The bridge plugin will automatically start the standalone server and create the initial configuration.
 
-### 3. Access the Kanban board
+### 2. Access the Kanban board
 
 Open `http://localhost:3789` locally, or `http://<machine-ip>:3789` from other devices on your network (e.g. `http://192.168.1.100:3789`)
 

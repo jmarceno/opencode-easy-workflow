@@ -75,30 +75,23 @@ function validateUrl(url: string): boolean {
 
 async function initializeConfig(): Promise<Config> {
   console.log("[config] Configuration file not found.")
-  console.log("[config] Please provide the OpenCode server URL.")
-  console.log("[config] You can find this in the OpenCode app settings or logs.\n")
-
-  let url = await promptForUrl()
+  console.log("[config] Auto-creating configuration with default settings.")
   
-  while (!validateUrl(url)) {
-    console.log("[config] Invalid URL. Please enter a valid HTTP/HTTPS URL.")
-    url = await promptForUrl()
-  }
-
-  // Remove trailing slash
-  url = url.replace(/\/$/, "")
+  // Use default URL instead of prompting (stdin is often not available when spawned)
+  const defaultUrl = "http://localhost:4096"
+  console.log(`[config] Using default OpenCode server URL: ${defaultUrl}`)
+  console.log(`[config] To change this, edit: ${CONFIG_PATH}`)
 
   const config: Config = {
-    opencodeServerUrl: url,
+    opencodeServerUrl: defaultUrl,
     projectDirectory: resolve(process.cwd()),
   }
 
   saveConfig(config)
   
-  console.log("\n[config] Configuration saved to:", CONFIG_PATH)
+  console.log("[config] Configuration saved to:", CONFIG_PATH)
   console.log("[config] OpenCode Server URL:", config.opencodeServerUrl)
   console.log("[config] Project Directory:", config.projectDirectory)
-  console.log("\n[config] You can edit this file manually if needed.\n")
 
   return config
 }
@@ -117,6 +110,19 @@ async function main() {
     console.log("[config] OpenCode Server URL:", config.opencodeServerUrl)
     console.log("[config] Project Directory:", config.projectDirectory)
     console.log("")
+    
+    // Validate that config.projectDirectory matches current working directory
+    // This prevents using a stale config when the server is started from a different directory
+    const actualCwd = resolve(process.cwd())
+    const configProjectDir = resolve(config.projectDirectory)
+    if (actualCwd !== configProjectDir) {
+      console.log("[config] WARNING: Config projectDirectory doesn't match current directory")
+      console.log("[config]   Config says:", configProjectDir)
+      console.log("[config]   Actually running from:", actualCwd)
+      console.log("[config] Updating to use current directory...\n")
+      config.projectDirectory = actualCwd
+      saveConfig(config)
+    }
   }
 
   // Validate config

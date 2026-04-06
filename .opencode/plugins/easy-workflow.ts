@@ -102,6 +102,7 @@ function findProjectRoot(startDir: string): { projectRoot: string; isWorktreeCon
   const resolvedStart = resolve(startDir)
   
   // Check if we're in a worktree with root-owner.json
+  // Worktrees don't auto-start - they use the main project's server
   const rootOwnerPath = join(resolvedStart, ".opencode", "easy-workflow", "root-owner.json")
   if (existsSync(rootOwnerPath)) {
     try {
@@ -113,21 +114,13 @@ function findProjectRoot(startDir: string): { projectRoot: string; isWorktreeCon
         return { projectRoot: rootOwner.ownerDirectory, isWorktreeContext: true }
       }
     } catch {
-      // Failed to parse root-owner.json, fall through to normal detection
+      // Failed to parse root-owner.json, fall through
     }
   }
   
-  // Normal detection - traverse up looking for .opencode/easy-workflow
-  let current = resolvedStart
-  while (current !== "/") {
-    if (existsSync(join(current, ".opencode", "easy-workflow"))) {
-      return { projectRoot: current, isWorktreeContext: false }
-    }
-    const parent = resolve(current, "..")
-    if (parent === current) break
-    current = parent
-  }
-  
+  // ALWAYS use the starting directory as the project root
+  // The standalone server will create .opencode/easy-workflow/ if it doesn't exist
+  // We NEVER traverse up looking for other directories
   return { projectRoot: resolvedStart, isWorktreeContext: false }
 }
 
@@ -503,21 +496,24 @@ function clearServerPid(projectRoot: string): void {
 }
 
 async function startStandaloneServer(projectRoot: string): Promise<number | null> {
-  const workflowDir = join(projectRoot, ".opencode", "easy-workflow")
-  const configPath = join(workflowDir, "config.json")
-  const standalonePath = join(workflowDir, "standalone.ts")
+  // Use global installation of easy-workflow files
+  const globalWorkflowDir = join(require("os").homedir(), ".config", "opencode", "easy-workflow")
+  const projectWorkflowDir = join(projectRoot, ".opencode", "easy-workflow")
+  const configPath = join(projectWorkflowDir, "config.json")
+  const standalonePath = join(globalWorkflowDir, "standalone.ts")
   
   if (!existsSync(standalonePath)) {
-    console.log("[easy-workflow-bridge] Standalone server not found:", standalonePath)
+    console.log("[easy-workflow-bridge] Standalone server not found at global location:", standalonePath)
     return null
   }
   
-  if (!existsSync(configPath)) {
-    console.log("[easy-workflow-bridge] Config not found. Please run the standalone server manually first:")
-    console.log("[easy-workflow-bridge]   bun run .opencode/easy-workflow/standalone.ts")
-    console.log("[easy-workflow-bridge] This will create the initial configuration.")
-    return null
+  // Create project workflow dir if it doesn't exist
+  if (!existsSync(projectWorkflowDir)) {
+    require("fs").mkdirSync(projectWorkflowDir, { recursive: true })
   }
+  
+  // Note: We don't check for config.json here anymore - the standalone server
+  // will auto-create it with our new auto-config logic
   
   console.log("[easy-workflow-bridge] Starting standalone server...")
   
@@ -857,8 +853,41 @@ function startTelegramPolling(
 // ---- Plugin export ----
 
 export const EasyWorkflowBridgePlugin = async (input: any) => {
-  const { client, directory } = input
-  const { projectRoot, isWorktreeContext } = findProjectRoot(directory)
+  try {
+    // Write to debug file since console.log might be captured
+    const debugLog = (msg: string) => {
+      try {
+        const fs = require('fs')
+        const path = require('path')
+        const logPath = path.join(process.cwd(), '.opencode', 'easy-workflow-debug.log')
+        fs.mkdirSync(path.dirname(logPath), { recursive: true })
+        fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${msg}\n`)
+      } catch (e) {
+        // Ignore logging errors
+      }
+    }
+    
+    debugLog('=== PLUGIN STARTING ===')
+    debugLog(`process.cwd() = ${process.cwd()}`)
+    debugLog(`input.directory = ${input?.directory}`)
+    
+    const { client, directory: directoryFromOpenCode } = input
+    
+    // OpenCode sometimes passes the wrong directory (cached from previous project)
+    // We MUST use process.cwd() which is where the user actually ran 'opencode serve'
+    const actualDirectory = process.cwd()
+    
+    console.log(`[easy-workflow-bridge] DEBUG: Directory from OpenCode: ${directoryFromOpenCode}`)
+    console.log(`[easy-workflow-bridge] DEBUG: Actual directory (process.cwd()): ${actualDirectory}`)
+    
+    if (directoryFromOpenCode !== actualDirectory) {
+      console.log(`[easy-workflow-bridge] WARNING: OpenCode reported wrong directory! Using actual: ${actualDirectory}`)
+    }
+    
+    const { projectRoot, isWorktreeContext } = findProjectRoot(actualDirectory)
+    
+    console.log(`[easy-workflow-bridge] DEBUG: projectRoot = ${projectRoot}`)
+    console.log(`[easy-workflow-bridge] DEBUG: isWorktreeContext = ${isWorktreeContext}`)
 
   // Auto-start standalone server if not running (only in main project context, not worktrees)
   let serverPid: number | null = null
@@ -899,7 +928,7 @@ export const EasyWorkflowBridgePlugin = async (input: any) => {
   }
 
   // Load bridge configuration
-  const config = loadBridgeConfig(directory)
+  const config = loadBridgeConfig(actualDirectory)
 
   if (!config) {
     console.log("[easy-workflow-bridge] Standalone server config not found. Bridge will not forward events.")
@@ -1070,6 +1099,11 @@ export const EasyWorkflowBridgePlugin = async (input: any) => {
         }
       }
     },
+  }
+  } catch (err) {
+    console.error(`[easy-workflow-bridge] FATAL ERROR: ${err instanceof Error ? err.message : String(err)}`)
+    console.error(err)
+    throw err
   }
 }
 
