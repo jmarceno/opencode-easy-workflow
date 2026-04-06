@@ -7,7 +7,25 @@ A plugin for [OpenCode](https://opencode.ai) that provides two modes of operatio
 
 It also includes a project-local skill for agents that need to translate user-provided planning material into kanban tasks.
 
-> **NEW in v2.0**: Standalone Server Architecture! The kanban server now runs outside of OpenCode for better stability and debugging. See [Architecture](#architecture) below.
+
+
+## Installation
+
+```bash
+# Install globally (copies plugin, easy-workflow/, agents, and skills to ~/.config/opencode/)
+./install.ts install
+
+# Or manually copy files
+mkdir -p ~/.config/opencode/plugins/easy-workflow
+cp .opencode/plugins/easy-workflow.ts ~/.config/opencode/plugins/easy-workflow/
+cp -r .opencode/easy-workflow ~/.config/opencode/
+cp .opencode/agents/*.md ~/.config/opencode/agents/
+cp -r .opencode/skills/workflow-task-setup ~/.config/opencode/skills/
+```
+
+To remove: `./install.ts remove`
+
+See [INSTALL.md](INSTALL.md) for details.
 
 ## Quick Start
 

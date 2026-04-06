@@ -2,36 +2,54 @@
 /**
  * Easy Workflow - Install/Uninstall Script
  * 
- * This script installs Easy Workflow to the OpenCode global plugins directory
- * and sets up the standalone server to auto-start with OpenCode.
+ * This script installs Easy Workflow to the OpenCode global config directory.
  * 
  * Usage:
  *   ./install.ts [install|remove|status]
  * 
- * Install: Copies plugin and creates startup hooks
- * Remove: Removes plugin and startup hooks  
- * Status: Shows current installation status
+ * Install: Copies plugin, agents, skills, and easy-workflow/ to ~/.config/opencode/
+ * Remove:  Removes all copied files from ~/.config/opencode/
+ * Status:  Shows current installation status
  */
 
-import { existsSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, unlinkSync, rmdirSync, readdirSync, statSync } from "fs"
-import { join, resolve, dirname } from "path"
+import { existsSync, mkdirSync, copyFileSync, unlinkSync, rmdirSync, readdirSync, statSync } from "fs"
+import { join, dirname } from "path"
 import { homedir } from "os"
+import { fileURLToPath } from "url"
 
 // ---- Configuration ----
 
-const OPENCODE_GLOBAL_DIR = join(homedir(), ".config", "opencode", "plugins")
+const OPENCODE_DIR = join(homedir(), ".config", "opencode")
 const PLUGIN_NAME = "easy-workflow"
 
-// Get project root from CWD (where the script is run from)
-const PROJECT_ROOT = process.cwd()
-const PLUGIN_SOURCE_DIR = join(PROJECT_ROOT, ".opencode", "plugins")
-const WORKFLOW_DIR = join(PROJECT_ROOT, ".opencode", "easy-workflow")
-const SKILL_DIR = join(PROJECT_ROOT, ".opencode", "skills", "workflow-task-setup")
+// Get project root from the directory where this script is located
+const __filename = fileURLToPath(import.meta.url)
+const PROJECT_ROOT = dirname(__filename)
 
-// Files to copy to global plugins directory
-const FILES_TO_COPY = [
-  { source: "easy-workflow.ts", dest: "easy-workflow.ts" },
-  { source: "easy-workflow.ts.bak", dest: "easy-workflow.ts.bak", optional: true },
+// Source directories (in the project repo)
+const SOURCE_PLUGIN_DIR = join(PROJECT_ROOT, ".opencode", "plugins")
+const SOURCE_AGENTS_DIR = join(PROJECT_ROOT, ".opencode", "agents")
+const SOURCE_SKILL_DIR = join(PROJECT_ROOT, ".opencode", "skills", "workflow-task-setup")
+const SOURCE_WORKFLOW_DIR = join(PROJECT_ROOT, ".opencode", "easy-workflow")
+
+// Destination directories (in user's home)
+const DEST_PLUGIN_DIR = join(OPENCODE_DIR, "plugins", PLUGIN_NAME)
+const DEST_AGENTS_DIR = join(OPENCODE_DIR, "agents")
+const DEST_SKILL_DIR = join(OPENCODE_DIR, "skills", "workflow-task-setup")
+const DEST_WORKFLOW_DIR = join(OPENCODE_DIR, "easy-workflow")
+
+// Explicit list of files to copy from easy-workflow directory (NO recursive copy)
+const WORKFLOW_FILES = [
+  "server.ts",
+  "db.ts",
+  "types.ts",
+  "task-state.ts",
+  "telegram.ts",
+  "orchestrator.ts",
+  "standalone.ts",
+  "execution-plan.ts",
+  "workflow.md",
+  "kanban/index.html",
 ]
 
 // ---- Utility Functions ----
@@ -79,48 +97,68 @@ Easy Workflow Installer
 Usage: ./install.ts <command>
 
 Commands:
-  install    Install Easy Workflow to OpenCode global plugins
-  remove     Remove Easy Workflow from OpenCode global plugins
+  install    Install Easy Workflow to ~/.config/opencode/
+  remove     Remove Easy Workflow from ~/.config/opencode/
   status     Show installation status
-
-This will:
-  - Copy the bridge plugin to ~/.config/opencode/plugins/easy-workflow/
-  - The plugin auto-starts the standalone server when you open a project
-  - Preserve your local workflow configuration and database
 `)
 }
 
 // ---- Commands ----
 
-function getInstallPath(): string {
-  return join(OPENCODE_GLOBAL_DIR, PLUGIN_NAME)
-}
-
 function status(): void {
   console.log("\n=== Easy Workflow Installation Status ===\n")
   
-  const installPath = getInstallPath()
-  
-  console.log(`Global plugins directory: ${OPENCODE_GLOBAL_DIR}`)
-  console.log(`Install path: ${installPath}`)
+  console.log(`Global opencode directory: ${OPENCODE_DIR}`)
   console.log("")
   
-  if (existsSync(installPath)) {
-    console.log("Plugin: INSTALLED")
-    const files = readdirSync(installPath)
-    console.log(`  Files: ${files.join(", ")}`)
+  // Plugin status
+  if (existsSync(DEST_PLUGIN_DIR)) {
+    console.log(`Plugin (${PLUGIN_NAME}): INSTALLED`)
+    console.log(`  Location: ${DEST_PLUGIN_DIR}`)
   } else {
-    console.log("Plugin: NOT INSTALLED")
+    console.log(`Plugin (${PLUGIN_NAME}): NOT INSTALLED`)
   }
   
-  console.log("")
-  console.log(`Local workflow directory: ${WORKFLOW_DIR}`)
-  if (existsSync(WORKFLOW_DIR)) {
-    console.log("Status: EXISTS")
-    const files = readdirSync(WORKFLOW_DIR)
-    console.log(`  Contents: ${files.length} items`)
+  // Easy-workflow dir status
+  if (existsSync(DEST_WORKFLOW_DIR)) {
+    console.log("")
+    console.log(`Easy-Workflow: INSTALLED`)
+    console.log(`  Location: ${DEST_WORKFLOW_DIR}`)
+    const entries = readdirSync(DEST_WORKFLOW_DIR)
+    console.log(`  Files: ${entries.filter(e => e.endsWith('.ts')).join(", ")}`)
   } else {
-    console.log("Status: NOT FOUND")
+    console.log("")
+    console.log(`Easy-Workflow: NOT INSTALLED`)
+  }
+  
+  // Agents status
+  if (existsSync(SOURCE_AGENTS_DIR)) {
+    const sourceAgents = readdirSync(SOURCE_AGENTS_DIR).filter(f => f.endsWith('.md'))
+    const installedAgents: string[] = []
+    const missingAgents: string[] = []
+    
+    for (const agent of sourceAgents) {
+      if (existsSync(join(DEST_AGENTS_DIR, agent))) {
+        installedAgents.push(agent)
+      } else {
+        missingAgents.push(agent)
+      }
+    }
+    
+    console.log("")
+    console.log(`Agents: ${installedAgents.length}/${sourceAgents.length} installed`)
+    if (missingAgents.length > 0) {
+      console.log(`  Missing: ${missingAgents.join(", ")}`)
+    }
+  }
+  
+  // Skill status
+  console.log("")
+  if (existsSync(DEST_SKILL_DIR)) {
+    console.log("Skill (workflow-task-setup): INSTALLED")
+    console.log(`  Location: ${DEST_SKILL_DIR}`)
+  } else {
+    console.log("Skill (workflow-task-setup): NOT INSTALLED")
   }
   
   console.log("")
@@ -129,46 +167,62 @@ function status(): void {
 function install(): void {
   console.log("\n=== Installing Easy Workflow ===\n")
   
-  // 1. Ensure global plugins directory exists
-  ensureDir(OPENCODE_GLOBAL_DIR)
-  console.log(`✓ Ensured global plugins directory: ${OPENCODE_GLOBAL_DIR}`)
+  // 1. Copy plugin
+  const pluginSource = join(SOURCE_PLUGIN_DIR, "easy-workflow.ts")
+  if (!existsSync(pluginSource)) {
+    console.error(`✗ Plugin file not found: ${pluginSource}`)
+    process.exit(1)
+  }
   
-  // 2. Copy plugin files
-  const installPath = getInstallPath()
-  ensureDir(installPath)
+  ensureDir(DEST_PLUGIN_DIR)
+  copyFileSync(pluginSource, join(DEST_PLUGIN_DIR, "easy-workflow.ts"))
+  console.log(`✓ Copied plugin to ${DEST_PLUGIN_DIR}`)
   
-  for (const file of FILES_TO_COPY) {
-    const sourcePath = join(PLUGIN_SOURCE_DIR, file.source)
-    const destPath = join(installPath, file.dest)
+  // 2. Copy easy-workflow files (explicit list - NO recursive copy)
+  ensureDir(DEST_WORKFLOW_DIR)
+  ensureDir(join(DEST_WORKFLOW_DIR, "kanban"))
+  
+  let copiedCount = 0
+  for (const file of WORKFLOW_FILES) {
+    const sourcePath = join(SOURCE_WORKFLOW_DIR, file)
+    const destPath = join(DEST_WORKFLOW_DIR, file)
     
     if (!existsSync(sourcePath)) {
-      if (file.optional) {
-        console.log(`○ Skipped optional file: ${file.source}`)
-        continue
-      }
       console.error(`✗ Missing required file: ${sourcePath}`)
       process.exit(1)
     }
     
     copyFileSync(sourcePath, destPath)
-    console.log(`✓ Copied: ${file.source} → ${destPath}`)
+    copiedCount++
   }
   
-  // 3. Copy skill if not exists
-  const globalSkillDir = join(homedir(), ".config", "opencode", "skills", "workflow-task-setup")
-  if (existsSync(SKILL_DIR)) {
-    ensureDir(dirname(globalSkillDir))
-    copyRecursive(SKILL_DIR, globalSkillDir)
-    console.log(`✓ Copied skill: ${globalSkillDir}`)
+  console.log(`✓ Copied ${copiedCount} files to ${DEST_WORKFLOW_DIR}`)
+  
+  // 3. Copy agents
+  if (existsSync(SOURCE_AGENTS_DIR)) {
+    ensureDir(DEST_AGENTS_DIR)
+    const agentFiles = readdirSync(SOURCE_AGENTS_DIR).filter(f => f.endsWith('.md'))
+    
+    for (const agentFile of agentFiles) {
+      const sourcePath = join(SOURCE_AGENTS_DIR, agentFile)
+      const destPath = join(DEST_AGENTS_DIR, agentFile)
+      copyFileSync(sourcePath, destPath)
+    }
+    
+    if (agentFiles.length > 0) {
+      console.log(`✓ Copied ${agentFiles.length} agent(s) to ${DEST_AGENTS_DIR}`)
+    }
+  }
+  
+  // 4. Copy skill (skill is small, recursive is fine here)
+  if (existsSync(SOURCE_SKILL_DIR)) {
+    ensureDir(dirname(DEST_SKILL_DIR))
+    copyRecursive(SOURCE_SKILL_DIR, DEST_SKILL_DIR)
+    console.log(`✓ Copied skill to ${DEST_SKILL_DIR}`)
   }
   
   console.log("\n=== Installation Complete ===\n")
-  console.log("The Easy Workflow plugin is now installed globally.")
-  console.log("")
-  console.log("Next steps:")
-  console.log("  1. OpenCode will auto-load the plugin for all projects")
-  console.log("  2. The plugin will auto-start the standalone server when you open a project with .opencode/easy-workflow/")
-  console.log("  3. First time: Run 'bun run .opencode/easy-workflow/standalone.ts' to configure the OpenCode server URL")
+  console.log("Easy Workflow is now installed globally.")
   console.log("")
   console.log("To uninstall: ./install.ts remove")
   console.log("")
@@ -177,30 +231,49 @@ function install(): void {
 function remove(): void {
   console.log("\n=== Removing Easy Workflow ===\n")
   
-  const installPath = getInstallPath()
-  const globalSkillDir = join(homedir(), ".config", "opencode", "skills", "workflow-task-setup")
-  
-  // Remove plugin directory
-  if (existsSync(installPath)) {
-    removeRecursive(installPath)
-    console.log(`✓ Removed: ${installPath}`)
+  // 1. Remove plugin
+  if (existsSync(DEST_PLUGIN_DIR)) {
+    removeRecursive(DEST_PLUGIN_DIR)
+    console.log(`✓ Removed plugin: ${DEST_PLUGIN_DIR}`)
   } else {
-    console.log(`○ Not installed: ${installPath}`)
+    console.log(`○ Plugin not installed: ${DEST_PLUGIN_DIR}`)
   }
   
-  // Remove skill
-  if (existsSync(globalSkillDir)) {
-    removeRecursive(globalSkillDir)
-    console.log(`✓ Removed skill: ${globalSkillDir}`)
+  // 2. Remove easy-workflow directory and all its files
+  if (existsSync(DEST_WORKFLOW_DIR)) {
+    removeRecursive(DEST_WORKFLOW_DIR)
+    console.log(`✓ Removed easy-workflow: ${DEST_WORKFLOW_DIR}`)
+  } else {
+    console.log(`○ Easy-workflow not installed: ${DEST_WORKFLOW_DIR}`)
+  }
+  
+  // 3. Remove agents
+  if (existsSync(SOURCE_AGENTS_DIR)) {
+    const agentFiles = readdirSync(SOURCE_AGENTS_DIR).filter(f => f.endsWith('.md'))
+    let removedCount = 0
+    
+    for (const agentFile of agentFiles) {
+      const destPath = join(DEST_AGENTS_DIR, agentFile)
+      if (existsSync(destPath)) {
+        unlinkSync(destPath)
+        removedCount++
+      }
+    }
+    
+    if (removedCount > 0) {
+      console.log(`✓ Removed ${removedCount} agent(s) from ${DEST_AGENTS_DIR}`)
+    }
+  }
+  
+  // 4. Remove skill
+  if (existsSync(DEST_SKILL_DIR)) {
+    removeRecursive(DEST_SKILL_DIR)
+    console.log(`✓ Removed skill: ${DEST_SKILL_DIR}`)
+  } else {
+    console.log(`○ Skill not installed: ${DEST_SKILL_DIR}`)
   }
   
   console.log("\n=== Removal Complete ===\n")
-  console.log("Note: Your local workflow configuration and database were NOT removed.")
-  console.log(`They remain at: ${WORKFLOW_DIR}`)
-  console.log("")
-  console.log("To start fresh, you can manually delete:")
-  console.log(`  rm -rf ${WORKFLOW_DIR}`)
-  console.log("")
 }
 
 // ---- Main ----
