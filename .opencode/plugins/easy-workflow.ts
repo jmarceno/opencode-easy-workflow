@@ -423,13 +423,11 @@ async function startStandaloneServer(projectRoot: string): Promise<number | null
   const configPath = join(workflowDir, "config.json")
   const standalonePath = join(workflowDir, "standalone.ts")
   
-  // Check if standalone server exists
   if (!existsSync(standalonePath)) {
     console.log("[easy-workflow-bridge] Standalone server not found:", standalonePath)
     return null
   }
   
-  // Check if config exists (server needs to be initialized first)
   if (!existsSync(configPath)) {
     console.log("[easy-workflow-bridge] Config not found. Please run the standalone server manually first:")
     console.log("[easy-workflow-bridge]   bun run .opencode/easy-workflow/standalone.ts")
@@ -439,21 +437,18 @@ async function startStandaloneServer(projectRoot: string): Promise<number | null
   
   console.log("[easy-workflow-bridge] Starting standalone server...")
   
-  // Start the standalone server detached
   const child = spawn("bun", ["run", standalonePath], {
     detached: true,
-    stdio: ["ignore", "pipe", "pipe"], // Capture stdout/stderr for debugging
+    stdio: ["ignore", "pipe", "pipe"],
     cwd: projectRoot,
   })
   
   child.unref()
   
-  // Save PID
   writeServerPid(projectRoot, child.pid!)
   
   console.log(`[easy-workflow-bridge] Server started (PID: ${child.pid})`)
   
-  // Log server output for debugging
   child.stdout?.on("data", (data) => {
     console.log(`[easy-workflow-server] ${data.toString().trim()}`)
   })
@@ -462,7 +457,6 @@ async function startStandaloneServer(projectRoot: string): Promise<number | null
     console.error(`[easy-workflow-server] ${data.toString().trim()}`)
   })
   
-  // Give it a moment to start and check if it's still running
   await new Promise(resolve => setTimeout(resolve, 2000))
   
   if (!isServerRunning(child.pid!)) {
@@ -475,32 +469,14 @@ async function startStandaloneServer(projectRoot: string): Promise<number | null
   return child.pid
 }
 
-function stopStandaloneServer(projectRoot: string): void {
+function killStandaloneServer(projectRoot: string): void {
   const pid = readServerPid(projectRoot)
   if (!pid) return
-  
-  console.log(`[easy-workflow-bridge] Stopping server (PID: ${pid})...`)
-  
-  try {
-    // Try graceful shutdown first
-    process.kill(pid, "SIGTERM")
     
-    // Give it a moment to shut down
-    setTimeout(() => {
-      if (isServerRunning(pid)) {
-        // Force kill if still running
-        try {
-          process.kill(pid, "SIGKILL")
-        } catch {
-          // Ignore errors
-        }
-      }
-      clearServerPid(projectRoot)
-    }, 2000)
-  } catch {
-    // Process already dead
-    clearServerPid(projectRoot)
-  }
+  process.kill(pid, "SIGKILL")
+  console.log(`[easy-workflow-bridge] Sent SIGKILL to server (PID: ${pid})`)
+    
+  clearServerPid(projectRoot)
 }
 
 // ---- Plugin export ----
@@ -527,18 +503,19 @@ export const EasyWorkflowBridgePlugin = async (input: any) => {
       serverPid = await startStandaloneServer(projectRoot)
     }
     
-    // Register cleanup handler for when OpenCode closes
+    // Register shutdown handlers - kill server immediately without waiting
     if (serverPid) {
-      process.on("exit", () => {
-        stopStandaloneServer(projectRoot)
-      })
+      const cleanup = () => killStandaloneServer(projectRoot!)
+      process.on("exit", cleanup)
       
       process.on("SIGINT", () => {
-        stopStandaloneServer(projectRoot)
+        killStandaloneServer(projectRoot!)
+        process.exit(0)
       })
       
       process.on("SIGTERM", () => {
-        stopStandaloneServer(projectRoot)
+        killStandaloneServer(projectRoot!)
+        process.exit(0)
       })
     }
   }

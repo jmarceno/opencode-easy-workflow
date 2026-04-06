@@ -85,7 +85,7 @@ Commands:
 
 This will:
   - Copy the bridge plugin to ~/.config/opencode/plugins/easy-workflow/
-  - Create startup hooks for auto-starting the standalone server
+  - The plugin auto-starts the standalone server when you open a project
   - Preserve your local workflow configuration and database
 `)
 }
@@ -96,19 +96,13 @@ function getInstallPath(): string {
   return join(OPENCODE_GLOBAL_DIR, PLUGIN_NAME)
 }
 
-function getStartupScriptPath(): string {
-  return join(OPENCODE_GLOBAL_DIR, `${PLUGIN_NAME}-startup.ts`)
-}
-
 function status(): void {
   console.log("\n=== Easy Workflow Installation Status ===\n")
   
   const installPath = getInstallPath()
-  const startupPath = getStartupScriptPath()
   
   console.log(`Global plugins directory: ${OPENCODE_GLOBAL_DIR}`)
   console.log(`Install path: ${installPath}`)
-  console.log(`Startup script: ${startupPath}`)
   console.log("")
   
   if (existsSync(installPath)) {
@@ -117,12 +111,6 @@ function status(): void {
     console.log(`  Files: ${files.join(", ")}`)
   } else {
     console.log("Plugin: NOT INSTALLED")
-  }
-  
-  if (existsSync(startupPath)) {
-    console.log("Startup hook: INSTALLED")
-  } else {
-    console.log("Startup hook: NOT INSTALLED")
   }
   
   console.log("")
@@ -166,105 +154,7 @@ function install(): void {
     console.log(`✓ Copied: ${file.source} → ${destPath}`)
   }
   
-  // 3. Create startup script
-  const startupPath = getStartupScriptPath()
-  const startupScript = `/**
- * Easy Workflow - Auto-startup Script
- * 
- * This script is loaded by OpenCode and auto-starts the standalone server.
- */
-
-import { spawn } from "child_process"
-import { existsSync, readFileSync, writeFileSync } from "fs"
-import { join } from "path"
-
-const WORKFLOW_DIR = join(process.cwd(), ".opencode", "easy-workflow")
-const CONFIG_PATH = join(WORKFLOW_DIR, "config.json")
-const PID_FILE = join(WORKFLOW_DIR, ".server.pid")
-
-function findProjectRoot(startDir: string): string | null {
-  let current = startDir
-  while (current !== "/") {
-    if (existsSync(join(current, ".opencode", "easy-workflow"))) {
-      return current
-    }
-    const parent = join(current, "..")
-    if (parent === current) break
-    current = parent
-  }
-  return null
-}
-
-function isServerRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-}
-
-export const EasyWorkflowStartup = async () => {
-  // Only auto-start if we're in a project with easy-workflow
-  const projectRoot = findProjectRoot(process.cwd())
-  if (!projectRoot) {
-    return {}
-  }
-  
-  const workflowDir = join(projectRoot, ".opencode", "easy-workflow")
-  const configPath = join(workflowDir, "config.json")
-  const pidFile = join(workflowDir, ".server.pid")
-  
-  // Check if already running
-  if (existsSync(pidFile)) {
-    const pid = parseInt(readFileSync(pidFile, "utf-8"), 10)
-    if (!isNaN(pid) && isServerRunning(pid)) {
-      console.log(\`[easy-workflow] Server already running (PID: \${pid})\`)
-      return {}
-    }
-  }
-  
-  // Check if config exists (user has initialized the server before)
-  if (!existsSync(configPath)) {
-    console.log("[easy-workflow] Config not found. Run 'bun run .opencode/easy-workflow/standalone.ts' to initialize.")
-    return {}
-  }
-  
-  // Start the standalone server detached
-  const standalonePath = join(workflowDir, "standalone.ts")
-  if (!existsSync(standalonePath)) {
-    console.error("[easy-workflow] Standalone server not found:", standalonePath)
-    return {}
-  }
-  
-  console.log("[easy-workflow] Starting standalone server...")
-  
-  const child = spawn("bun", ["run", standalonePath], {
-    detached: true,
-    stdio: ["ignore", "ignore", "ignore"],
-    cwd: projectRoot,
-  })
-  
-  child.unref()
-  
-  // Save PID
-  writeFileSync(pidFile, String(child.pid), "utf-8")
-  
-  console.log(\`[easy-workflow] Server started (PID: \${child.pid})\`)
-  
-  // Give it a moment to start
-  await new Promise(resolve => setTimeout(resolve, 1000))
-  
-  return {}
-}
-
-export default EasyWorkflowStartup
-`
-  
-  writeFileSync(startupPath, startupScript, "utf-8")
-  console.log(`✓ Created startup script: ${startupPath}`)
-  
-  // 4. Copy skill if not exists
+  // 3. Copy skill if not exists
   const globalSkillDir = join(homedir(), ".config", "opencode", "skills", "workflow-task-setup")
   if (existsSync(SKILL_DIR)) {
     ensureDir(dirname(globalSkillDir))
@@ -288,23 +178,7 @@ function remove(): void {
   console.log("\n=== Removing Easy Workflow ===\n")
   
   const installPath = getInstallPath()
-  const startupPath = getStartupScriptPath()
   const globalSkillDir = join(homedir(), ".config", "opencode", "skills", "workflow-task-setup")
-  
-  // Stop any running server
-  const pidFile = join(process.cwd(), ".opencode", "easy-workflow", ".server.pid")
-  if (existsSync(pidFile)) {
-    try {
-      const pid = parseInt(readFileSync(pidFile, "utf-8"), 10)
-      if (!isNaN(pid)) {
-        process.kill(pid, "SIGTERM")
-        console.log(`✓ Stopped server (PID: ${pid})`)
-      }
-      unlinkSync(pidFile)
-    } catch {
-      // Ignore errors
-    }
-  }
   
   // Remove plugin directory
   if (existsSync(installPath)) {
@@ -312,14 +186,6 @@ function remove(): void {
     console.log(`✓ Removed: ${installPath}`)
   } else {
     console.log(`○ Not installed: ${installPath}`)
-  }
-  
-  // Remove startup script
-  if (existsSync(startupPath)) {
-    unlinkSync(startupPath)
-    console.log(`✓ Removed: ${startupPath}`)
-  } else {
-    console.log(`○ Not installed: ${startupPath}`)
   }
   
   // Remove skill
@@ -331,6 +197,9 @@ function remove(): void {
   console.log("\n=== Removal Complete ===\n")
   console.log("Note: Your local workflow configuration and database were NOT removed.")
   console.log(`They remain at: ${WORKFLOW_DIR}`)
+  console.log("")
+  console.log("To start fresh, you can manually delete:")
+  console.log(`  rm -rf ${WORKFLOW_DIR}`)
   console.log("")
 }
 
