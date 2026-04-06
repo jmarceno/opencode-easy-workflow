@@ -19,6 +19,8 @@ const WORKFLOW_MARKER = "#workflow"
 const GOALS_PLACEHOLDER = "[REPLACE THIS WITH THE TASK GOALS]"
 const REVIEW_SECTION_MARKER = "## Persisted Review Result"
 const REVIEW_COOLDOWN_MS = 30_000
+const TELEGRAM_POLLING_LOCK = "telegram-polling.lock"
+const TELEGRAM_CONFLICT_COOLDOWN_MS = 3600000 // 1 hour
 
 // ---- Types ----
 
@@ -127,6 +129,68 @@ function findProjectRoot(startDir: string): { projectRoot: string; isWorktreeCon
   }
   
   return { projectRoot: resolvedStart, isWorktreeContext: false }
+}
+
+function getPollingLockPath(projectRoot: string): string {
+  return join(projectRoot, ".opencode", "easy-workflow", TELEGRAM_POLLING_LOCK)
+}
+
+interface PollingLock {
+  pid: number
+  timestamp: number
+}
+
+function acquirePollingLock(projectRoot: string, logger: (msg: string) => void): boolean {
+  const lockPath = getPollingLockPath(projectRoot)
+  
+  if (existsSync(lockPath)) {
+    try {
+      const lockData = JSON.parse(readFileSync(lockPath, "utf-8")) as PollingLock
+      if (lockData.pid && lockData.timestamp) {
+        try {
+          process.kill(lockData.pid, 0)
+          logger(`[telegram-polling] Lock held by active process ${lockData.pid}, skipping polling`)
+          return false
+        } catch {
+          logger(`[telegram-polling] Stale lock detected (PID ${lockData.pid} not running), removing`)
+          try {
+            unlinkSync(lockPath)
+          } catch {
+            logger(`[telegram-polling] Failed to remove stale lock`)
+            return false
+          }
+        }
+      }
+    } catch {
+      try {
+        unlinkSync(lockPath)
+      } catch {
+        return false
+      }
+    }
+  }
+  
+  const lockData: PollingLock = { pid: process.pid, timestamp: Date.now() }
+  try {
+    writeFileSync(lockPath, JSON.stringify(lockData, null, 2))
+    logger(`[telegram-polling] Acquired polling lock`)
+    return true
+  } catch (err) {
+    logger(`[telegram-polling] Failed to acquire lock: ${err instanceof Error ? err.message : String(err)}`)
+    return false
+  }
+}
+
+function releasePollingLock(projectRoot: string, logger: (msg: string) => void): void {
+  const lockPath = getPollingLockPath(projectRoot)
+  try {
+    if (existsSync(lockPath)) {
+      unlinkSync(lockPath)
+      logger(`[telegram-polling] Released polling lock`)
+    }
+  } catch (err) {
+    logger(`[telegram-polling] Failed to release lock: ${err instanceof Error ? err.message : String(err)}`)
+  }
 }
 
 function loadBridgeConfig(directory: string): BridgeConfig | null {
@@ -685,6 +749,12 @@ function startTelegramPolling(
   const abortController = new AbortController()
   let lastUpdateId = 0
   let stopped = false
+  let conflictCooldownUntil = 0
+
+  if (!acquirePollingLock(config.projectDirectory, logger)) {
+    logger("[telegram-polling] Could not acquire polling lock, another instance may be running")
+    return () => {}
+  }
 
   const poll = async () => {
     const botUsername = await getBotUsername(config.botToken)
@@ -695,41 +765,51 @@ function startTelegramPolling(
     }
 
     while (!stopped && !abortController.signal.aborted) {
+      const now = Date.now()
+      if (now < conflictCooldownUntil) {
+        const remainingMs = conflictCooldownUntil - now
+        const remainingMin = Math.ceil(remainingMs / 60000)
+        logger(`[telegram-polling] Conflict cooldown active, resuming in ${remainingMin} minute(s)`)
+        await sleep(Math.min(remainingMs, 60000))
+        continue
+      }
+
       try {
-        // Use long polling with getUpdates
-        // offset parameter ensures we only get new updates
         const url = `https://api.telegram.org/bot${config.botToken}/getUpdates?offset=${lastUpdateId}&timeout=30`
         const response = await fetch(url, {
-          signal: AbortSignal.timeout(35000), // 35s timeout to ensure we catch abort
+          signal: AbortSignal.timeout(35000),
         })
 
         if (!response.ok) {
           const errorText = await response.text().catch(() => "unknown")
+          if (response.status === 409) {
+            logger(`[telegram-polling] 409 Conflict: another bot instance is polling. Stopping for 1 hour.`)
+            conflictCooldownUntil = Date.now() + TELEGRAM_CONFLICT_COOLDOWN_MS
+            releasePollingLock(config.projectDirectory, logger)
+            await sleep(TELEGRAM_CONFLICT_COOLDOWN_MS)
+            continue
+          }
           logger(`[telegram-polling] getUpdates failed: ${response.status} ${errorText}`)
-          await sleep(5000) // Back off on error
+          await sleep(5000)
           continue
         }
 
         const updates = await response.json() as { ok: boolean; result?: TelegramUpdate[] }
         if (!updates.ok || !updates.result || updates.result.length === 0) {
-          // No new updates, continue polling
           continue
         }
 
         for (const update of updates.result) {
           if (stopped || abortController.signal.aborted) break
 
-          // Validate the update
           const validation = await validateEwReply(update, config, botUsername)
           if (!validation.valid) {
-            // Not a valid EWF reply, skip but update offset
             if (update.update_id >= lastUpdateId) {
               lastUpdateId = update.update_id + 1
             }
             continue
           }
 
-          // Valid reply! Forward to new session
           await forwardTelegramReplyToSession(
             client,
             validation.userText!,
@@ -740,39 +820,37 @@ function startTelegramPolling(
             logger
           )
 
-          // Update offset so we don't process this again
           if (update.update_id >= lastUpdateId) {
             lastUpdateId = update.update_id + 1
           }
         }
       } catch (err) {
         if (err instanceof Error && err.name === "AbortError") {
-          // Shutdown requested
           break
         }
         logger(`[telegram-polling] Polling error: ${err instanceof Error ? err.message : String(err)}`)
-        await sleep(5000) // Back off on error
+        await sleep(5000)
       }
 
-      // Small delay between successful polls
       if (!stopped && !abortController.signal.aborted) {
         await sleep(1000)
       }
     }
 
     logger("[telegram-polling] Polling loop ended")
+    releasePollingLock(config.projectDirectory, logger)
   }
 
-  // Start polling in background
   poll().catch(err => {
     logger(`[telegram-polling] Fatal polling error: ${err instanceof Error ? err.message : String(err)}`)
+    releasePollingLock(config.projectDirectory, logger)
   })
 
-  // Return stop function
   return () => {
     stopped = true
     abortController.abort()
     logger("[telegram-polling] Stopping...")
+    releasePollingLock(config.projectDirectory, logger)
   }
 }
 
