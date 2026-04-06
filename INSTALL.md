@@ -119,7 +119,7 @@ opencode serve
 
 The plugin will automatically:
 - Initialize the SQLite database (`.opencode/easy-workflow/tasks.db`)
-- Start the kanban server on port 3789 (configurable)
+- Start the kanban server on port 3789 (configurable), bound to all network interfaces
 - Show a toast notification with the kanban board URL
 
 ### 6. Task-Setup Skill
@@ -141,7 +141,8 @@ The skill includes:
 Open your browser to:
 
 ```
-http://localhost:3789
+http://localhost:3789        # local access
+http://<machine-ip>:3789     # access from other devices on your network
 ```
 
 ## Directory Structure

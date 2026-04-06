@@ -1,7 +1,7 @@
 ---
 description: Workflow-owned state repair analysis
 mode: subagent
-model: opencode/qwen3.6-plus-free
+model: minimax/MiniMax-M2.7
 permission:
   edit: deny
   webfetch: deny

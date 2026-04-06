@@ -17,3 +17,8 @@ Output a structured plan with:
 - Task breakdown (title, description, dependencies, acceptance criteria)
 - Suggested task states (todo, in_progress, done)
 - Priority ordering
+
+**Timeout Requirements:**
+- Always specify explicit timeouts for all shell commands (e.g., `timeout: 60000` for 60 seconds)
+- Avoid unbounded command execution - never run commands without timeout protection
+- For long-running operations, use appropriate timeout values and handle timeout errors gracefully

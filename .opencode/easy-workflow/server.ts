@@ -474,6 +474,7 @@ export class KanbanServer {
     try {
       server = Bun.serve({
         port,
+        hostname: "0.0.0.0",
         fetch: (req, server) => {
           const url = new URL(req.url)
 
@@ -498,7 +499,7 @@ export class KanbanServer {
     }
 
     this.server = server
-    console.log(`[kanban] server started on http://localhost:${server.port}`)
+    console.log(`[kanban] server started on http://0.0.0.0:${server.port} (accessible on all network interfaces)`)
     return server.port
   }
 

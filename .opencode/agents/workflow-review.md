@@ -34,3 +34,8 @@ GAPS:
 
 RECOMMENDED_PROMPT:
 <specific prompt to address gaps, or "None" if no gaps>
+
+**Timeout Requirements:**
+- Always specify explicit timeouts for all shell commands (e.g., `timeout: 60000` for 60 seconds)
+- Avoid unbounded command execution - never run commands without timeout protection
+- For long-running operations, use appropriate timeout values and handle timeout errors gracefully

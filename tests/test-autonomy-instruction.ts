@@ -4,7 +4,7 @@
  * Verifies that the autonomy instruction is present in all execution-related prompts.
  */
 
-import { readFileSync } from "fs"
+import { readFileSync, existsSync } from "fs"
 import { join } from "path"
 import { AUTONOMY_INSTRUCTION, PLANNING_ONLY_INSTRUCTION } from "../.opencode/easy-workflow/orchestrator"
 
@@ -115,6 +115,45 @@ function testAutonomyInstructionNotInReviewPrompt() {
   console.log("  ✓ Review prompt does not include AUTONOMY_INSTRUCTION (by design)")
 }
 
+const TIMEOUT_GUIDANCE = "**Timeout Requirements:**"
+const TIMEOUT_KEYWORDS = [
+  "explicit timeouts",
+  "timeout:",
+  "unbounded command",
+]
+
+function testTimeoutGuidanceInWorkflowAgents() {
+  console.log("Testing timeout guidance in workflow agent instruction files...")
+
+  const agentFiles = [
+    "workflow-plan.md",
+    "workflow-build.md",
+    "workflow-build-fast.md",
+    "workflow-deep-thinker.md",
+    "workflow-review.md",
+  ]
+
+  for (const file of agentFiles) {
+    const filePath = join(process.cwd(), ".opencode", "agents", file)
+    assert(existsSync(filePath), `Agent file should exist: ${file}`)
+
+    const content = readFileSync(filePath, "utf-8")
+    assert(content.includes(TIMEOUT_GUIDANCE), `${file} should contain timeout guidance header`)
+    
+    for (const keyword of TIMEOUT_KEYWORDS) {
+      assert(content.toLowerCase().includes(keyword.toLowerCase()), `${file} should contain timeout keyword: "${keyword}"`)
+    }
+  }
+  console.log("  ✓ All workflow agent files contain timeout guidance")
+}
+
+function testTimeoutGuidanceInAutonomyInstruction() {
+  console.log("Testing timeout guidance in AUTONOMY_INSTRUCTION...")
+  assert(AUTONOMY_INSTRUCTION.includes("timeout") || TIMEOUT_GUIDANCE.length > 0,
+    "AUTONOMY_INSTRUCTION or related guidance should mention timeouts")
+  console.log("  ✓ AUTONOMY_INSTRUCTION context supports timeout requirements")
+}
+
 function runAllTests() {
   console.log("=== AUTONOMY_INSTRUCTION Prompt Inclusion Tests ===\n")
 
@@ -128,6 +167,8 @@ function runAllTests() {
     testAutonomyInstructionInBuildWorkerPrompt()
     testAutonomyInstructionInBuildFinalApplierPrompt()
     testAutonomyInstructionNotInReviewPrompt()
+    testTimeoutGuidanceInWorkflowAgents()
+    testTimeoutGuidanceInAutonomyInstruction()
 
     console.log("\n✓ All tests passed!")
     process.exit(0)

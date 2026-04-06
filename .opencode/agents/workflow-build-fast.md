@@ -15,3 +15,8 @@ Prioritize speed and direct execution for straightforward implementation tasks. 
 Continue end-to-end: execute and validate quickly. Make reasonable assumptions to keep momentum. Only ask questions when truly blocked by missing credentials, missing required external input, or an irreversible product decision.
 
 Keep responses minimal and action-focused.
+
+**Timeout Requirements:**
+- Always specify explicit timeouts for all shell commands (e.g., `timeout: 60000` for 60 seconds)
+- Avoid unbounded command execution - never run commands without timeout protection
+- For long-running operations, use appropriate timeout values and handle timeout errors gracefully

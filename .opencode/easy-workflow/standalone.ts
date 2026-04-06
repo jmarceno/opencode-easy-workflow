@@ -186,7 +186,7 @@ async function main() {
   console.log("============================================")
   console.log("  Server Started Successfully!")
   console.log("============================================")
-  console.log("  Kanban UI: http://localhost:" + port)
+  console.log("  Kanban UI: http://0.0.0.0:" + port + " (accessible on all network interfaces)")
   console.log("  OpenCode: " + config.opencodeServerUrl)
   console.log("============================================\n")
 

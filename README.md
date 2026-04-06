@@ -33,7 +33,7 @@ The bridge plugin (`.opencode/plugins/easy-workflow.ts`) will automatically conn
 
 ### 3. Access the Kanban board
 
-Open `http://localhost:3789` (or your configured port)
+Open `http://localhost:3789` locally, or `http://<machine-ip>:3789` from other devices on your network (e.g. `http://192.168.1.100:3789`)
 
 ## Mode 1: Workflow Review
 
@@ -80,7 +80,7 @@ Full task orchestration with dependency management, parallel execution, and auto
 
 ### Usage
 
-1. Open the Kanban board at `http://localhost:3789`
+1. Open the Kanban board at `http://localhost:3789` (or `http://<machine-ip>:3789` from other devices on your network)
 2. Create tasks with prompts and optional dependencies
 3. Click "Start" to execute
 
@@ -147,7 +147,7 @@ Backlog → Executing → Review → Done
 ### Creating Tasks via API
 
 ```bash
-# Create Task A
+# Create Task A (use http://localhost:3789 locally, or http://<machine-ip>:3789 from other devices)
 curl -X POST http://localhost:3789/api/tasks \
   -H "Content-Type: application/json" \
   -d '{
@@ -158,7 +158,7 @@ curl -X POST http://localhost:3789/api/tasks \
     "autoCommit": false
   }'
 
-# Create Task B (depends on A)
+# Create Task B (depends on A) - same URL pattern
 curl -X POST http://localhost:3789/api/tasks \
   -H "Content-Type: application/json" \
   -d '{
