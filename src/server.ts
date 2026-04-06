@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
 import { join } from "path"
 import { fileURLToPath } from "url"
 import { dirname } from "path"
+import { homedir } from "os"
 import { execFileSync } from "child_process"
 import type { WSMessage, ThinkingLevel, ExecutionStrategy, BestOfNConfig, SelectionMode } from "./types"
 import { KanbanDB } from "./db"
@@ -15,7 +16,8 @@ const MAX_EXPANDED_REVIEWER_RUNS = 4
 const MAX_TOTAL_INTERNAL_RUNS = 12
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const WORKFLOW_ROOT = join(__dirname, "..")
+const OPENCODE_DIR = join(homedir(), ".config", "opencode")
+const WORKFLOW_ROOT = OPENCODE_DIR
 const KANBAN_HTML = readFileSync(join(__dirname, "kanban", "index.html"), "utf-8")
 const REVIEW_AGENT_PATH = join(WORKFLOW_ROOT, "agents", "workflow-review.md")
 

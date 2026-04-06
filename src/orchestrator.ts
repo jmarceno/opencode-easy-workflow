@@ -2,6 +2,7 @@ import { readFileSync, existsSync, appendFileSync, mkdirSync, writeFileSync, unl
 import { join } from "path"
 import { fileURLToPath } from "url"
 import { dirname } from "path"
+import { homedir } from "os"
 import { execFileSync } from "child_process"
 import type { Task, Options, ReviewResult, ThinkingLevel, BestOfNConfig, BestOfNSlot, TaskRun, TaskCandidate, ReviewerOutput, AggregatedReviewResult, SelectionMode } from "./types"
 import type { WorkflowSessionKind } from "./db"
@@ -12,7 +13,8 @@ import { resolveExecutionTasks, resolveBatches } from "./execution-plan"
 import { getLatestTaggedOutput, getPlanExecutionEligibility } from "./task-state"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const WORKFLOW_ROOT = join(__dirname, "..")
+const OPENCODE_DIR = join(homedir(), ".config", "opencode")
+const WORKFLOW_ROOT = OPENCODE_DIR
 const TEMPLATE_PATH = join(WORKFLOW_ROOT, "easy-workflow", "workflow.md")
 const AGENTS_DIR = join(WORKFLOW_ROOT, "agents")
 const DEBUG_LOG_PATH = join(WORKFLOW_ROOT, "easy-workflow", "debug.log")
