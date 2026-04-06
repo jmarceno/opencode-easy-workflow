@@ -2255,7 +2255,7 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
       return
     }
 
-    const maxRuns = config.maxReviewRuns
+    const maxRuns = task.maxReviewRunsOverride ?? config.maxReviewRuns
     let reviewCount = task.reviewCount
     const client = this.getClient()
 
@@ -2289,6 +2289,11 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
             registerWorkflowSessionSafe(this.db, reviewSessionId, task.id, "review_scratch", this.ownerDirectory, task.skipPermissionAsking)
           }
 
+          // Mark review as actively running
+          this.db.updateTask(task.id, { reviewActivity: "running" })
+          const runningTask = this.db.getTask(task.id)!
+          this.server.broadcast({ type: "task_updated", payload: runningTask })
+
           const reviewAgentName = task.skipPermissionAsking ? "workflow-review-autonomous" : config.reviewAgent
           const promptText = [
             `@${reviewAgentName}`,
@@ -2307,6 +2312,9 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
             agent: reviewAgentName,
             parts: [{ type: "text", text: promptText }],
           })
+
+          // Review prompt completed - mark as idle
+          this.db.updateTask(task.id, { reviewActivity: "idle" })
 
           const result = unwrapResponseDataOrThrow<any>(response, "Review prompt")
           const reviewFailure = this.extractExecutionFailure(result)
@@ -2373,6 +2381,8 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
             this.server.broadcast({ type: "agent_output", payload: { taskId: task.id, output: `\n[review-fix-${reviewCount}] ${fixOutput}\n` } })
           }
         } finally {
+          // Ensure review activity is cleared when exiting the inner try block
+          this.db.updateTask(task.id, { reviewActivity: "idle" })
           if (options.autoDeleteReviewSessions && reviewSessionId) {
             await this.tryDeleteSession(client, reviewSessionId, "review", { taskId: task.id, taskName: task.name, phase: "review_loop" })
           }

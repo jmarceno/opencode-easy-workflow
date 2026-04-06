@@ -72,7 +72,14 @@ function rowToTask(row: any): Task {
     bestOfNConfig: row.best_of_n_config ? JSON.parse(row.best_of_n_config) : null,
     bestOfNSubstage: normalizeBestOfNSubstage(row.best_of_n_substage),
     skipPermissionAsking: row.skip_permission_asking !== 0,
+    maxReviewRunsOverride: row.max_review_runs_override ?? null,
+    smartRepairHints: row.smart_repair_hints ?? null,
+    reviewActivity: normalizeReviewActivity(row.review_activity),
   }
+}
+
+function normalizeReviewActivity(value: unknown): "idle" | "running" {
+  return value === "running" ? "running" : "idle"
 }
 
 function normalizeExecutionStrategy(value: unknown): ExecutionStrategy {
@@ -316,6 +323,21 @@ export class KanbanDB {
     const hasSkipPermissionAsking = tableInfo.some((col: any) => col.name === "skip_permission_asking")
     if (!hasSkipPermissionAsking) {
       this.db.exec("ALTER TABLE tasks ADD COLUMN skip_permission_asking INTEGER NOT NULL DEFAULT 1")
+    }
+
+    const hasMaxReviewRunsOverride = tableInfo.some((col: any) => col.name === "max_review_runs_override")
+    if (!hasMaxReviewRunsOverride) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN max_review_runs_override INTEGER")
+    }
+
+    const hasSmartRepairHints = tableInfo.some((col: any) => col.name === "smart_repair_hints")
+    if (!hasSmartRepairHints) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN smart_repair_hints TEXT")
+    }
+
+    const hasReviewActivity = tableInfo.some((col: any) => col.name === "review_activity")
+    if (!hasReviewActivity) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN review_activity TEXT NOT NULL DEFAULT 'idle'")
     }
 
     const optCount = this.db.query("SELECT COUNT(*) as cnt FROM options").get() as any
@@ -587,6 +609,9 @@ export class KanbanDB {
     bestOfNConfig?: BestOfNConfig | null
     bestOfNSubstage?: BestOfNSubstage
     skipPermissionAsking?: boolean
+    maxReviewRunsOverride?: number | null
+    smartRepairHints?: string | null
+    reviewActivity?: string
   }): Task {
     const id = Math.random().toString(36).substring(2, 10)
     const maxIdx = this.db.query("SELECT COALESCE(MAX(idx), -1) as max_idx FROM tasks").get() as any
@@ -594,8 +619,8 @@ export class KanbanDB {
     const now = Math.floor(Date.now() / 1000)
 
     this.db.prepare(`
-      INSERT INTO tasks (id, name, idx, prompt, branch, plan_model, execution_model, planmode, auto_approve_plan, review, auto_commit, delete_worktree, status, requirements, created_at, updated_at, thinking_level, execution_phase, awaiting_plan_approval, plan_revision_count, execution_strategy, best_of_n_config, best_of_n_substage, skip_permission_asking)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tasks (id, name, idx, prompt, branch, plan_model, execution_model, planmode, auto_approve_plan, review, auto_commit, delete_worktree, status, requirements, created_at, updated_at, thinking_level, execution_phase, awaiting_plan_approval, plan_revision_count, execution_strategy, best_of_n_config, best_of_n_substage, skip_permission_asking, max_review_runs_override, smart_repair_hints, review_activity)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       data.name,
@@ -621,6 +646,9 @@ export class KanbanDB {
       data.bestOfNConfig ? JSON.stringify(data.bestOfNConfig) : null,
       data.bestOfNSubstage ?? "idle",
       data.skipPermissionAsking !== false ? 1 : 0,
+      data.maxReviewRunsOverride ?? null,
+      data.smartRepairHints ?? null,
+      data.reviewActivity ?? "idle",
     )
 
     return this.getTask(id)!
@@ -655,6 +683,9 @@ export class KanbanDB {
     bestOfNConfig: BestOfNConfig | null
     bestOfNSubstage: BestOfNSubstage
     skipPermissionAsking: boolean
+    maxReviewRunsOverride: number | null
+    smartRepairHints: string | null
+    reviewActivity: "idle" | "running"
   }>): Task | null {
     // Capture old status before applying updates
     const oldTask = this.getTask(id)
@@ -691,6 +722,9 @@ export class KanbanDB {
     if (updates.bestOfNConfig !== undefined) { sets.push("best_of_n_config = ?"); values.push(updates.bestOfNConfig ? JSON.stringify(updates.bestOfNConfig) : null) }
     if (updates.bestOfNSubstage !== undefined) { sets.push("best_of_n_substage = ?"); values.push(updates.bestOfNSubstage) }
     if (updates.skipPermissionAsking !== undefined) { sets.push("skip_permission_asking = ?"); values.push(updates.skipPermissionAsking ? 1 : 0) }
+    if (updates.maxReviewRunsOverride !== undefined) { sets.push("max_review_runs_override = ?"); values.push(updates.maxReviewRunsOverride) }
+    if (updates.smartRepairHints !== undefined) { sets.push("smart_repair_hints = ?"); values.push(updates.smartRepairHints) }
+    if (updates.reviewActivity !== undefined) { sets.push("review_activity = ?"); values.push(updates.reviewActivity) }
 
     if (sets.length === 0) return oldTask
 
@@ -807,7 +841,7 @@ export class KanbanDB {
       this.db.prepare("DELETE FROM task_runs WHERE task_id = ?").run(task.id)
     }
     this.db.prepare(
-      "UPDATE tasks SET status = 'backlog', session_id = NULL, session_url = NULL, worktree_dir = NULL, agent_output = '', review_count = 0, error_message = NULL, completed_at = NULL, updated_at = unixepoch(), execution_phase = 'not_started', awaiting_plan_approval = 0, plan_revision_count = 0, best_of_n_substage = 'idle' WHERE status IN ('executing', 'review', 'failed', 'stuck')"
+      "UPDATE tasks SET status = 'backlog', session_id = NULL, session_url = NULL, worktree_dir = NULL, agent_output = '', review_count = 0, error_message = NULL, completed_at = NULL, updated_at = unixepoch(), execution_phase = 'not_started', awaiting_plan_approval = 0, plan_revision_count = 0, best_of_n_substage = 'idle', review_activity = 'idle' WHERE status IN ('executing', 'review', 'failed', 'stuck')"
     ).run()
   }
 

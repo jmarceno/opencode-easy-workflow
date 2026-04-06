@@ -1206,6 +1206,118 @@ async function testSingleTaskStartWithDependencies() {
   }
 }
 
+async function testReviewActivityField() {
+  console.log("\n\n=== Review Activity Field Test ===\n");
+  console.log("Test: Verify reviewActivity field persists correctly in database\n");
+
+  let server: { url: string; close(): void } | null = null;
+  let kanbanDb: KanbanDB | null = null;
+
+  try {
+    await cleanup();
+
+    if (existsSync(DB_PATH)) {
+      unlinkSync(DB_PATH);
+    }
+
+    console.log("Starting OpenCode server...");
+    const opencode = await createOpencode({ port: 0 });
+    server = opencode.server;
+    console.log(`Server started at ${server.url}`);
+
+    console.log("\nInitializing Kanban DB...");
+    kanbanDb = new KanbanDB(DB_PATH);
+    const kanbanPort = getFreePort();
+    kanbanDb.updateOptions({ port: kanbanPort });
+
+    // Test 1: New task should have reviewActivity = 'idle'
+    console.log("\n=== Test 1: New task has reviewActivity = 'idle' ===");
+    const newTask = kanbanDb.createTask({
+      name: "Review Activity Test Task",
+      prompt: "Test prompt",
+      review: true,
+    });
+    console.log(`Created task: ${newTask.id}`);
+    console.log(`reviewActivity: ${newTask.reviewActivity}`);
+    if (newTask.reviewActivity !== "idle") {
+      throw new Error(`Expected reviewActivity to be 'idle', got '${newTask.reviewActivity}'`);
+    }
+    console.log("✓ New task has reviewActivity = 'idle'");
+
+    // Test 2: Update task to reviewActivity = 'running'
+    console.log("\n=== Test 2: Update task to reviewActivity = 'running' ===");
+    const updatedTask = kanbanDb.updateTask(newTask.id, {
+      status: "review",
+      reviewActivity: "running",
+    });
+    console.log(`Updated task: ${updatedTask?.id}`);
+    console.log(`reviewActivity: ${updatedTask?.reviewActivity}`);
+    if (updatedTask?.reviewActivity !== "running") {
+      throw new Error(`Expected reviewActivity to be 'running', got '${updatedTask?.reviewActivity}'`);
+    }
+    console.log("✓ Task updated to reviewActivity = 'running'");
+
+    // Test 3: Task retrieved from DB should have correct reviewActivity
+    console.log("\n=== Test 3: Task retrieved from DB has correct reviewActivity ===");
+    const retrievedTask = kanbanDb.getTask(newTask.id);
+    console.log(`Retrieved task: ${retrievedTask?.id}`);
+    console.log(`reviewActivity: ${retrievedTask?.reviewActivity}`);
+    if (retrievedTask?.reviewActivity !== "running") {
+      throw new Error(`Expected reviewActivity to be 'running', got '${retrievedTask?.reviewActivity}'`);
+    }
+    console.log("✓ Task retrieved from DB has reviewActivity = 'running'");
+
+    // Test 4: Reset tasks should set reviewActivity back to 'idle'
+    console.log("\n=== Test 4: Reset tasks sets reviewActivity to 'idle' ===");
+    kanbanDb.resetTasksForBacklog();
+    const resetTask = kanbanDb.getTask(newTask.id);
+    console.log(`Reset task: ${resetTask?.id}`);
+    console.log(`reviewActivity: ${resetTask?.reviewActivity}`);
+    console.log(`status: ${resetTask?.status}`);
+    if (resetTask?.reviewActivity !== "idle") {
+      throw new Error(`Expected reviewActivity to be 'idle' after reset, got '${resetTask?.reviewActivity}'`);
+    }
+    console.log("✓ Reset task has reviewActivity = 'idle'");
+
+    // Test 5: Task in review awaiting plan approval should have reviewActivity = 'idle'
+    console.log("\n=== Test 5: Task in review awaiting plan approval has reviewActivity = 'idle' ===");
+    const planTask = kanbanDb.createTask({
+      name: "Plan Approval Test Task",
+      prompt: "Test prompt",
+      planmode: true,
+      review: true,
+    });
+    console.log(`Created plan task: ${planTask.id}`);
+    
+    const planTaskUpdated = kanbanDb.updateTask(planTask.id, {
+      status: "review",
+      awaitingPlanApproval: true,
+      executionPhase: "plan_complete_waiting_approval",
+    });
+    console.log(`Updated plan task: ${planTaskUpdated?.id}`);
+    console.log(`reviewActivity: ${planTaskUpdated?.reviewActivity}`);
+    console.log(`awaitingPlanApproval: ${planTaskUpdated?.awaitingPlanApproval}`);
+    if (planTaskUpdated?.reviewActivity !== "idle") {
+      throw new Error(`Expected reviewActivity to be 'idle' for plan approval task, got '${planTaskUpdated?.reviewActivity}'`);
+    }
+    console.log("✓ Plan approval task has reviewActivity = 'idle' (waiting for human)");
+
+    await cleanup();
+    kanbanDb.close();
+    server.close();
+
+    console.log("\n✓ ALL REVIEW ACTIVITY TESTS PASSED");
+    process.exit(0);
+  } catch (error) {
+    console.error("\n✗ TEST FAILED");
+    console.error(error);
+    await cleanup();
+    if (kanbanDb) kanbanDb.close();
+    if (server) server.close();
+    process.exit(1);
+  }
+}
+
 // Run plan-mode tests if PLAN_MODE_TEST env is set
 if (process.env.SINGLE_TASK_START_TEST === "1") {
   testSingleTaskStartWithDependencies();
@@ -1215,6 +1327,8 @@ if (process.env.SINGLE_TASK_START_TEST === "1") {
   testPlanModeWithDependencies();
 } else if (process.env.PLAN_MODE_TEST === "3") {
   testPlanModeRevisionLoop();
+} else if (process.env.REVIEW_ACTIVITY_TEST === "1") {
+  testReviewActivityField();
 } else {
   main();
 }

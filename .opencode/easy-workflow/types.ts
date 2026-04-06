@@ -72,6 +72,9 @@ export interface Task {
   bestOfNConfig: BestOfNConfig | null
   bestOfNSubstage: BestOfNSubstage
   skipPermissionAsking: boolean
+  maxReviewRunsOverride: number | null
+  smartRepairHints: string | null
+  reviewActivity: "idle" | "running"
 }
 
 export interface TaskRun {

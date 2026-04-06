@@ -1293,12 +1293,168 @@ async function testKeyboardShortcutsDoNotFireInModalsOrInputs() {
   }
 }
 
+async function testReviewActivityUI() {
+  console.log("\n=== Review Activity UI Test ===");
+
+  const tempDir = mkdtempSync(join(tmpdir(), "easy-workflow-review-activity-"));
+  const dbPath = join(tempDir, "tasks.db");
+  const reportDir = join(process.cwd(), ".opencode", "easy-workflow", "test-artifacts");
+  mkdirSync(reportDir, { recursive: true });
+  const reportPath = join(reportDir, `kanban-review-activity-${Date.now()}.json`);
+
+  const report = {
+    taskId: null as string | null,
+    reviewActivityIdleBadges: [] as string[],
+    reviewActivityRunningSpinners: [] as string[],
+    passed: false,
+    error: null as string | null,
+  };
+
+  let opencode: Awaited<ReturnType<typeof createOpencode>> | null = null;
+  let kanbanDb: KanbanDB | null = null;
+  let kanbanServer: KanbanServer | null = null;
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+
+  try {
+    // Start OpenCode server
+    opencode = await createOpencode({ port: 0 });
+    report.kanbanUrl = `http://localhost:${0}`;
+    console.log(`OpenCode server started`);
+
+    // Initialize Kanban
+    kanbanDb = new KanbanDB(dbPath);
+    const kanbanPort = getFreePort();
+    kanbanDb.updateOptions({ port: kanbanPort });
+
+    let isExecuting = false;
+    kanbanServer = new KanbanServer(kanbanDb, {
+      onStart: async () => { isExecuting = true; },
+      onStop: () => { isExecuting = false; },
+      getExecuting: () => isExecuting,
+      getStartError: () => "not ready",
+      getServerUrl: () => opencode?.server.url || null,
+    });
+
+    const startedKanbanPort = kanbanServer.start();
+    const kanbanUrl = `http://localhost:${startedKanbanPort}`;
+    report.kanbanUrl = kanbanUrl;
+    console.log(`Kanban server started on port ${startedKanbanPort}`);
+
+    // Create a task with review enabled
+    console.log("\nCreating task with review enabled...");
+    const createResponse = await fetch(`${kanbanUrl}/api/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Review Activity Test Task",
+        prompt: "Test prompt",
+        review: true,
+        autoCommit: false,
+      }),
+    });
+
+    if (!createResponse.ok) {
+      throw new Error(`Failed to create task: ${createResponse.statusText()}`);
+    }
+
+    const createdTask = await createResponse.json();
+    report.taskId = createdTask.id;
+    console.log(`Created task: ${createdTask.id}`);
+
+    // Launch browser
+    browser = await chromium.launch({ headless: true });
+    const context = await browser.newContext();
+    const page = await context.newPage();
+
+    // Load the kanban UI
+    await page.goto(kanbanUrl);
+    await page.waitForTimeout(1000);
+
+    // Test 1: Task in review with reviewActivity = 'idle' should show "waiting for human" badge
+    console.log("\n=== Test 1: reviewActivity = 'idle' shows 'waiting for human' badge ===");
+    
+    // Update task to review status with reviewActivity = 'idle'
+    await fetch(`${kanbanUrl}/api/tasks/${createdTask.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "review", reviewActivity: "idle" }),
+    });
+
+    await page.reload();
+    await page.waitForTimeout(1000);
+
+    // Check for "waiting for human" badge in the review column
+    const waitingBadge = await page.locator(".card").filter({ hasText: "Review Activity Test Task" }).filter({ hasText: "waiting for human" }).count();
+    console.log(`Found ${waitingBadge} card(s) with 'waiting for human' badge`);
+    if (waitingBadge === 0) {
+      throw new Error("Expected 'waiting for human' badge when reviewActivity = 'idle'");
+    }
+    report.reviewActivityIdleBadges.push("waiting for human badge present");
+    console.log("✓ Task shows 'waiting for human' badge when reviewActivity = 'idle'");
+
+    // Verify no "reviewing" spinner when reviewActivity = 'idle'
+    const reviewingSpinner = await page.locator(".card").filter({ hasText: "Review Activity Test Task" }).locator(".spinner").count();
+    console.log(`Found ${reviewingSpinner} spinner(s) when reviewActivity = 'idle'`);
+    if (reviewingSpinner > 0) {
+      throw new Error("Should not show reviewing spinner when reviewActivity = 'idle'");
+    }
+    console.log("✓ No reviewing spinner when reviewActivity = 'idle'");
+
+    // Test 2: Task in review with reviewActivity = 'running' should show "reviewing" spinner
+    console.log("\n=== Test 2: reviewActivity = 'running' shows 'reviewing' spinner ===");
+    
+    // Update task to review status with reviewActivity = 'running'
+    await fetch(`${kanbanUrl}/api/tasks/${createdTask.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "review", reviewActivity: "running" }),
+    });
+
+    await page.reload();
+    await page.waitForTimeout(1000);
+
+    // Check for "reviewing" text and spinner in the review column
+    const reviewingLabel = await page.locator(".card").filter({ hasText: "Review Activity Test Task" }).filter({ hasText: "reviewing" }).count();
+    console.log(`Found ${reviewingLabel} card(s) with 'reviewing' label`);
+    if (reviewingLabel === 0) {
+      throw new Error("Expected 'reviewing' label when reviewActivity = 'running'");
+    }
+    report.reviewActivityRunningSpinners.push("reviewing label present");
+    console.log("✓ Task shows 'reviewing' label when reviewActivity = 'running'");
+
+    // Check for spinner
+    const spinnerCount = await page.locator(".card").filter({ hasText: "Review Activity Test Task" }).locator(".spinner").count();
+    console.log(`Found ${spinnerCount} spinner(s) when reviewActivity = 'running'`);
+    if (spinnerCount === 0) {
+      throw new Error("Expected spinner when reviewActivity = 'running'");
+    }
+    console.log("✓ Task shows spinner when reviewActivity = 'running'");
+
+    report.passed = true;
+    console.log("\n✓ ALL REVIEW ACTIVITY UI TESTS PASSED");
+  } catch (err) {
+    report.error = err instanceof Error ? err.message : String(err);
+    console.error("\n✗ TEST FAILED");
+    console.error(report.error);
+    process.exitCode = 1;
+  } finally {
+    writeFileSync(reportPath, JSON.stringify(report, null, 2), "utf-8");
+    if (browser) await browser.close();
+    if (kanbanServer) kanbanServer.stop();
+    if (kanbanDb) kanbanDb.close();
+    if (opencode) opencode.server.close();
+    cleanupTempDir(tempDir);
+  }
+}
+
 if (process.env.PLAN_UI_TEST === "1") {
   testPlanModeApprovalUI();
 } else if (process.env.SKIP_PERM_TEST === "1") {
   testSkipPermissionAskingUI();
 } else if (process.env.SHORTCUTS_TEST === "1") {
   testKeyboardShortcutsDoNotFireInModalsOrInputs();
+} else if (process.env.REVIEW_ACTIVITY_UI_TEST === "1") {
+  testReviewActivityUI();
 } else {
   await main();
 }

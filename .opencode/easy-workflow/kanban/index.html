@@ -1652,6 +1652,15 @@ function renderCard(task, colStatus) {
     spinner.className = 'spinner'
     header.insertBefore(spinner, title)
   }
+  if (task.status === 'review' && task.reviewActivity === 'running') {
+    const spinner = document.createElement('span')
+    spinner.className = 'spinner'
+    header.insertBefore(spinner, title)
+    const label = document.createElement('span')
+    label.style.cssText = 'font-size:10px;color:var(--accent);margin-right:4px;'
+    label.textContent = 'reviewing'
+    header.insertBefore(label, spinner)
+  }
   if (task.status === 'stuck') {
     const att = document.createElement('span')
     att.className = 'attention'
@@ -1773,6 +1782,14 @@ function renderCard(task, colStatus) {
     const b = document.createElement('span')
     b.className = task.status === 'stuck' ? 'badge badge-stuck' : 'badge badge-review'
     b.textContent = `review ${task.reviewCount}`
+    meta.appendChild(b)
+  }
+  if (task.status === 'review' && task.reviewActivity === 'idle' && !task.awaitingPlanApproval) {
+    const b = document.createElement('span')
+    b.className = 'badge'
+    b.style.background = 'rgba(139,92,246,.15)'
+    b.style.color = '#c4b5fd'
+    b.textContent = 'waiting for human'
     meta.appendChild(b)
   }
   const depNames = task.requirements

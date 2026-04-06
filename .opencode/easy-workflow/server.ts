@@ -395,14 +395,14 @@ export class KanbanServer {
 
     const options = this.db.getOptions()
     const client = createV2Client(serverUrl)
-    const prompt = [
+    const promptParts = [
       "You repair workflow task states.",
       "Choose exactly one action from this list and return JSON only:",
       "queue_implementation, restore_plan_approval, reset_backlog, mark_done, fail_task",
       "Prefer queue_implementation when a usable [plan] exists and the task should keep moving.",
       "Prefer mark_done only when the task output indicates the work is already complete or should be closed manually.",
       "Use restore_plan_approval only when the task should remain in explicit human plan approval.",
-      "Use reset_backlog when the task should be rerun from scratch.",
+      "Use reset_backlog when the task should rerun from scratch.",
       "Use fail_task when the state is invalid and should stay visible with an actionable error.",
       "IMPORTANT: If choosing mark_done and task.autoCommit is true, you MUST also merge the worktree into the target branch and commit the work.",
       "  - Use the commit prompt template to drive the commit: stage changes, commit in worktree, cherry-pick to base branch, delete worktree.",
@@ -413,7 +413,13 @@ export class KanbanServer {
       `Latest captured plan:\n${getLatestTaggedOutput(task.agentOutput, "plan") || "<none>"}`,
       `Latest revision request:\n${getLatestTaggedOutput(task.agentOutput, "user-revision-request") || "<none>"}`,
       `Latest execution output:\n${getLatestTaggedOutput(task.agentOutput, "exec") || "<none>"}`,
-    ].join("\n\n")
+    ]
+
+    if (task.smartRepairHints) {
+      promptParts.push("", `Additional user instructions (prioritize these):\n${task.smartRepairHints}`)
+    }
+
+    const prompt = promptParts.join("\n\n")
 
     const sessionResponse = await client.session.create({
       title: `Repair task state: ${task.name}`,
@@ -1076,6 +1082,47 @@ export class KanbanServer {
           await this.maybeAutoStartExecution()
         }
         return this.json({ ok: true, action, reason, task: this.db.getTask(taskId) })
+      }
+
+      // Task review limits override
+      const reviewLimitsMatch = method === "PATCH"
+        ? url.pathname.match(/^\/api\/tasks\/([a-z0-9]+)\/review-limits$/)
+        : null
+      if (reviewLimitsMatch) {
+        const taskId = reviewLimitsMatch[1]
+        const task = this.db.getTask(taskId)
+        if (!task) {
+          return this.json({ error: "Task not found" }, 404)
+        }
+        if (isTaskMutationLockedWhileExecuting(this.getExecuting(), task.status)) {
+          return this.json({ error: getExecutionMutationError() }, 409)
+        }
+
+        const body = await req.json().catch(() => ({}))
+        const maxReviewRunsOverride = body.maxReviewRunsOverride === null
+          ? null
+          : typeof body.maxReviewRunsOverride === "number"
+            ? Math.max(1, body.maxReviewRunsOverride)
+            : undefined
+        const smartRepairHints = typeof body.smartRepairHints === "string" ? body.smartRepairHints : undefined
+
+        const updates: Partial<{
+          maxReviewRunsOverride: number | null
+          smartRepairHints: string | null
+        }> = {}
+        if (maxReviewRunsOverride !== undefined) updates.maxReviewRunsOverride = maxReviewRunsOverride
+        if (smartRepairHints !== undefined) updates.smartRepairHints = smartRepairHints
+
+        if (Object.keys(updates).length === 0) {
+          return this.json({ error: "No valid fields to update" }, 400)
+        }
+
+        const updated = this.db.updateTask(taskId, updates)
+        if (!updated) {
+          return this.json({ error: "Task not found" }, 404)
+        }
+        this.broadcast({ type: "task_updated", payload: updated })
+        return this.json({ ok: true, task: updated })
       }
 
       // Task runs
