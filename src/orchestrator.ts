@@ -1082,7 +1082,7 @@ export class Orchestrator {
       // 6. Review loop
       if (currentTask.review) {
         const reviewConfig = loadReviewConfig()
-        await this.runReviewLoop(currentTask, sessionId, reviewConfig, options)
+        await this.runReviewLoop(currentTask, sessionId, reviewConfig, options, worktreeInfo)
         currentTask = this.getTaskOrThrow(task.id, "refreshing task state after review", task.name)
         lastKnownTask = currentTask
         if (currentTask.status === "stuck") {
@@ -2297,7 +2297,7 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
     return prompt
   }
 
-  private async runReviewLoop(task: Task, sessionId: string, config: ReviewConfig, options: Options) {
+  private async runReviewLoop(task: Task, sessionId: string, config: ReviewConfig, options: Options, worktreeInfo?: any) {
     if (!config.reviewAgent) {
       appendDebugLog("warn", "no review agent configured, skipping review", { taskId: task.id })
       return
@@ -2309,16 +2309,22 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
 
     const maxRuns = task.maxReviewRunsOverride ?? config.maxReviewRuns
     let reviewCount = task.reviewCount
-    const client = this.getClient()
+    const effectiveWorktreeDir = worktreeInfo?.directory || this.worktreeDir
+    const resolvedServerUrl = this.resolveServerUrl()
+    const client = this.getClient(effectiveWorktreeDir, resolvedServerUrl)
 
-    // Create a temporary review file for this task
-    const reviewFilePath = join(WORKFLOW_ROOT, "easy-workflow", `review-${task.id}.md`)
+    // Create a temporary review file for this task in the worktree
+    const reviewDir = join(effectiveWorktreeDir, ".opencode", "easy-workflow")
+    mkdirSync(reviewDir, { recursive: true })
+    const reviewFilePath = join(reviewDir, `review-${task.id}.md`)
+    appendDebugLog("info", "review file path", { taskId: task.id, worktreeDir: effectiveWorktreeDir, reviewDir, reviewFilePath })
     const goalsContent = `## Task Goals\n\n${task.prompt}\n\n## Task Name\n\n${task.name}`
     const reviewContent = readFileSync(TEMPLATE_PATH, "utf-8")
       .replace("[REPLACE THIS WITH THE TASK GOALS]", goalsContent)
 
     try {
       writeFileSync(reviewFilePath, reviewContent, "utf-8")
+      appendDebugLog("info", "review file written", { taskId: task.id, reviewFilePath, fileExists: existsSync(reviewFilePath) })
 
       while (reviewCount < maxRuns) {
         // Move to review column
@@ -2338,8 +2344,7 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
           reviewSessionId = reviewSession?.id
 
           if (reviewSessionId) {
-            const resolvedServerUrl = this.resolveServerUrl()
-            const reviewSessionUrl = buildSessionUrl(resolvedServerUrl, this.worktreeDir, reviewSessionId)
+            const reviewSessionUrl = buildSessionUrl(resolvedServerUrl, effectiveWorktreeDir, reviewSessionId)
             this.db.updateTask(task.id, { sessionId: reviewSessionId, sessionUrl: reviewSessionUrl })
             registerWorkflowSessionSafe(this.db, reviewSessionId, task.id, "review_scratch", this.ownerDirectory, task.skipPermissionAsking)
           }
@@ -2351,23 +2356,46 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
 
           const reviewAgentName = task.skipPermissionAsking ? "workflow-review-autonomous" : config.reviewAgent
           const promptText = [
-            `@${reviewAgentName}`,
+            `Review the workflow run file at: ${reviewFilePath}`,
             "",
-            "Review the current repository state against the task below.",
-            "Use the task goals as the only source of truth.",
+            "Use the run file as the source of truth for review.",
             "Do not rely on prior session history.",
             "Inspect the current codebase and branch state.",
-            "",
-            `Task: ${task.name}`,
-            `Goals: ${task.prompt}`,
           ].join("\n")
 
-          const response = await client.session.prompt({
-            sessionID: reviewSessionId,
-            agent: reviewAgentName,
-            ...(options.reviewModel !== "default" ? { model: options.reviewModel } : {}),
-            parts: [{ type: "text", text: promptText }],
-          })
+          const modelSelection = options.reviewModel !== "default" ? parseModelSelection(options.reviewModel) : null
+          appendDebugLog("info", "sending review prompt", { taskId: task.id, reviewSessionId, reviewAgentName, model: modelSelection || "default" })
+
+          let response: any
+          try {
+            response = await client.session.prompt({
+              sessionID: reviewSessionId,
+              agent: reviewAgentName,
+              ...(modelSelection ? { model: modelSelection } : {}),
+              parts: [{ type: "text", text: promptText }],
+            })
+          } catch (promptErr) {
+            // SDK throws raw response objects with {data, error, success} on error
+            // Extract the actual error message from the response object
+            let errorMsg = "Unknown error"
+            if (promptErr && typeof promptErr === 'object') {
+              if (typeof promptErr.error === 'string') {
+                errorMsg = promptErr.error
+              } else if (promptErr.error && typeof promptErr.error === 'object') {
+                errorMsg = getAssistantErrorMessage(promptErr.error)
+              } else if (promptErr.message) {
+                errorMsg = String(promptErr.message)
+              } else {
+                errorMsg = JSON.stringify(promptErr)
+              }
+            } else if (promptErr instanceof Error) {
+              errorMsg = promptErr.message
+            }
+            appendDebugLog("error", "review prompt failed", { taskId: task.id, reviewSessionId, errorMessage: errorMsg })
+            throw new Error(`Review prompt failed: ${errorMsg}`)
+          }
+
+          appendDebugLog("info", "review prompt completed", { taskId: task.id, reviewSessionId, hasResponse: !!response })
 
           // Review prompt completed - mark as idle
           this.db.updateTask(task.id, { reviewActivity: "idle" })
