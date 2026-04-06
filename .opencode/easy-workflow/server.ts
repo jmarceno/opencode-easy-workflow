@@ -399,15 +399,21 @@ export class KanbanServer {
       throw new Error("Repair model is not configured. Please set a Repair Model in options before running the workflow.")
     }
     const client = createV2Client(serverUrl)
+    const defaultMaxReviewRuns = 2
+    const effectiveMaxReviewRuns = task.maxReviewRunsOverride ?? defaultMaxReviewRuns
+    const reviewLimitExceeded = task.reviewCount >= effectiveMaxReviewRuns
+
     const promptParts = [
       "You repair workflow task states.",
       "Choose exactly one action from this list and return JSON only:",
-      "queue_implementation, restore_plan_approval, reset_backlog, mark_done, fail_task",
+      "queue_implementation, restore_plan_approval, reset_backlog, mark_done, fail_task, continue_with_more_reviews",
       "Prefer queue_implementation when a usable [plan] exists and the task should keep moving.",
       "Prefer mark_done only when the task output indicates the work is already complete or should be closed manually.",
       "Use restore_plan_approval only when the task should remain in explicit human plan approval.",
       "Use reset_backlog when the task should rerun from scratch.",
       "Use fail_task when the state is invalid and should stay visible with an actionable error.",
+      "Use continue_with_more_reviews when the task is stuck due to review limits (reviewCount >= maxReviewRuns) but the gaps appear fixable with another attempt. This will reset the review counter and allow more review cycles.",
+      `Current review status: reviewCount=${task.reviewCount}, maxReviewRuns=${effectiveMaxReviewRuns}${reviewLimitExceeded ? " (LIMIT EXCEEDED)" : ""}`,
       "IMPORTANT: If choosing mark_done and task.autoCommit is true, you MUST also merge the worktree into the target branch and commit the work.",
       "  - Use the commit prompt template to drive the commit: stage changes, commit in worktree, cherry-pick to base branch, delete worktree.",
       "  - Use {{base_ref}} as the placeholder in the commit prompt (will be replaced at runtime).",
@@ -420,7 +426,7 @@ export class KanbanServer {
     ]
 
     if (task.smartRepairHints) {
-      promptParts.push("", `Additional user instructions (prioritize these):\n${task.smartRepairHints}`)
+      promptParts.push("", `★★★ HIGH PRIORITY - Additional user instructions (MUST prioritize these):\n${task.smartRepairHints}`)
     }
 
     const prompt = promptParts.join("\n\n")
@@ -462,7 +468,7 @@ export class KanbanServer {
     if (!parsed.action || !parsed.reason) {
       throw new Error("Smart repair returned incomplete output")
     }
-    if (!["queue_implementation", "restore_plan_approval", "reset_backlog", "mark_done", "fail_task"].includes(parsed.action)) {
+    if (!["queue_implementation", "restore_plan_approval", "reset_backlog", "mark_done", "fail_task", "continue_with_more_reviews"].includes(parsed.action)) {
       throw new Error(`Smart repair returned unsupported action: ${parsed.action}`)
     }
     return {
@@ -1060,11 +1066,19 @@ export class KanbanServer {
           return this.json({ error: getExecutionMutationError() }, 409)
         }
 
-        let requestedAction: TaskRepairAction | "smart" | undefined
+        let requestedAction: TaskRepairAction | "smart" | "continue_with_more_reviews" | undefined
+        let additionalReviewCount = 2
+        let smartRepairHints: string | undefined
         try {
           const body = await req.json()
           if (body && typeof body.action === "string") {
-            requestedAction = body.action as TaskRepairAction | "smart"
+            requestedAction = body.action as TaskRepairAction | "smart" | "continue_with_more_reviews"
+          }
+          if (typeof body.additionalReviewCount === "number" && body.additionalReviewCount >= 1) {
+            additionalReviewCount = Math.floor(body.additionalReviewCount)
+          }
+          if (typeof body.smartRepairHints === "string" && body.smartRepairHints.trim()) {
+            smartRepairHints = body.smartRepairHints.trim()
           }
         } catch {
           // action is optional
@@ -1073,6 +1087,32 @@ export class KanbanServer {
         let action: TaskRepairAction
         let reason: string
         let errorMessage: string | undefined
+
+        // Special handling for continue_with_more_reviews action
+        if (requestedAction === "continue_with_more_reviews") {
+          const currentMax = task.maxReviewRunsOverride ?? 2
+          const newMaxReviewRunsOverride = task.reviewCount + additionalReviewCount
+          const repairNote = `[repair] action=continue_with_more_reviews reason=User increased review limit to allow more review cycles\n`
+
+          const updated = this.db.updateTask(taskId, {
+            status: "executing",
+            reviewCount: 0,
+            maxReviewRunsOverride: newMaxReviewRunsOverride,
+            errorMessage: null,
+            completedAt: null,
+            ...(smartRepairHints !== undefined ? { smartRepairHints } : {}),
+          })
+          if (!updated) {
+            return this.json({ error: "Task not found" }, 404)
+          }
+          this.db.appendAgentOutput(taskId, repairNote)
+          if (smartRepairHints) {
+            this.db.appendAgentOutput(taskId, `[repair-hints] ${smartRepairHints}\n`)
+          }
+          this.broadcast({ type: "task_updated", payload: updated })
+          await this.maybeAutoStartExecution()
+          return this.json({ ok: true, action: "continue_with_more_reviews", reason: `Increased review limit from ${currentMax} to ${newMaxReviewRunsOverride} and resumed execution`, task: this.db.getTask(taskId) })
+        }
 
         if (!requestedAction || requestedAction === "smart") {
           const eligibility = getPlanExecutionEligibility(task)
@@ -1157,6 +1197,66 @@ export class KanbanServer {
         }
         this.broadcast({ type: "task_updated", payload: updated })
         return this.json({ ok: true, task: updated })
+      }
+
+      // Task review status
+      const reviewStatusMatch = method === "GET"
+        ? url.pathname.match(/^\/api\/tasks\/([a-z0-9]+)\/review-status$/)
+        : null
+      if (reviewStatusMatch) {
+        const taskId = reviewStatusMatch[1]
+        const task = this.db.getTask(taskId)
+        if (!task) {
+          return this.json({ error: "Task not found" }, 404)
+        }
+
+        const defaultMaxReviewRuns = 2
+        const effectiveMaxReviewRuns = task.maxReviewRunsOverride ?? defaultMaxReviewRuns
+        const reviewLimitExceeded = task.reviewCount >= effectiveMaxReviewRuns
+
+        // Parse review history from agentOutput
+        const reviewHistory: Array<{
+          cycle: number
+          status: string
+          gaps: string[]
+          recommendedPrompt: string | null
+        }> = []
+        const reviewFixPattern = /\[review-fix-(\d+)\]\s*([\s\S]*?)(?=\n\[review-fix-\d+\]|\n\[exec\]|\n\[plan\]|$)/g
+        let match
+        while ((match = reviewFixPattern.exec(task.agentOutput)) !== null) {
+          const cycle = parseInt(match[1], 10)
+          const content = match[2] || ""
+
+          // Try to extract status and gaps from review-fix content
+          const statusMatch = content.match(/STATUS:\s*(\w+)/i)
+          const gapsMatch = content.match(/GAPS:\s*([\s\S]+?)(?=\nRECOMMENDED_PROMPT:|$)/i)
+          const recommendedMatch = content.match(/RECOMMENDED_PROMPT:\s*([\s\S]+?)$/i)
+
+          const status = statusMatch?.[1]?.toLowerCase() || "unknown"
+          const gapsText = gapsMatch?.[1] || ""
+          const gaps = gapsText
+            .split("\n")
+            .map((l: string) => l.trim())
+            .filter((l: string) => l.startsWith("- ") || l.startsWith("* "))
+            .map((l: string) => l.replace(/^[-*]\s+/, "").trim())
+            .filter((g: string) => g.length > 0 && g.toLowerCase() !== "none")
+          const recommendedPrompt = recommendedMatch?.[1]?.trim() || null
+
+          reviewHistory.push({ cycle, status, gaps, recommendedPrompt })
+        }
+
+        // Sort by cycle number
+        reviewHistory.sort((a, b) => a.cycle - b.cycle)
+
+        return this.json({
+          reviewCount: task.reviewCount,
+          maxReviewRuns: defaultMaxReviewRuns,
+          maxReviewRunsOverride: task.maxReviewRunsOverride,
+          effectiveMaxReviewRuns,
+          reviewLimitExceeded,
+          smartRepairHints: task.smartRepairHints,
+          reviewHistory,
+        })
       }
 
       // Task runs

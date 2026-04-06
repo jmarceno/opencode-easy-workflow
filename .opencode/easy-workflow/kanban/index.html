@@ -231,6 +231,7 @@ sl-icon-button::part(base) {
 .badge { font-size: 11px; padding: 2px 6px; border-radius: 4px; background: var(--surface); color: var(--text-dim); display: inline-flex; align-items: center; gap: 4px; }
 .badge-dep { background: rgba(47,125,247,.15); color: var(--accent); }
 .badge-review { background: rgba(210,153,34,.15); color: var(--yellow); }
+.badge-review-warn { background: rgba(218,54,51,.15); color: var(--red); }
 .badge-stuck { background: rgba(218,54,51,.15); color: var(--red); }
 .badge-plan { background: rgba(136,98,246,.15); color: #8b5cf6; }
 .badge-approval { background: rgba(210,153,34,.15); color: var(--yellow); }
@@ -1809,8 +1810,19 @@ function renderCard(task, colStatus) {
   }
   if (task.review) {
     const b = document.createElement('span')
-    b.className = task.status === 'stuck' ? 'badge badge-stuck' : 'badge badge-review'
-    b.textContent = `review ${task.reviewCount}`
+    const effectiveMax = task.maxReviewRunsOverride ?? 2
+    const isNearLimit = task.reviewCount >= effectiveMax - 1
+    const isAtLimit = task.reviewCount >= effectiveMax
+    if (task.status === 'stuck' || isAtLimit) {
+      b.className = 'badge badge-review-warn'
+      b.textContent = `review ${task.reviewCount}/${effectiveMax}`
+    } else if (isNearLimit) {
+      b.className = 'badge badge-warning'
+      b.textContent = `review ${task.reviewCount}/${effectiveMax}`
+    } else {
+      b.className = 'badge badge-review'
+      b.textContent = `review ${task.reviewCount}/${effectiveMax}`
+    }
     meta.appendChild(b)
   }
   if (task.status === 'review' && task.reviewActivity === 'idle' && !task.awaitingPlanApproval) {
@@ -1980,6 +1992,14 @@ function renderCard(task, colStatus) {
     actionBar.appendChild(smartRepairBtn)
 
     if (task.status === 'stuck') {
+      // Check if this looks like a review-limit-exceeded stuck state
+      const isReviewStuck = task.errorMessage && task.errorMessage.includes('Max reviews')
+      const continueBtn = document.createElement('button')
+      continueBtn.className = 'btn btn-sm btn-success'
+      continueBtn.textContent = 'Continue with More Reviews'
+      continueBtn.onclick = () => continueWithMoreReviews(task.id)
+      actionBar.appendChild(continueBtn)
+
       const doneBtn = document.createElement('button')
       doneBtn.className = 'btn btn-sm btn-primary'
       doneBtn.textContent = 'Mark Done'
@@ -2376,6 +2396,108 @@ async function repairTaskState(id, action = 'smart') {
     const actionLabel = response?.action ? ` (${response.action})` : ''
     showToast(`Task repaired${actionLabel}`, 'success')
   } catch (e) { showToast('Repair failed: ' + e.message, 'error') }
+}
+
+async function continueWithMoreReviews(id) {
+  // Fetch current review status
+  let reviewStatus = null
+  try {
+    reviewStatus = await api(`/api/tasks/${id}/review-status`, 'GET')
+  } catch (e) {
+    showToast('Failed to fetch review status: ' + e.message, 'error')
+    return
+  }
+
+  // Create a simple dialog
+  const dialog = document.createElement('div')
+  dialog.style.cssText = `
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center;
+    z-index: 10000;
+  `
+
+  const currentMax = reviewStatus.maxReviewRunsOverride ?? reviewStatus.maxReviewRuns
+  const suggestedCount = Math.max(1, Math.min(5, Math.ceil((currentMax - reviewStatus.reviewCount) / 2) + 1))
+
+  dialog.innerHTML = `
+    <div style="
+      background: var(--bg-secondary, #1e1e2e); border: 1px solid var(--border-color, #3a3a5c);
+      border-radius: 8px; padding: 24px; min-width: 400px; max-width: 500px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    ">
+      <h3 style="margin: 0 0 16px 0; color: var(--text-color, #cdd6f4);">
+        Continue with More Reviews
+      </h3>
+      <p style="margin: 0 0 16px 0; color: var(--text-dim, #6c7086); font-size: 13px;">
+        This task reached its review limit (${reviewStatus.reviewCount}/${currentMax}).
+        Increase the limit and continue execution.
+      </p>
+      <div style="margin-bottom: 16px;">
+        <label style="display: block; margin-bottom: 6px; color: var(--text-color, #cdd6f4); font-size: 13px;">
+          Additional review cycles:
+        </label>
+        <input type="number" id="additionalReviewCount" value="${suggestedCount}" min="1" max="10"
+          style="
+            width: 100%; padding: 8px 12px; border-radius: 4px;
+            border: 1px solid var(--border-color, #3a3a5c);
+            background: var(--bg-primary, #181825); color: var(--text-color, #cdd6f4);
+            font-size: 14px; box-sizing: border-box;
+          "
+        >
+      </div>
+      <div style="margin-bottom: 16px;">
+        <label style="display: block; margin-bottom: 6px; color: var(--text-color, #cdd6f4); font-size: 13px;">
+          Additional instructions for smart repair (optional):
+        </label>
+        <textarea id="smartRepairHints" rows="3" placeholder="Focus on fixing the specific gaps identified in the review..."
+          style="
+            width: 100%; padding: 8px 12px; border-radius: 4px;
+            border: 1px solid var(--border-color, #3a3a5c);
+            background: var(--bg-primary, #181825); color: var(--text-color, #cdd6f4);
+            font-size: 13px; box-sizing: border-box; resize: vertical;
+          "
+        ></textarea>
+      </div>
+      <div style="display: flex; gap: 8px; justify-content: flex-end;">
+        <button id="cancelBtn" style="
+          padding: 8px 16px; border-radius: 4px; border: 1px solid var(--border-color, #3a3a5c);
+          background: transparent; color: var(--text-color, #cdd6f4); cursor: pointer; font-size: 13px;
+        ">Cancel</button>
+        <button id="confirmBtn" style="
+          padding: 8px 16px; border-radius: 4px; border: none;
+          background: #4caf50; color: white; cursor: pointer; font-size: 13px;
+        ">Continue with More Reviews</button>
+      </div>
+    </div>
+  `
+
+  document.body.appendChild(dialog)
+
+  const closeDialog = () => {
+    document.body.removeChild(dialog)
+  }
+
+  dialog.querySelector('#cancelBtn').onclick = closeDialog
+  dialog.onclick = (e) => { if (e.target === dialog) closeDialog() }
+
+  dialog.querySelector('#confirmBtn').onclick = async () => {
+    const additionalCount = parseInt(dialog.querySelector('#additionalReviewCount').value, 10) || 2
+    const smartHints = dialog.querySelector('#smartRepairHints').value.trim()
+
+    closeDialog()
+
+    try {
+      const response = await api(`/api/tasks/${id}/repair-state`, 'POST', {
+        action: 'continue_with_more_reviews',
+        additionalReviewCount: additionalCount,
+        ...(smartHints ? { smartRepairHints: smartHints } : {}),
+      })
+      await loadTasks()
+      showToast(`Review limit increased to ${reviewStatus.reviewCount + additionalCount} and task resumed`, 'success')
+    } catch (e) {
+      showToast('Failed to continue reviews: ' + e.message, 'error')
+    }
+  }
 }
 
 async function resetTask(id) {

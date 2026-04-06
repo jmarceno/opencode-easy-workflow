@@ -1318,7 +1318,6 @@ async function testReviewActivityUI() {
   try {
     // Start OpenCode server
     opencode = await createOpencode({ port: 0 });
-    report.kanbanUrl = `http://localhost:${0}`;
     console.log(`OpenCode server started`);
 
     // Initialize Kanban

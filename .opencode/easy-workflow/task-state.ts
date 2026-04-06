@@ -1,6 +1,6 @@
 import type { Task } from "./types"
 
-export type TaskRepairAction = "queue_implementation" | "restore_plan_approval" | "reset_backlog" | "mark_done" | "fail_task"
+export type TaskRepairAction = "queue_implementation" | "restore_plan_approval" | "reset_backlog" | "mark_done" | "fail_task" | "continue_with_more_reviews"
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
