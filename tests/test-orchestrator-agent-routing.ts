@@ -5,7 +5,7 @@
  * and that the standard interactive agents are preserved when disabled.
  */
 
-import { resolvePlanningAgent, resolveExecutionAgent, mapThinkingLevelToAgent } from "../.opencode/easy-workflow/orchestrator"
+import { resolvePlanningAgent, resolveExecutionAgent, mapThinkingLevelToAgent } from "../src/orchestrator"
 
 function test(name: string, fn: () => void) {
   try {

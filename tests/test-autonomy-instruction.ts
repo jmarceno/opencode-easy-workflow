@@ -6,9 +6,9 @@
 
 import { readFileSync, existsSync } from "fs"
 import { join } from "path"
-import { AUTONOMY_INSTRUCTION, PLANNING_ONLY_INSTRUCTION } from "../.opencode/easy-workflow/orchestrator"
+import { AUTONOMY_INSTRUCTION, PLANNING_ONLY_INSTRUCTION } from "../src/orchestrator"
 
-const ORCHESTRATOR_PATH = join(process.cwd(), ".opencode", "easy-workflow", "orchestrator.ts")
+const ORCHESTRATOR_PATH = join(process.cwd(), "src", "orchestrator.ts")
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -134,7 +134,7 @@ function testTimeoutGuidanceInWorkflowAgents() {
   ]
 
   for (const file of agentFiles) {
-    const filePath = join(process.cwd(), ".opencode", "agents", file)
+    const filePath = join(process.cwd(), "agents", file)
     assert(existsSync(filePath), `Agent file should exist: ${file}`)
 
     const content = readFileSync(filePath, "utf-8")

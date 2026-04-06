@@ -3,8 +3,8 @@
  * Unit tests for execution-plan.ts
  */
 
-import { getExecutableTasks, isTaskExecutable, resolveBatches, buildExecutionGraph } from "../.opencode/easy-workflow/execution-plan"
-import type { Task } from "../.opencode/easy-workflow/types"
+import { getExecutableTasks, isTaskExecutable, resolveBatches, buildExecutionGraph } from "../src/execution-plan"
+import type { Task } from "../src/types"
 
 function makeTask(overrides: Partial<Task> & { id: string; name: string }): Task {
   return {

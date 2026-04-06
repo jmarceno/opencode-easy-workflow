@@ -4,9 +4,9 @@ import { createOpencode } from "@opencode-ai/sdk"
 import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { KanbanDB } from "../.opencode/easy-workflow/db"
-import { Orchestrator } from "../.opencode/easy-workflow/orchestrator"
-import { KanbanServer } from "../.opencode/easy-workflow/server"
+import { KanbanDB } from "../src/db"
+import { Orchestrator } from "../src/orchestrator"
+import { KanbanServer } from "../src/server"
 
 const CLEANUP_TEST_ARTIFACTS = process.env.EWF_CLEANUP_TEST_ARTIFACTS === "1"
 

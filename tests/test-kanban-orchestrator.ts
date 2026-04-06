@@ -9,15 +9,15 @@
 import { createOpencode } from "@opencode-ai/sdk";
 import { existsSync, mkdirSync, unlinkSync, readFileSync, rmSync } from "fs";
 import { join } from "path";
-import { KanbanDB } from "../.opencode/easy-workflow/db";
-import { KanbanServer } from "../.opencode/easy-workflow/server";
-import { Orchestrator } from "../.opencode/easy-workflow/orchestrator";
+import { KanbanDB } from "../src/db";
+import { KanbanServer } from "../src/server";
+import { Orchestrator } from "../src/orchestrator";
 
 const TEST_DIR = process.cwd();
-const WORKFLOW_ROOT = join(TEST_DIR, ".opencode", "easy-workflow");
-const TEST_ARTIFACTS = join(WORKFLOW_ROOT, "test-artifacts");
-const DB_PATH = join(TEST_ARTIFACTS, "tasks.db");
-const DEBUG_LOG_PATH = join(WORKFLOW_ROOT, "debug.log");
+const TEST_ARTIFACTS = join(TEST_DIR, "tests", "artifacts");
+const WORKFLOW_ROOT = join(TEST_ARTIFACTS, "kanban");
+const DB_PATH = join(WORKFLOW_ROOT, "tasks.db");
+const DEBUG_LOG_PATH = join(TEST_ARTIFACTS, "kanban.log");
 const CLEANUP_TEST_ARTIFACTS = process.env.EWF_CLEANUP_TEST_ARTIFACTS === "1";
 
 // Test tasks

@@ -89,14 +89,14 @@ async function testConfigCreation(): Promise<boolean> {
     }
 
     // Copy the standalone.ts to temp dir
-    const standaloneSource = join(process.cwd(), ".opencode", "easy-workflow", "standalone.ts")
+    const standaloneSource = join(process.cwd(), "src", "standalone.ts")
     const standaloneDest = join(workflowDir, "standalone.ts")
     cpSync(standaloneSource, standaloneDest)
     
     // Copy required modules
     const modules = ["db.ts", "server.ts", "orchestrator.ts", "types.ts", "execution-plan.ts", "task-state.ts", "telegram.ts"]
     for (const mod of modules) {
-      const src = join(process.cwd(), ".opencode", "easy-workflow", mod)
+      const src = join(process.cwd(), "src", mod)
       const dest = join(workflowDir, mod)
       if (existsSync(src)) {
         cpSync(src, dest)
@@ -104,7 +104,7 @@ async function testConfigCreation(): Promise<boolean> {
     }
     
     // Copy kanban directory
-    const kanbanSrc = join(process.cwd(), ".opencode", "easy-workflow", "kanban")
+    const kanbanSrc = join(process.cwd(), "src", "kanban")
     const kanbanDest = join(workflowDir, "kanban")
     if (existsSync(kanbanSrc)) {
       mkdirSync(kanbanDest, { recursive: true })
@@ -181,13 +181,13 @@ async function testServerStartup(): Promise<boolean> {
     }, null, 2))
 
     // Copy required files
-    const standaloneSource = join(process.cwd(), ".opencode", "easy-workflow", "standalone.ts")
+    const standaloneSource = join(process.cwd(), "src", "standalone.ts")
     const standaloneDest = join(workflowDir, "standalone.ts")
     cpSync(standaloneSource, standaloneDest)
     
     const modules = ["db.ts", "server.ts", "orchestrator.ts", "types.ts", "execution-plan.ts", "task-state.ts", "telegram.ts"]
     for (const mod of modules) {
-      const src = join(process.cwd(), ".opencode", "easy-workflow", mod)
+      const src = join(process.cwd(), "src", mod)
       const dest = join(workflowDir, mod)
       if (existsSync(src)) {
         cpSync(src, dest)
@@ -195,7 +195,7 @@ async function testServerStartup(): Promise<boolean> {
     }
     
     // Copy kanban directory
-    const kanbanSrc = join(process.cwd(), ".opencode", "easy-workflow", "kanban")
+    const kanbanSrc = join(process.cwd(), "src", "kanban")
     const kanbanDest = join(workflowDir, "kanban")
     if (existsSync(kanbanSrc)) {
       mkdirSync(kanbanDest, { recursive: true })
@@ -261,13 +261,13 @@ async function testApiEndpoints(): Promise<boolean> {
     }, null, 2))
 
     // Copy required files
-    const standaloneSource = join(process.cwd(), ".opencode", "easy-workflow", "standalone.ts")
+    const standaloneSource = join(process.cwd(), "src", "standalone.ts")
     const standaloneDest = join(workflowDir, "standalone.ts")
     cpSync(standaloneSource, standaloneDest)
     
     const modules = ["db.ts", "server.ts", "orchestrator.ts", "types.ts", "execution-plan.ts", "task-state.ts", "telegram.ts"]
     for (const mod of modules) {
-      const src = join(process.cwd(), ".opencode", "easy-workflow", mod)
+      const src = join(process.cwd(), "src", mod)
       const dest = join(workflowDir, mod)
       if (existsSync(src)) {
         cpSync(src, dest)
@@ -275,7 +275,7 @@ async function testApiEndpoints(): Promise<boolean> {
     }
     
     // Copy kanban directory
-    const kanbanSrc = join(process.cwd(), ".opencode", "easy-workflow", "kanban")
+    const kanbanSrc = join(process.cwd(), "src", "kanban")
     const kanbanDest = join(workflowDir, "kanban")
     if (existsSync(kanbanSrc)) {
       mkdirSync(kanbanDest, { recursive: true })

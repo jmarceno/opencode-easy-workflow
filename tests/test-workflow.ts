@@ -5,13 +5,14 @@
  */
 
 import { createOpencode, createOpencodeClient } from "@opencode-ai/sdk";
-import { existsSync, unlinkSync, readFileSync, readdirSync } from "fs";
+import { existsSync, unlinkSync, readFileSync, readdirSync, mkdirSync } from "fs";
 import { join } from "path";
 
 const TEST_PROMPT = "Add a CLAUDE.md to the repo with the same content as AGENTS.md #workflow";
 const CLAUDE_MD_PATH = join(process.cwd(), "CLAUDE.md");
-const DEBUG_LOG_PATH = join(process.cwd(), ".opencode", "easy-workflow", "debug.log");
-const RUNS_DIR = join(process.cwd(), ".opencode", "easy-workflow", "runs");
+const TEST_ARTIFACTS_DIR = join(process.cwd(), "tests", "artifacts", "workflow");
+const DEBUG_LOG_PATH = join(TEST_ARTIFACTS_DIR, "debug.log");
+const RUNS_DIR = join(TEST_ARTIFACTS_DIR, "runs");
 
 async function cleanup() {
   console.log("\nCleaning up...");
@@ -87,6 +88,8 @@ async function main() {
     const client = opencode.client;
     
     console.log(`Server started at ${server.url}`);
+    
+    mkdirSync(TEST_ARTIFACTS_DIR, { recursive: true });
     
     // Clear old debug log
     if (existsSync(DEBUG_LOG_PATH)) {
