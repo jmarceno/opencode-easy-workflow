@@ -1,0 +1,5 @@
+{
+  "opencodeServerUrl": "http://localhost:4096",
+  "projectDirectory": "/home/jmarceno/Projects/opencode-easy-workflow",
+  "kanbanPort": 42451
+}

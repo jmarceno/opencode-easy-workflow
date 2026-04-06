@@ -7,16 +7,33 @@ A plugin for [OpenCode](https://opencode.ai) that provides two modes of operatio
 
 It also includes a project-local skill for agents that need to translate user-provided planning material into kanban tasks.
 
+> **NEW in v2.0**: Standalone Server Architecture! The kanban server now runs outside of OpenCode for better stability and debugging. See [Architecture](#architecture) below.
+
 ## Quick Start
 
-Follow Installation Steps at INSTALL.md, then:
+### 1. Start the Standalone Server
 
 ```bash
-# Start OpenCode server
+# From the project root
+bun run start
+
+# On first run, it will prompt for your OpenCode server URL
+# e.g., http://localhost:4096
+```
+
+This creates `.opencode/easy-workflow/config.json` with your settings.
+
+### 2. Start OpenCode
+
+```bash
 opencode serve
 ```
 
-Access the Kanban board at `http://localhost:3789`
+The bridge plugin (`.opencode/plugins/easy-workflow.ts`) will automatically connect to the standalone server.
+
+### 3. Access the Kanban board
+
+Open `http://localhost:3789` (or your configured port)
 
 ## Mode 1: Workflow Review
 
@@ -176,30 +193,62 @@ curl -X POST http://localhost:3789/api/start
 
 ## Architecture
 
+**NEW in v2.0**: Split architecture with standalone server + bridge plugin
+
 ```
-┌──────────────────────────────────────────────────────────┐
-│                    OpenCode Server                       │
-│  ┌───────────────┐  ┌─────────────┐  ┌─────────────────┐ │
-│  │   Plugin      │  │   SDK v2    │  │   Agents        │ │
-│  │(easy-workflow)│  │  (client)   │  │(workflow-review)│ │
-│  └──────┬────────┘  └──────┬──────┘  └─────────────────┘ │
-└─────────┼──────────────────┼─────────────────────────────┘
-          │                  │
-          ▼                  ▼
-┌─────────────────────────────────────────────────────────┐
-│              Kanban Orchestrator                        │
-│  ┌─────────────┐  ┌─────────────┐  ┌────────────────┐   │
-│  │   Server    │  │  Database   │  │ Orchestrator   │   │
-│  │(HTTP/WS)    │  │  (SQLite)   │  │ (Task Runner)  │   │
-│  └─────────────┘  └─────────────┘  └────────────────┘   │
-│                          │                              │
-│                          ▼                              │
-│                   ┌─────────────┐                       │
-│                   │   Worktrees │                       │
-│                   │  (Git)      │                       │
-│                   └─────────────┘                       │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         STANDALONE SERVER                               │
+│  ┌─────────────┐  ┌─────────────┐  ┌────────────────┐  ┌──────────┐   │
+│  │   Server    │  │  Database   │  │ Orchestrator   │  │  Config  │   │
+│  │(HTTP/WS)    │  │  (SQLite)   │  │ (Task Runner)  │  │  (JSON)  │   │
+│  │ :3789       │  │             │  │                │  │          │   │
+│  └──────┬──────┘  └──────┬──────┘  └───────┬────────┘  └────┬─────┘   │
+│         │                │                  │                │         │
+│         └────────────────┴──────────────────┴────────────────┘         │
+│                                      │                                  │
+│                                      ▼                                  │
+│                            ┌─────────────────┐                          │
+│                            │   Worktrees     │                          │
+│                            │   (Git)         │                          │
+│                            └─────────────────┘                          │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    ▲
+                                    │ HTTP API
+┌───────────────────────────────────┼─────────────────────────────────────┐
+│           OPENCODE SERVER         │                                     │
+│  ┌─────────────────┐  ┌───────────┴──────────┐  ┌─────────────────┐    │
+│  │   Bridge Plugin │  │      SDK v2          │  │   Agents        │    │
+│  │(easy-workflow.ts)│  │   (create sessions)  │  │(workflow-review)│    │
+│  │ :forwards events │  │                      │  │                 │    │
+│  └─────────────────┘  └──────────────────────┘  └─────────────────┘    │
+│                                                                         │
+│  Events forwarded:                                                      │
+│  - chat.message (detects #workflow)                                    │
+│  - permission.asked (auto-reply for workflow sessions)                 │
+│  - session.idle (trigger reviews)                                      │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Why Standalone?
+
+1. **No Model Loading Issues** - Runs outside OpenCode's plugin system
+2. **Independent Lifecycle** - Start/stop without restarting OpenCode
+3. **Better Debugging** - Console logs and errors are visible
+4. **Configuration** - Simple JSON config file
+5. **Clear Separation** - Bridge handles OpenCode integration, server handles logic
+
+### Configuration
+
+The standalone server uses `.opencode/easy-workflow/config.json`:
+
+```json
+{
+  "opencodeServerUrl": "http://localhost:4096",
+  "projectDirectory": "/path/to/project"
+}
+```
+
+To reconfigure, delete this file and restart the server.
 
 ## Workflow vs Kanban Comparison
 
@@ -218,18 +267,20 @@ curl -X POST http://localhost:3789/api/start
 ```
 .opencode/
 ├── plugins/
-│   └── easy-workflow.ts          # Main plugin entry
+│   └── easy-workflow.ts          # Bridge plugin (forwards events)
 ├── agents/
 │   └── workflow-review.md        # Review agent definition
 ├── skills/
 │   └── workflow-task-setup/
 │       └── SKILL.md              # Agent guidance for plan-to-task setup
 ├── easy-workflow/
+│   ├── standalone.ts             # STANDALONE SERVER ENTRY POINT
 │   ├── workflow.md               # Workflow template
 │   ├── db.ts                     # SQLite database
 │   ├── server.ts                 # HTTP/WebSocket server
 │   ├── orchestrator.ts           # Task orchestration
 │   ├── types.ts                  # TypeScript types
+│   ├── config.json               # Server configuration (auto-created)
 │   └── kanban/
 │       └── index.html            # Kanban UI
 ```

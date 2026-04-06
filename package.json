@@ -1,6 +1,15 @@
 {
+  "name": "easy-workflow",
+  "version": "2.0.0",
+  "description": "Easy Workflow - Standalone kanban server for OpenCode",
+  "scripts": {
+    "start": "bun run .opencode/easy-workflow/standalone.ts",
+    "dev": "bun run --watch .opencode/easy-workflow/standalone.ts",
+    "test": "bun test"
+  },
   "devDependencies": {
-    "playwright": "^1.59.0"
+    "playwright": "^1.59.0",
+    "@types/bun": "latest"
   },
   "dependencies": {
     "@opencode-ai/sdk": "^1.3.15"

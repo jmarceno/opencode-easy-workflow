@@ -137,9 +137,28 @@ Important runtime rules from the server and orchestrator:
 - Circular dependencies will break scheduling.
 - Tasks that are already outside the current executable set do not block batching the same way as active backlog items, so dependencies are most meaningful between active tasks you are setting up.
 
+## Architecture Overview (v2.0+)
+
+Easy Workflow uses a **standalone server + bridge plugin** architecture:
+
+1. **Standalone Server** (`.opencode/easy-workflow/standalone.ts`) - Runs outside OpenCode
+   - Provides HTTP API and WebSocket server
+   - Manages SQLite database
+   - Runs the task orchestrator
+   - Reads config from `.opencode/easy-workflow/config.json`
+
+2. **Bridge Plugin** (`.opencode/plugins/easy-workflow.ts`) - Minimal plugin inside OpenCode
+   - Forwards events (chat messages, permissions, session idle) to standalone server
+   - Auto-replies to permissions for workflow sessions
+
+3. **Configuration** (`.opencode/easy-workflow/config.json`)
+   - `opencodeServerUrl`: OpenCode server URL
+   - `kanbanPort`: Port where kanban UI is served
+   - `projectDirectory`: Absolute path to project root
+
 ## Persistence Layout
 
-The workflow DB is initialized by the plugin in:
+The workflow DB is managed by the standalone server at:
 
 `<workspace>/.opencode/easy-workflow/tasks.db`
 
@@ -248,7 +267,7 @@ Base URL:
 
 `http://localhost:<port>`
 
-The port is stored in the `options` table.
+The port is read from `.opencode/easy-workflow/config.json` under the `kanbanPort` key, or from the `options` table as fallback.
 
 Useful endpoints from `.opencode/easy-workflow/server.ts`:
 
@@ -266,11 +285,13 @@ Useful endpoints from `.opencode/easy-workflow/server.ts`:
 | `GET` | `/api/tasks/:id/runs` | List best-of-n child runs for task |
 | `GET` | `/api/tasks/:id/candidates` | List best-of-n candidate artifacts |
 | `GET` | `/api/tasks/:id/best-of-n-summary` | Aggregated best-of-n progress/status |
+| `POST` | `/api/events/bridge` | Receive events from bridge plugin (internal) |
+| `GET` | `/api/workflow-session/:id` | Check if session is workflow-owned (internal) |
 
 API payload field names use camelCase.
 DB column names use snake_case.
 
-If you must write directly to SQLite, remember:
+If you must write directly to SQLite (standalone server manages this database):
 
 - `requirements` must be JSON-encoded text.
 - boolean fields are stored as `0` or `1`.
@@ -278,6 +299,8 @@ If you must write directly to SQLite, remember:
 - direct DB writes do not broadcast websocket updates.
 - creating via raw SQL means you are responsible for `idx`, timestamps, and field normalization.
 - when the server receives a `PATCH` that sets `status = backlog` without an explicit `executionPhase`, it resets `executionPhase` to `not_started` and `awaitingPlanApproval` to `false`.
+
+**Note**: The standalone server must be running for the HTTP API to work. If you see connection errors, the server may need to be started with `bun run start` from the project root.
 
 ## Useful Queries
 
