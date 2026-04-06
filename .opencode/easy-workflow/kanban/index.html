@@ -212,13 +212,32 @@ sl-icon-button::part(base) {
 .column-body.drag-over { background: rgba(47,125,247,.08); }
 
 /* Cards */
-.card { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; cursor: default; transition: border-color .15s; min-width: 0; }
+.card { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; cursor: default; transition: border-color .15s; min-width: 0; position: relative; }
 .card:hover { border-color: var(--text-dim); }
 .card.dragging { opacity: .5; }
 .card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .card-title { font-size: 14px; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); text-decoration: none; }
 .card-title.has-session { color: var(--accent); cursor: pointer; }
 .card-title.has-session:hover { text-decoration: underline; }
+.card-title[data-tooltip]:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 12px;
+  top: 100%;
+  margin-top: 4px;
+  background: var(--text);
+  color: var(--bg);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: normal;
+  z-index: 1000;
+  max-width: 280px;
+  word-wrap: break-word;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  pointer-events: none;
+}
 .card-idx { font-size: 11px; background: var(--surface); border-radius: 4px; padding: 2px 6px; color: var(--text-dim); flex-shrink: 0; }
 .card-actions { display: flex; gap: 4px; justify-content: flex-end; margin-top: 4px; }
 .card-actions button { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 16px; padding: 4px 6px; border-radius: 4px; }
@@ -931,7 +950,7 @@ sl-tooltip {
           <label>Telegram Notifications</label>
           <sl-icon-button class="help-btn" type="button" title="Send a Telegram message when a task changes state. Leave both fields empty to disable notifications." aria-label="Telegram notifications help" name="question-circle"></sl-icon-button>
         </div>
-        <sl-checkbox id="optTelegramEnabled" style="margin-bottom:8px;">Enable Telegram notifications</sl-checkbox>
+        <sl-checkbox id="optTelegramEnabled" class="inline-checkbox" style="margin-bottom:8px;">Enable Telegram notifications</sl-checkbox>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
           <div>
             <label for="optTelegramBotToken" style="display:block;font-size:12px;color:var(--text-dim);margin-bottom:4px;">Bot Token</label>
@@ -1682,12 +1701,12 @@ function renderCard(task, colStatus) {
     : document.createElement('span')
   title.className = 'card-title'
   title.textContent = task.name
+  title.dataset.tooltip = task.name
   if (task.sessionUrl && colStatus !== 'backlog' && colStatus !== 'template') {
     title.href = task.sessionUrl
     title.target = '_blank'
     title.rel = 'noopener noreferrer'
     title.classList.add('has-session')
-    title.title = 'Open session in Opencode'
   }
   header.appendChild(title)
 
