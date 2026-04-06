@@ -941,7 +941,9 @@ export const EasyWorkflowBridgePlugin = async (input: any) => {
     console.log("[easy-workflow-bridge] Telegram reply polling started")
   }
 
-  // Helper to forward events to standalone server
+  let lastForwardErrorLog = 0
+  const FORWARD_ERROR_LOG_INTERVAL = 30000
+
   async function forwardEvent(eventType: string, payload: any): Promise<void> {
     const url = `${config!.standaloneServerUrl}/api/events/bridge`
     try {
@@ -956,11 +958,18 @@ export const EasyWorkflowBridgePlugin = async (input: any) => {
       })
       
       if (!response.ok) {
-        const error = await response.text()
-        console.error(`[easy-workflow-bridge] Failed to forward ${eventType} to ${url}:`, error)
+        const now = Date.now()
+        if (now - lastForwardErrorLog > FORWARD_ERROR_LOG_INTERVAL) {
+          console.error(`[easy-workflow-bridge] Server returned ${response.status} for ${eventType}`)
+          lastForwardErrorLog = now
+        }
       }
     } catch (err) {
-      console.error(`[easy-workflow-bridge] Error forwarding ${eventType} to ${url}:`, err instanceof Error ? err.message : String(err))
+      const now = Date.now()
+      if (now - lastForwardErrorLog > FORWARD_ERROR_LOG_INTERVAL) {
+        console.error(`[easy-workflow-bridge] Could not reach server: ${err instanceof Error ? err.message : String(err)}`)
+        lastForwardErrorLog = now
+      }
     }
   }
 
