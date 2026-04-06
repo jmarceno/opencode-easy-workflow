@@ -7,6 +7,7 @@ import { hasCapturedPlanOutput, hasCapturedRevisionRequest } from "./task-state"
 
 const DEFAULT_OPTIONS: Options = {
   commitPrompt: DEFAULT_COMMIT_PROMPT,
+  extraPrompt: "",
   branch: "",
   planModel: "default",
   executionModel: "default",
@@ -348,6 +349,7 @@ export class KanbanDB {
         "INSERT OR IGNORE INTO options (key, value) VALUES (?, ?)"
       )
       insert.run("commit_prompt", DEFAULT_OPTIONS.commitPrompt)
+      insert.run("extra_prompt", DEFAULT_OPTIONS.extraPrompt)
       insert.run("branch", DEFAULT_OPTIONS.branch)
       insert.run("plan_model", DEFAULT_OPTIONS.planModel)
       insert.run("execution_model", DEFAULT_OPTIONS.executionModel)
@@ -393,6 +395,11 @@ export class KanbanDB {
     const hasTelegramChatIdKey = this.db.prepare("SELECT COUNT(*) as cnt FROM options WHERE key = 'telegram_chat_id'").get() as any
     if (hasTelegramChatIdKey.cnt === 0) {
       this.db.prepare("INSERT OR IGNORE INTO options (key, value) VALUES ('telegram_chat_id', '')").run()
+    }
+
+    const hasExtraPromptKey = this.db.prepare("SELECT COUNT(*) as cnt FROM options WHERE key = 'extra_prompt'").get() as any
+    if (hasExtraPromptKey.cnt === 0) {
+      this.db.prepare("INSERT OR IGNORE INTO options (key, value) VALUES ('extra_prompt', '')").run()
     }
 
     const hasWorkflowSessionsTable = this.db.prepare("SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name='workflow_sessions'").get() as any
@@ -802,6 +809,7 @@ export class KanbanDB {
 
     return {
       commitPrompt: opts.commit_prompt ?? DEFAULT_OPTIONS.commitPrompt,
+      extraPrompt: opts.extra_prompt ?? DEFAULT_OPTIONS.extraPrompt,
       branch: opts.branch ?? DEFAULT_OPTIONS.branch,
       planModel: opts.plan_model ?? DEFAULT_OPTIONS.planModel,
       executionModel: opts.execution_model ?? DEFAULT_OPTIONS.executionModel,
@@ -826,6 +834,7 @@ export class KanbanDB {
     )
 
     if (partial.commitPrompt !== undefined) upsert.run("commit_prompt", partial.commitPrompt)
+    if (partial.extraPrompt !== undefined) upsert.run("extra_prompt", partial.extraPrompt)
     if (partial.branch !== undefined) upsert.run("branch", partial.branch)
     if (partial.planModel !== undefined) upsert.run("plan_model", partial.planModel)
     if (partial.executionModel !== undefined) upsert.run("execution_model", partial.executionModel)

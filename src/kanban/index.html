@@ -945,6 +945,13 @@ sl-tooltip {
         </div>
         <sl-textarea id="optCommitPrompt" style="min-height:180px;font-family:monospace;font-size:12px" placeholder="Instructions for committing changes..."></sl-textarea>
       </div>
+      <div class="form-group">
+        <div class="label-row">
+          <label for="optExtraPrompt">Extra Prompt <span style="font-weight:normal;color:var(--text-dim)">(added to every prompt)</span></label>
+          <sl-icon-button class="help-btn" type="button" title="Additional instructions that will be appended to every task prompt sent to the agent." aria-label="Extra prompt help" name="question-circle"></sl-icon-button>
+        </div>
+        <sl-textarea id="optExtraPrompt" style="min-height:100px;font-family:monospace;font-size:12px" placeholder="Additional context or instructions for all tasks..."></sl-textarea>
+      </div>
       <div class="form-group telegram-section">
         <div class="label-row">
           <label>Telegram Notifications</label>
@@ -2690,6 +2697,7 @@ async function confirmStartSingle() {
 function openOptionsModal() {
   populateBranchSelect('optBranch', allOptions.branch || getFallbackBranch())
   document.getElementById('optCommitPrompt').value = allOptions.commitPrompt || ''
+  document.getElementById('optExtraPrompt').value = allOptions.extraPrompt || ''
   document.getElementById('optBranch').value = allOptions.branch || getFallbackBranch()
   resetModelInput('optPlanModel', allOptions.planModel || 'default')
   resetModelInput('optExecModel', allOptions.executionModel || 'default')
@@ -2722,6 +2730,7 @@ async function saveOptions() {
 
     await api('/api/options', 'PUT', {
       commitPrompt: document.getElementById('optCommitPrompt').value,
+      extraPrompt: document.getElementById('optExtraPrompt').value,
       branch,
       planModel: normalizeModelInputValue(document.getElementById('optPlanModel').value),
       executionModel: normalizeModelInputValue(document.getElementById('optExecModel').value),

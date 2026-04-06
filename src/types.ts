@@ -132,6 +132,7 @@ export interface AggregatedReviewResult {
 
 export interface Options {
   commitPrompt: string
+  extraPrompt: string
   branch: string
   planModel: string
   executionModel: string

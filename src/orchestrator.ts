@@ -866,7 +866,15 @@ export class Orchestrator {
             sessionID: sessionId,
             agent: resolvePlanningAgent(task.skipPermissionAsking),
             model: planModelParsed,
-            parts: [{ type: "text", text: `${PLANNING_ONLY_INSTRUCTION}\n\n${task.prompt}` }],
+            parts: [{
+            type: "text",
+            text: [
+              PLANNING_ONLY_INSTRUCTION,
+              "",
+              `Task:\n${task.prompt}`,
+              options.extraPrompt ? `Additional context:\n${options.extraPrompt}` : "",
+            ].filter(Boolean).join("\n\n"),
+          }],
           })
           const planResult = unwrapResponseDataOrThrow<any>(planResponse, "Planning prompt")
           const planFailure = this.extractExecutionFailure(planResult)
@@ -928,9 +936,10 @@ export class Orchestrator {
             PLANNING_ONLY_INSTRUCTION,
             "",
             "The user has reviewed your plan and requested changes. Revise the plan based on their feedback.",
-            `Original task:\n${task.prompt}`,
+            `Task:\n${task.prompt}`,
             originalPlan ? `Previous plan:\n${originalPlan}` : "",
             latestRevisionRequest ? `User feedback:\n${latestRevisionRequest}` : "",
+            options.extraPrompt ? `Additional context:\n${options.extraPrompt}` : "",
             "Provide a revised plan that addresses the feedback. Output only the revised plan.",
           ].filter(Boolean).join("\n\n")
           const planResponse = await client.session.prompt({
@@ -1005,9 +1014,10 @@ export class Orchestrator {
               AUTONOMY_INSTRUCTION,
               "",
               "The user has approved the plan below. Implement it now.",
-              `Original task:\n${task.prompt}`,
+              `Task:\n${task.prompt}`,
               approvedPlanContext ? `Approved plan:\n${approvedPlanContext}` : "",
               allUserGuidance ? `User guidance:\n${allUserGuidance}` : "",
+              options.extraPrompt ? `Additional context:\n${options.extraPrompt}` : "",
             ].filter(Boolean).join("\n\n"),
           }],
         }
@@ -1032,10 +1042,16 @@ export class Orchestrator {
       } else {
         // Direct execution
         appendDebugLog("info", "sending task prompt", { taskId: task.id })
+        const promptParts = [
+          AUTONOMY_INSTRUCTION,
+          "",
+          `${task.prompt}`,
+          options.extraPrompt ? options.extraPrompt : "",
+        ].filter(Boolean).join("\n\n")
         const promptOpts: any = {
           sessionID: sessionId,
           model,
-          parts: [{ type: "text", text: `${AUTONOMY_INSTRUCTION}\n\n${task.prompt}` }],
+          parts: [{ type: "text", text: promptParts }],
         }
         if (executionAgent) promptOpts.agent = executionAgent
         let result: any
@@ -1485,7 +1501,7 @@ export class Orchestrator {
         registerWorkflowSessionSafe(this.db, sessionId, task.id, "task_run_worker", this.ownerDirectory, task.skipPermissionAsking, workerRun.id)
         writeRootOwnerPointerSafe(worktreeInfo.directory, this.ownerDirectory, join(this.ownerDirectory, ".opencode", "easy-workflow", "tasks.db"))
 
-        const workerPrompt = this.buildWorkerPrompt(task.prompt, workerRun.taskSuffix)
+        const workerPrompt = this.buildWorkerPrompt(task.prompt, workerRun.taskSuffix, options.extraPrompt)
         const model = await this.resolveModelSelection(workerRun.model, client, "Worker")
 
         appendDebugLog("info", "running best-of-n worker", { taskId: task.id, workerRunId: workerRun.id, model: workerRun.model })
@@ -1595,7 +1611,7 @@ export class Orchestrator {
     return { shouldStop: this.shouldStop }
   }
 
-  private buildWorkerPrompt(taskPrompt: string, taskSuffix: string | null): string {
+  private buildWorkerPrompt(taskPrompt: string, taskSuffix: string | null, extraPrompt: string): string {
     let prompt = `${AUTONOMY_INSTRUCTION}
 
 You are one candidate implementation worker in a best-of-n workflow.
@@ -1604,6 +1620,11 @@ Produce the best complete solution you can in this worktree.
 Task:
 ${taskPrompt}
 `
+    if (extraPrompt) {
+      prompt += `\nAdditional context for all tasks:
+${extraPrompt}
+`
+    }
     if (taskSuffix) {
       prompt += `\nAdditional instructions for this worker:
 ${taskSuffix}`
@@ -1806,7 +1827,7 @@ ${taskSuffix}`
 
         registerWorkflowSessionSafe(this.db, sessionId, task.id, "task_run_reviewer", this.ownerDirectory, task.skipPermissionAsking, reviewerRun.id)
 
-        const reviewerPrompt = this.buildReviewerPrompt(task.prompt, candidates, reviewerRun.taskSuffix)
+        const reviewerPrompt = this.buildReviewerPrompt(task.prompt, candidates, reviewerRun.taskSuffix, options.extraPrompt)
         const model = await this.resolveModelSelection(reviewerRun.model, client, "Reviewer")
 
         appendDebugLog("info", "running best-of-n reviewer", { taskId: task.id, reviewerRunId: reviewerRun.id, model: reviewerRun.model })
@@ -1869,14 +1890,20 @@ ${taskSuffix}`
     return JSON.stringify(verificationJson)
   }
 
-  private buildReviewerPrompt(taskPrompt: string, candidates: TaskCandidate[], taskSuffix?: string | null): string {
+  private buildReviewerPrompt(taskPrompt: string, candidates: TaskCandidate[], taskSuffix?: string | null, extraPrompt?: string): string {
     let prompt = `You are a reviewer in a best-of-n workflow.
 Your job is to evaluate the candidate implementations and provide structured guidance.
 
 Original Task:
 ${taskPrompt}
+`
+    if (extraPrompt) {
+      prompt += `\nAdditional context for all tasks:
+${extraPrompt}
+`
+    }
 
-Candidate Implementations:
+    prompt += `Candidate Implementations:
 ${candidates.map((c, i) => `
 Candidate ${i + 1} (${c.id}):
 ${c.summary || "No summary available"}
@@ -2042,7 +2069,7 @@ RECOMMENDED_PROMPT:
       registerWorkflowSessionSafe(this.db, sessionId, task.id, "task_run_final_applier", this.ownerDirectory, task.skipPermissionAsking, finalApplierRun.id)
       writeRootOwnerPointerSafe(worktreeInfo.directory, this.ownerDirectory, join(this.ownerDirectory, ".opencode", "easy-workflow", "tasks.db"))
 
-      const finalPrompt = this.buildFinalApplierPrompt(task.prompt, candidates, aggregatedReview, selectionMode, task.bestOfNConfig?.finalApplier?.taskSuffix)
+      const finalPrompt = this.buildFinalApplierPrompt(task.prompt, candidates, aggregatedReview, selectionMode, task.bestOfNConfig?.finalApplier?.taskSuffix, options.extraPrompt)
       const model = await this.resolveModelSelection(finalApplierRun.model, client, "Final Applier")
 
       appendDebugLog("info", "running best-of-n final applier", { taskId: task.id, finalApplierRunId: finalApplierRun.id, model: finalApplierRun.model })
@@ -2199,7 +2226,8 @@ RECOMMENDED_PROMPT:
     candidates: TaskCandidate[],
     aggregatedReview: AggregatedReviewResult,
     selectionMode: SelectionMode,
-    taskSuffix?: string | null
+    taskSuffix?: string | null,
+    extraPrompt?: string
   ): string {
     let prompt = `${AUTONOMY_INSTRUCTION}
 
@@ -2210,6 +2238,12 @@ Original Task:
 ${taskPrompt}
 
 `
+    if (extraPrompt) {
+      prompt += `Additional context for all tasks:
+${extraPrompt}
+
+`
+    }
     if (selectionMode === "pick_best") {
       const topCandidate = Object.entries(aggregatedReview.candidateVoteCounts)
         .sort(([, a], [, b]) => b - a)[0]
@@ -2292,6 +2326,9 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
           reviewSessionId = reviewSession?.id
 
           if (reviewSessionId) {
+            const resolvedServerUrl = this.resolveServerUrl()
+            const reviewSessionUrl = buildSessionUrl(resolvedServerUrl, this.worktreeDir, reviewSessionId)
+            this.db.updateTask(task.id, { sessionId: reviewSessionId, sessionUrl: reviewSessionUrl })
             registerWorkflowSessionSafe(this.db, reviewSessionId, task.id, "review_scratch", this.ownerDirectory, task.skipPermissionAsking)
           }
 
@@ -2335,8 +2372,10 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
           })
 
           if (reviewResult.status === "pass") {
-            // Review passed
-            this.db.updateTask(task.id, { status: "executing", reviewCount })
+            // Review passed - restore original execution session
+            const resolvedServerUrl = this.resolveServerUrl()
+            const executionSessionUrl = buildSessionUrl(resolvedServerUrl, this.worktreeDir, sessionId)
+            this.db.updateTask(task.id, { status: "executing", reviewCount, sessionId, sessionUrl: executionSessionUrl })
             const updated = this.db.getTask(task.id)!
             this.server.broadcast({ type: "task_updated", payload: updated })
             return
