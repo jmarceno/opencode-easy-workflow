@@ -470,24 +470,46 @@ export class Orchestrator {
 
   private resolveTargetBranch(task: Task, options: Options, worktreeInfo?: any): string {
     const worktreeDirectory = typeof worktreeInfo?.directory === "string" ? worktreeInfo.directory : undefined
+    appendDebugLog("info", "resolveTargetBranch called", { taskId: task.id, worktreeDir: worktreeDirectory, taskBranch: task.branch, worktreeInfoBranch: worktreeInfo?.branch, worktreeInfoBaseRef: worktreeInfo?.baseRef, optionBranch: options.branch })
     const taskBranch = typeof task.branch === "string" ? task.branch.trim() : ""
-    if (this.gitBranchExists(taskBranch, worktreeDirectory)) return taskBranch
+    if (this.gitBranchExists(taskBranch, worktreeDirectory)) {
+      appendDebugLog("info", "resolveTargetBranch using task branch", { taskId: task.id, branch: taskBranch })
+      return taskBranch
+    }
 
     const worktreeBaseRef = typeof worktreeInfo?.baseRef === "string" ? worktreeInfo.baseRef.trim() : ""
     if (this.gitBranchExists(worktreeBaseRef, worktreeDirectory)) return worktreeBaseRef
 
     const optionBranch = typeof options.branch === "string" ? options.branch.trim() : ""
-    if (this.gitBranchExists(optionBranch, worktreeDirectory)) return optionBranch
+    if (this.gitBranchExists(optionBranch, worktreeDirectory)) {
+      appendDebugLog("info", "resolveTargetBranch using options branch", { taskId: task.id, branch: optionBranch })
+      return optionBranch
+    }
 
     const remoteDefaultBranch = this.readRemoteDefaultBranch(worktreeDirectory)
-    if (this.gitBranchExists(remoteDefaultBranch || "", worktreeDirectory)) return remoteDefaultBranch!
+    if (this.gitBranchExists(remoteDefaultBranch || "", worktreeDirectory)) {
+      appendDebugLog("info", "resolveTargetBranch using remote default branch", { taskId: task.id, branch: remoteDefaultBranch })
+      return remoteDefaultBranch!
+    }
 
     const worktreeBranch = typeof worktreeInfo?.branch === "string" ? worktreeInfo.branch.trim() : ""
     const localBranches = this.readLocalBranches(worktreeDirectory)
       .filter((branch) => branch !== worktreeBranch)
       .filter((branch) => !branch.startsWith("opencode/"))
-    if (localBranches.length > 0) return localBranches[0]
+    if (localBranches.length > 0) {
+      appendDebugLog("info", "resolveTargetBranch using local branch", { taskId: task.id, branch: localBranches[0], allLocalBranches: localBranches })
+      return localBranches[0]
+    }
 
+    appendDebugLog("error", "resolveTargetBranch failed", { 
+      taskId: task.id, 
+      worktreeDir: worktreeDirectory,
+      taskBranch,
+      worktreeBranch,
+      optionBranch,
+      remoteDefaultBranch,
+      localBranches 
+    })
     throw new Error("Could not determine target branch from git metadata")
   }
 
@@ -1127,76 +1149,94 @@ export class Orchestrator {
       // 8. Merge worktree
       if (worktreeInfo) {
         try {
-          appendDebugLog("info", "merging worktree", { taskId: task.id, branch: worktreeInfo.branch })
+          // Check if worktree branch still exists (it may have been merged and deleted by the agent)
+          const worktreeBranch = typeof worktreeInfo.branch === "string" ? worktreeInfo.branch.trim() : ""
+          let branchExists = false
+          if (worktreeBranch) {
+            try {
+              execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${worktreeBranch}`], {
+                cwd: worktreeInfo.directory,
+                stdio: "ignore",
+              })
+              branchExists = true
+            } catch {
+              branchExists = false
+            }
+          }
 
-          // Resolve merge target branch from task/options first, then git defaults.
-          let mainBranch = this.resolveTargetBranch(currentTask, options, worktreeInfo)
-          let hasTargetBranch = false
-          if (mainBranch) {
+          if (!branchExists) {
+            appendDebugLog("info", "worktree branch already merged or deleted, skipping merge", { taskId: task.id, worktreeBranch })
+          } else {
+            appendDebugLog("info", "merging worktree", { taskId: task.id, branch: worktreeInfo.branch })
+
+            // Resolve merge target branch from task/options first, then git defaults.
+            let mainBranch = this.resolveTargetBranch(currentTask, options, worktreeInfo)
+            let hasTargetBranch = false
+            if (mainBranch) {
+              try {
+                execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${mainBranch}`], {
+                  cwd: worktreeInfo.directory,
+                  stdio: "ignore",
+                })
+                hasTargetBranch = true
+              } catch (showRefErr) {
+                appendDebugLog("warn", "target branch lookup failed before fallback", {
+                  taskId: task.id,
+                  branch: mainBranch,
+                  error: showRefErr instanceof Error ? showRefErr.message : String(showRefErr),
+                })
+                hasTargetBranch = false
+              }
+            }
+
+            if (!hasTargetBranch) {
+              try {
+                const defaultBranch = execFileSync("git", ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], {
+                  cwd: worktreeInfo.directory,
+                  encoding: "utf-8",
+                  stdio: "pipe",
+                }).trim()
+                if (defaultBranch.startsWith("origin/")) {
+                  mainBranch = defaultBranch.slice("origin/".length)
+                } else if (defaultBranch) {
+                  mainBranch = defaultBranch
+                }
+              } catch (e) {
+                appendDebugLog("warn", "could not resolve origin HEAD for merge target", {
+                  taskId: task.id,
+                  error: e instanceof Error ? e.message : String(e),
+                })
+              }
+
+              if (!mainBranch) {
+                try {
+                  mainBranch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+                    cwd: worktreeInfo.directory,
+                    encoding: "utf-8",
+                    stdio: "pipe",
+                  }).trim()
+                } catch (e) {
+                  throw new Error(`Failed to get current branch: ${e}`);
+                }
+              }
+            }
+
             try {
               execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${mainBranch}`], {
                 cwd: worktreeInfo.directory,
                 stdio: "ignore",
               })
-              hasTargetBranch = true
-            } catch (showRefErr) {
-              appendDebugLog("warn", "target branch lookup failed before fallback", {
+            } catch (e) {
+              throw new Error(`Branch ${mainBranch} does not exist: ${e}`);
+            }
+
+            appendDebugLog("info", "merge target branch selected", { taskId: task.id, mainBranch })
+            try {
+              execFileSync("git", ["checkout", mainBranch], { cwd: worktreeInfo.directory, stdio: "ignore" })
+            } catch (checkoutErr) {
+              appendDebugLog("warn", "branch checkout skipped before merge", {
                 taskId: task.id,
                 branch: mainBranch,
-                error: showRefErr instanceof Error ? showRefErr.message : String(showRefErr),
-              })
-              hasTargetBranch = false
-            }
-          }
-
-          if (!hasTargetBranch) {
-            try {
-              const defaultBranch = execFileSync("git", ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], {
-                cwd: worktreeInfo.directory,
-                encoding: "utf-8",
-                stdio: "pipe",
-              }).trim()
-              if (defaultBranch.startsWith("origin/")) {
-                mainBranch = defaultBranch.slice("origin/".length)
-              } else if (defaultBranch) {
-                mainBranch = defaultBranch
-              }
-            } catch (e) {
-              appendDebugLog("warn", "could not resolve origin HEAD for merge target", {
-                taskId: task.id,
-                error: e instanceof Error ? e.message : String(e),
-              })
-            }
-
-            if (!mainBranch) {
-              try {
-                mainBranch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-                  cwd: worktreeInfo.directory,
-                  encoding: "utf-8",
-                  stdio: "pipe",
-                }).trim()
-              } catch (e) {
-                throw new Error(`Failed to get current branch: ${e}`);
-              }
-            }
-          }
-
-          try {
-            execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${mainBranch}`], {
-              cwd: worktreeInfo.directory,
-              stdio: "ignore",
-            })
-          } catch (e) {
-            throw new Error(`Branch ${mainBranch} does not exist: ${e}`);
-          }
-
-          appendDebugLog("info", "merge target branch selected", { taskId: task.id, mainBranch })
-          try {
-            execFileSync("git", ["checkout", mainBranch], { cwd: worktreeInfo.directory, stdio: "ignore" })
-          } catch (checkoutErr) {
-            appendDebugLog("warn", "branch checkout skipped before merge", {
-              taskId: task.id,
-              branch: mainBranch,
               error: checkoutErr instanceof Error ? checkoutErr.message : String(checkoutErr),
             })
             // Branch may be checked out in another worktree.
@@ -1206,6 +1246,7 @@ export class Orchestrator {
             encoding: "utf-8",
             stdio: "pipe",
           })
+          }
         } catch (mergeErr) {
           const msg = `Merge failed: ${mergeErr instanceof Error ? mergeErr.message : String(mergeErr)}`
           throw new Error(msg)
@@ -1940,15 +1981,20 @@ RECOMMENDED_PROMPT:
   }
 
   private parseReviewerOutput(output: string): ReviewerOutput {
-    const statusMatch = output.match(/STATUS:\s*(\w+)/i)
-    const summaryMatch = output.match(/SUMMARY:\s*([\s\S]+?)(?=\nBEST_CANDIDATES:|$)/i)
-    const bestMatch = output.match(/BEST_CANDIDATES:\s*([\s\S]+?)(?=\nGAPS:|$)/i)
-    const gapsMatch = output.match(/GAPS:\s*([\s\S]+?)(?=\nRECOMMENDED_FINAL_STRATEGY:|$)/i)
-    const strategyMatch = output.match(/RECOMMENDED_FINAL_STRATEGY:\s*(\w+)/i)
-    const promptMatch = output.match(/RECOMMENDED_PROMPT:\s*([\s\S]+?)$/i)
+    const text = output.replace(/^(?:\s*|#|\*)*(STATUS|SUMMARY|GAPS|RECOMMENDED_PROMPT|BEST_CANDIDATES|RECOMMENDED_FINAL_STRATEGY)(?:\s*|:|\*)*\s*/gim, "$1:\n");
+
+    const statusMatch = text.match(/(?:^|\n)STATUS:\s*([\s\S]*?)(?=(?:\n(?:SUMMARY|BEST_CANDIDATES|GAPS|RECOMMENDED_FINAL_STRATEGY|RECOMMENDED_PROMPT):)|$)/i)
+    const summaryMatch = text.match(/(?:^|\n)SUMMARY:\s*([\s\S]*?)(?=(?:\n(?:BEST_CANDIDATES|GAPS|RECOMMENDED_FINAL_STRATEGY|RECOMMENDED_PROMPT):)|$)/i)
+    const bestMatch = text.match(/(?:^|\n)BEST_CANDIDATES:\s*([\s\S]*?)(?=(?:\n(?:GAPS|RECOMMENDED_FINAL_STRATEGY|RECOMMENDED_PROMPT):)|$)/i)
+    const gapsMatch = text.match(/(?:^|\n)GAPS:\s*([\s\S]*?)(?=(?:\n(?:RECOMMENDED_FINAL_STRATEGY|RECOMMENDED_PROMPT):)|$)/i)
+    const strategyMatch = text.match(/(?:^|\n)RECOMMENDED_FINAL_STRATEGY:\s*([\s\S]*?)(?=(?:\nRECOMMENDED_PROMPT:)|$)/i)
+    const promptMatch = text.match(/(?:^|\n)RECOMMENDED_PROMPT:\s*([\s\S]*?)$/i)
 
     const statusRaw = statusMatch?.[1]?.toLowerCase().trim() || "needs_manual_review"
-    const status: ReviewerOutput["status"] = statusRaw === "pass" ? "pass" : "needs_manual_review"
+    let status: ReviewerOutput["status"] = "needs_manual_review"
+    if (statusRaw.includes("pass") || statusRaw.match(/succ|approv|ok|done|good/)) {
+      status = "pass"
+    }
 
     const summary = summaryMatch?.[1]?.trim() || "No summary provided"
 
@@ -1956,8 +2002,8 @@ RECOMMENDED_PROMPT:
     const bestCandidateIds = bestText
       .split("\n")
       .map(l => l.trim())
-      .filter(l => l.startsWith("- "))
-      .map(l => l.replace(/^-\s*/, "").trim())
+      .filter(l => l.startsWith("- ") || l.startsWith("* "))
+      .map(l => l.replace(/^[-*]\s*/, "").trim())
       .filter(l => l.length > 0)
 
     const gapsText = gapsMatch?.[1] || ""
@@ -2494,20 +2540,25 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
   }
 
   private parseReviewResponse(result: any): ReviewResult {
-    const textPart = result?.parts?.find(
+    const parts = result?.parts ?? result?.data?.parts
+    const textPart = parts?.find(
       (p: any) => p?.type === "text" && typeof p.text === "string"
     )
-    const text = textPart?.text ?? ""
+    let rawText = textPart?.text ?? ""
+    const text = rawText.replace(/^(?:\s*|#|\*)*(STATUS|SUMMARY|GAPS|RECOMMENDED_PROMPT)(?:\s*|:|\*)*\s*/gim, "$1:\n");
 
-    const statusMatch = text.match(/STATUS:\s*(\w+)/i)
-    const summaryMatch = text.match(/SUMMARY:\s*([\s\S]+?)(?=\nGAPS:|$)/i)
-    const gapsMatch = text.match(/GAPS:\s*([\s\S]+?)(?=\nRECOMMENDED_PROMPT:|$)/i)
-    const recommendedMatch = text.match(/RECOMMENDED_PROMPT:\s*([\s\S]+?)$/i)
+    const statusMatch = text.match(/(?:^|\n)STATUS:\s*([\s\S]*?)(?=(?:\n(?:SUMMARY|GAPS|RECOMMENDED_PROMPT):)|$)/i)
+    const summaryMatch = text.match(/(?:^|\n)SUMMARY:\s*([\s\S]*?)(?=(?:\n(?:GAPS|RECOMMENDED_PROMPT):)|$)/i)
+    const gapsMatch = text.match(/(?:^|\n)GAPS:\s*([\s\S]*?)(?=(?:\n(?:RECOMMENDED_PROMPT):)|$)/i)
+    const recommendedMatch = text.match(/(?:^|\n)RECOMMENDED_PROMPT:\s*([\s\S]*?)$/i)
 
     const statusRaw = statusMatch?.[1]?.toLowerCase().trim() || "blocked"
-    const status: ReviewResult["status"] =
-      statusRaw === "pass" ? "pass" :
-      statusRaw === "gaps_found" ? "gaps_found" : "blocked"
+    let status: ReviewResult["status"] = "blocked"
+    if (statusRaw.includes("pass") || statusRaw.match(/succ|approv|ok|done|good/)) {
+      status = "pass"
+    } else if (statusRaw.includes("gap") || statusRaw.match(/fail|need|reject/)) {
+      status = "gaps_found"
+    }
 
     const summary = summaryMatch?.[1]?.trim() || "Review could not be completed"
 

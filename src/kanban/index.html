@@ -320,6 +320,11 @@ sl-badge.badge { font-size: 11px; --sl-font-size-small: 11px; }
 .add-task-btn { width: 100%; padding: 8px; border: 1px dashed var(--border); border-radius: var(--radius); background: none; color: var(--text-dim); cursor: pointer; font-size: 13px; margin-top: auto; }
 .add-task-btn:hover { border-color: var(--accent); color: var(--accent); }
 
+/* Template icon button */
+sl-icon-button.add-task-btn { width: 100%; margin-top: auto; padding: 8px; border: 1px dashed var(--border); border-radius: var(--radius); }
+sl-icon-button.add-task-btn::part(base) { width: 100%; justify-content: center; color: var(--text-dim); background: none; }
+sl-icon-button.add-task-btn:hover::part(base) { border-color: var(--accent); color: var(--accent); }
+
 /* Delete all button (done panel) */
 .delete-all-btn { width: 100%; padding: 8px; border: 1px dashed rgba(218,54,51,.3); border-radius: var(--radius); background: rgba(218,54,51,.08); color: rgba(218,54,51,.8); cursor: pointer; font-size: 13px; margin-top: auto; }
 .delete-all-btn:hover { border-color: var(--red); color: var(--red); background: rgba(218,54,51,.14); }
@@ -622,7 +627,7 @@ sl-tooltip {
       <span class="count" id="count-template">0</span>
     </div>
     <div class="column-body" id="col-template">
-      <button class="add-task-btn" onclick="openTemplateTaskModal()">+ Add Template</button>
+      <sl-icon-button class="add-task-btn" onclick="openTemplateTaskModal()" title="Add Template" aria-label="Add Template" name="file-text"></sl-icon-button>
     </div>
   </div>
   <div class="column" data-status="backlog">
@@ -1672,11 +1677,21 @@ function renderBoard() {
       col.appendChild(renderCard(task, status))
     }
     if (status === 'template' || status === 'backlog') {
-      const btn = document.createElement('button')
-      btn.className = 'add-task-btn'
-      btn.textContent = status === 'template' ? '+ Add Template' : '+ Add Task'
-      btn.onclick = () => status === 'template' ? openTemplateTaskModal() : openTaskModal()
-      col.appendChild(btn)
+      if (status === 'template') {
+        const btn = document.createElement('sl-icon-button')
+        btn.className = 'add-task-btn'
+        btn.setAttribute('name', 'file-text')
+        btn.setAttribute('title', 'Add Template')
+        btn.setAttribute('aria-label', 'Add Template')
+        btn.onclick = () => openTemplateTaskModal()
+        col.appendChild(btn)
+      } else {
+        const btn = document.createElement('button')
+        btn.className = 'add-task-btn'
+        btn.textContent = '+ Add Task'
+        btn.onclick = () => openTaskModal()
+        col.appendChild(btn)
+      }
     }
     if (status === 'done') {
       const btn = document.createElement('button')
