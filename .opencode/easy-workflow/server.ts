@@ -588,11 +588,6 @@ export class KanbanServer {
     const url = new URL(req.url)
     const method = req.method
 
-    // Debug logging for bridge events
-    if (url.pathname === "/api/events/bridge") {
-      console.log(`[server] Bridge request: ${method} ${url.pathname}`)
-    }
-
     // Serve kanban UI
     if (method === "GET" && url.pathname === "/") {
       return new Response(KANBAN_HTML, {
@@ -1306,7 +1301,6 @@ export class KanbanServer {
 
       // Bridge Events - from the minimal bridge plugin
       if (method === "POST" && url.pathname === "/api/events/bridge") {
-        console.log("[server] Processing bridge event")
         const body = await req.json()
         await this.handleBridgeEvent(body)
         return this.json({ ok: true })
