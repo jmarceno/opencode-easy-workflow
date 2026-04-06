@@ -589,6 +589,7 @@ sl-tooltip {
   <div class="topbar-actions">
     <sl-button class="options-btn" onclick="openOptionsModal()">Options</sl-button>
     <sl-checkbox class="inline-checkbox" id="showGraphChk">Show execution graph</sl-checkbox>
+    <sl-checkbox class="inline-checkbox" id="telegramNotifyChk" title="Enable Telegram notifications for task status changes">🔔 Telegram</sl-checkbox>
   </div>
 </div>
 
@@ -930,6 +931,7 @@ sl-tooltip {
           <label>Telegram Notifications</label>
           <sl-icon-button class="help-btn" type="button" title="Send a Telegram message when a task changes state. Leave both fields empty to disable notifications." aria-label="Telegram notifications help" name="question-circle"></sl-icon-button>
         </div>
+        <sl-checkbox id="optTelegramEnabled" style="margin-bottom:8px;">Enable Telegram notifications</sl-checkbox>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
           <div>
             <label for="optTelegramBotToken" style="display:block;font-size:12px;color:var(--text-dim);margin-bottom:4px;">Bot Token</label>
@@ -1224,6 +1226,10 @@ async function loadOptions() {
     if (showGraphCheckbox) {
       showGraphCheckbox.checked = allOptions.showExecutionGraph !== false
     }
+    const telegramNotifyCheckbox = document.getElementById('telegramNotifyChk')
+    if (telegramNotifyCheckbox) {
+      telegramNotifyCheckbox.checked = allOptions.telegramNotificationsEnabled !== false
+    }
   } catch (e) { showToast('Failed to load options: ' + e.message, 'error') }
 }
 
@@ -1237,6 +1243,19 @@ async function persistShowExecutionGraphPreference() {
   } catch (e) {
     checkbox.checked = allOptions.showExecutionGraph !== false
     showToast('Failed to save graph preference: ' + e.message, 'error')
+  }
+}
+
+async function persistTelegramNotificationPreference() {
+  const checkbox = document.getElementById('telegramNotifyChk')
+  if (!checkbox) return
+  try {
+    allOptions = await api('/api/options', 'PUT', {
+      telegramNotificationsEnabled: !!checkbox.checked,
+    })
+  } catch (e) {
+    checkbox.checked = allOptions.telegramNotificationsEnabled !== false
+    showToast('Failed to save telegram preference: ' + e.message, 'error')
   }
 }
 
@@ -2662,6 +2681,7 @@ function openOptionsModal() {
   document.getElementById('optAutoDeleteNormalSessions').checked = !!allOptions.autoDeleteNormalSessions
   document.getElementById('optAutoDeleteReviewSessions').checked = !!allOptions.autoDeleteReviewSessions
   document.getElementById('optThinkingLevel').value = allOptions.thinkingLevel || 'default'
+  document.getElementById('optTelegramEnabled').checked = allOptions.telegramNotificationsEnabled !== false
   document.getElementById('optTelegramBotToken').value = allOptions.telegramBotToken || ''
   document.getElementById('optTelegramChatId').value = allOptions.telegramChatId || ''
   const telegramTestStatus = document.getElementById('telegramTestStatus')
@@ -2693,6 +2713,7 @@ async function saveOptions() {
       autoDeleteNormalSessions: document.getElementById('optAutoDeleteNormalSessions').checked,
       autoDeleteReviewSessions: document.getElementById('optAutoDeleteReviewSessions').checked,
       thinkingLevel: document.getElementById('optThinkingLevel').value || 'default',
+      telegramNotificationsEnabled: document.getElementById('optTelegramEnabled').checked,
       telegramBotToken: document.getElementById('optTelegramBotToken').value || '',
       telegramChatId: document.getElementById('optTelegramChatId').value || '',
     })
@@ -3102,6 +3123,10 @@ async function init() {
   if (showGraphCheckbox) {
     showGraphCheckbox.checked = true
     showGraphCheckbox.addEventListener('sl-change', persistShowExecutionGraphPreference)
+  }
+  const telegramNotifyCheckbox = document.getElementById('telegramNotifyChk')
+  if (telegramNotifyCheckbox) {
+    telegramNotifyCheckbox.addEventListener('sl-change', persistTelegramNotificationPreference)
   }
   for (const inputId of MODEL_INPUT_IDS) {
     resetModelInput(inputId, 'default')

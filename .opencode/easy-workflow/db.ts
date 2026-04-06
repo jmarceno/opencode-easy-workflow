@@ -21,6 +21,7 @@ const DEFAULT_OPTIONS: Options = {
   thinkingLevel: "default",
   telegramBotToken: "",
   telegramChatId: "",
+  telegramNotificationsEnabled: true,
 }
 
 function normalizeOptionBoolean(value: unknown, fallback = false): boolean {
@@ -815,6 +816,7 @@ export class KanbanDB {
       thinkingLevel: normalizeThinkingLevel(opts.thinking_level) ?? DEFAULT_OPTIONS.thinkingLevel,
       telegramBotToken: opts.telegram_bot_token ?? DEFAULT_OPTIONS.telegramBotToken,
       telegramChatId: opts.telegram_chat_id ?? DEFAULT_OPTIONS.telegramChatId,
+      telegramNotificationsEnabled: normalizeOptionBoolean(opts.telegram_notifications_enabled, DEFAULT_OPTIONS.telegramNotificationsEnabled),
     }
   }
 
@@ -838,6 +840,7 @@ export class KanbanDB {
     if (partial.thinkingLevel !== undefined) upsert.run("thinking_level", partial.thinkingLevel)
     if (partial.telegramBotToken !== undefined) upsert.run("telegram_bot_token", partial.telegramBotToken)
     if (partial.telegramChatId !== undefined) upsert.run("telegram_chat_id", partial.telegramChatId)
+    if (partial.telegramNotificationsEnabled !== undefined) upsert.run("telegram_notifications_enabled", String(partial.telegramNotificationsEnabled))
 
     return this.getOptions()
   }

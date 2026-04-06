@@ -160,7 +160,9 @@ async function main() {
     `Write exactly this content in the file: UI_PROBE_${runId}`,
   ].join(" ");
 
-  const reportDir = join(process.cwd(), ".opencode", "easy-workflow", "test-artifacts");
+  // Use temp directory for ALL test artifacts to ensure isolation from production
+  const tempDir = mkdtempSync(join(tmpdir(), "easy-workflow-ui-"));
+  const reportDir = join(tempDir, "test-artifacts");
   mkdirSync(reportDir, { recursive: true });
   const reportPath = join(reportDir, `kanban-web-ui-${runId}.json`);
 
@@ -186,7 +188,7 @@ async function main() {
     error: null,
   };
 
-  const tempDir = mkdtempSync(join(tmpdir(), "easy-workflow-ui-"));
+  // Database goes in the temp directory we already created
   const dbPath = join(tempDir, "tasks.db");
 
   let opencode: Awaited<ReturnType<typeof createOpencode>> | null = null;
@@ -231,7 +233,7 @@ async function main() {
       kanbanDb,
       kanbanServer,
       () => resolveServerUrlFromClient(opencode?.client),
-      process.cwd(),
+      tempDir, // Use tempDir as ownerDirectory to ensure isolation from production
     );
 
     kanbanServer.start();
@@ -253,7 +255,7 @@ async function main() {
     }
     report.modelCatalogProviderCount = modelCatalog.providers.length;
 
-    await page.click(".topbar button:has-text('Options')");
+    await page.click(".options-btn");
     await page.waitForFunction(
       () => document.getElementById("optionsModal")?.classList.contains("hidden") === false,
       undefined,
@@ -268,17 +270,24 @@ async function main() {
     if (!report.modelCatalogHasDefaultOption) {
       throw new Error("Model dropdown is missing required default option");
     }
-    await page.selectOption("#optThinkingLevel", "medium");
-    await page.click("#optionsModal .btn.btn-primary");
+    // For Shoelace sl-select, we need to click to open and then click the option
+    await page.locator("#optThinkingLevel").click();
+    await page.waitForTimeout(100);
+    await page.locator("#optThinkingLevel sl-option[value='medium']").click();
+    await page.waitForTimeout(100);
+    await page.locator("#optionsModal sl-button:has-text('Save')").click();
     await page.waitForFunction(
       () => document.getElementById("optionsModal")?.classList.contains("hidden") === true,
       undefined,
       { timeout: 5000 },
     );
 
-    await page.click("#col-backlog .add-task-btn");
-    await page.fill("#taskName", taskName);
-    await page.fill("#taskPrompt", taskPrompt);
+    await page.locator("#col-backlog .add-task-btn").click();
+    // Shoelace components need special handling - click and use keyboard input
+    await page.locator("#taskName").click();
+    await page.keyboard.type(taskName);
+    await page.locator("#taskPrompt").click();
+    await page.keyboard.type(taskPrompt);
 
     const firstNonDefaultModel = modelCatalog.providers
       .flatMap((provider: any) => Array.isArray(provider?.models) ? provider.models : [])
@@ -290,16 +299,23 @@ async function main() {
     report.selectedExecutionModel = firstNonDefaultModel;
     await page.fill("#taskExecModel", firstNonDefaultModel);
     await page.dispatchEvent("#taskExecModel", "blur");
-    await page.selectOption("#taskThinkingLevel", "high");
+    // For Shoelace sl-select, we need to click to open and then click the option
+    await page.locator("#taskThinkingLevel").click();
+    await page.waitForTimeout(100);
+    await page.locator("#taskThinkingLevel sl-option[value='high']").click();
+    await page.waitForTimeout(100);
 
-    if (await page.isChecked("#taskReview")) {
-      await page.click("#taskReview");
+    // Shoelace checkboxes need JavaScript evaluation to check/uncheck
+    const isReviewChecked = await page.evaluate(() => (document.getElementById('taskReview') as any)?.checked);
+    if (isReviewChecked) {
+      await page.evaluate(() => ((document.getElementById('taskReview') as any).checked = false));
     }
-    if (await page.isChecked("#taskAutoCommit")) {
-      await page.click("#taskAutoCommit");
+    const isAutoCommitChecked = await page.evaluate(() => (document.getElementById('taskAutoCommit') as any)?.checked);
+    if (isAutoCommitChecked) {
+      await page.evaluate(() => ((document.getElementById('taskAutoCommit') as any).checked = false));
     }
 
-    await page.click("#taskModal .btn.btn-primary");
+    await page.locator("#taskSaveBtn").click();
     await page.waitForFunction(
       () => document.getElementById("taskModal")?.classList.contains("hidden") === true,
       undefined,
@@ -337,15 +353,15 @@ async function main() {
       undefined,
       { timeout: 5000 },
     );
-    const modalExecModel = await page.inputValue("#taskExecModel");
-    const modalThinking = await page.inputValue("#taskThinkingLevel");
+    const modalExecModel = await page.evaluate(() => (document.getElementById('taskExecModel') as HTMLInputElement)?.value);
+    const modalThinking = await page.evaluate(() => (document.getElementById('taskThinkingLevel') as any)?.value);
     if (modalExecModel !== report.selectedExecutionModel) {
       throw new Error(`Task modal did not hydrate execution model. Expected ${report.selectedExecutionModel}, got ${modalExecModel}`);
     }
     if (modalThinking !== "high") {
       throw new Error(`Task modal did not hydrate thinking level. Expected high, got ${modalThinking}`);
     }
-    await page.click("#taskModal .btn");
+    await page.locator("#taskModal sl-button:has-text('Cancel')").click();
     await page.waitForFunction(
       () => document.getElementById("taskModal")?.classList.contains("hidden") === true,
       undefined,
@@ -354,9 +370,23 @@ async function main() {
 
     const startResponsePromise = page.waitForResponse(
       (response) => response.url().endsWith("/api/start") && response.request().method() === "POST",
-      { timeout: 15000 },
+      { timeout: 30000 },
     );
-    await page.click("#startBtn");
+    await page.locator("#startBtn").click();
+
+    // Wait briefly for graph modal to potentially open
+    await page.waitForTimeout(500);
+
+    // If the execution graph preview is enabled, we need to click "Confirm & Start" in the graph modal
+    const graphModalVisible = await page.evaluate(() => {
+      const modal = document.getElementById('graphModal');
+      return modal && !modal.classList.contains('hidden');
+    });
+    
+    if (graphModalVisible) {
+      console.log("Graph modal is open, clicking Confirm & Start...");
+      await page.locator("#graphModal sl-button:has-text('Confirm')").click();
+    }
 
     const startResponse = await startResponsePromise;
     report.startResponse = {
@@ -368,6 +398,20 @@ async function main() {
     if (!report.startResponse.ok) {
       throw new Error(`Start failed from web UI: HTTP ${report.startResponse.status} ${report.startResponse.body}`);
     }
+
+    console.log("Start response OK, polling for session...");
+
+    // Debug: Check task status after start
+    const tasksAfterStart = await page.request.get(`${report.kanbanUrl}/api/tasks`);
+    const tasks = await tasksAfterStart.json();
+    const taskAfterStart = tasks.find((t: any) => t.name === taskName);
+    console.log("Task after start:", taskAfterStart ? { 
+      id: taskAfterStart.id, 
+      status: taskAfterStart.status, 
+      errorMessage: taskAfterStart.errorMessage,
+      sessionId: taskAfterStart.sessionId,
+      executionPhase: taskAfterStart.executionPhase 
+    } : "not found");
 
     const discoveredSession = await pollFor(async () => {
       const sessions = await listSessions(client);
@@ -457,7 +501,11 @@ async function testPlanModeApprovalUI() {
     `Write exactly this content in the file: PLAN_UI_PROBE_${runId}`,
   ].join(" ");
 
-  const reportDir = join(process.cwd(), ".opencode", "easy-workflow", "test-artifacts");
+  // Create temp directory FIRST for complete isolation from production
+  const tempDir = mkdtempSync(join(tmpdir(), "easy-workflow-plan-ui-"));
+  const dbPath = join(tempDir, "tasks.db");
+
+  const reportDir = join(tempDir, "test-artifacts");
   mkdirSync(reportDir, { recursive: true });
   const reportPath = join(reportDir, `kanban-plan-ui-${runId}.json`);
 
@@ -478,9 +526,6 @@ async function testPlanModeApprovalUI() {
     passed: false,
     error: null,
   };
-
-  const tempDir = mkdtempSync(join(tmpdir(), "easy-workflow-plan-ui-"));
-  const dbPath = join(tempDir, "tasks.db");
 
   let opencode: Awaited<ReturnType<typeof createOpencode>> | null = null;
   let kanbanDb: KanbanDB | null = null;
@@ -521,7 +566,7 @@ async function testPlanModeApprovalUI() {
       kanbanDb,
       kanbanServer,
       () => resolveServerUrlFromClient(opencode?.client),
-      process.cwd(),
+      tempDir, // Use tempDir as ownerDirectory to ensure isolation from production
     );
 
     kanbanServer.start();
@@ -665,7 +710,11 @@ async function testPlanModeApprovalUI() {
 async function testSkipPermissionAskingUI() {
   const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-  const reportDir = join(process.cwd(), ".opencode", "easy-workflow", "test-artifacts");
+  // Create temp directory FIRST for complete isolation from production
+  const tempDir = mkdtempSync(join(tmpdir(), "ewf-skip-perm-ui-"));
+  const dbPath = join(tempDir, "tasks.db");
+
+  const reportDir = join(tempDir, "test-artifacts");
   mkdirSync(reportDir, { recursive: true });
   const reportPath = join(reportDir, `kanban-skip-perm-ui-${runId}.json`);
 
@@ -696,9 +745,6 @@ async function testSkipPermissionAskingUI() {
     passed: false,
     error: null,
   };
-
-  const tempDir = mkdtempSync(join(tmpdir(), "ewf-skip-perm-ui-"));
-  const dbPath = join(tempDir, "tasks.db");
 
   let kanbanDb: KanbanDB | null = null;
   let kanbanServer: KanbanServer | null = null;
@@ -946,7 +992,11 @@ async function testSkipPermissionAskingUI() {
 async function testKeyboardShortcutsDoNotFireInModalsOrInputs() {
   const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-  const reportDir = join(process.cwd(), ".opencode", "easy-workflow", "test-artifacts");
+  // Create temp directory FIRST for complete isolation from production
+  const tempDir = mkdtempSync(join(tmpdir(), "ewf-shortcuts-ui-"));
+  const dbPath = join(tempDir, "tasks.db");
+
+  const reportDir = join(tempDir, "test-artifacts");
   mkdirSync(reportDir, { recursive: true });
   const reportPath = join(reportDir, `kanban-shortcuts-ui-${runId}.json`);
 
@@ -979,9 +1029,6 @@ async function testKeyboardShortcutsDoNotFireInModalsOrInputs() {
     passed: false,
     error: null,
   };
-
-  const tempDir = mkdtempSync(join(tmpdir(), "ewf-shortcuts-ui-"));
-  const dbPath = join(tempDir, "tasks.db");
 
   let kanbanDb: KanbanDB | null = null;
   let kanbanServer: KanbanServer | null = null;
@@ -1296,9 +1343,10 @@ async function testKeyboardShortcutsDoNotFireInModalsOrInputs() {
 async function testReviewActivityUI() {
   console.log("\n=== Review Activity UI Test ===");
 
+  // Create temp directory FIRST for complete isolation from production
   const tempDir = mkdtempSync(join(tmpdir(), "easy-workflow-review-activity-"));
   const dbPath = join(tempDir, "tasks.db");
-  const reportDir = join(process.cwd(), ".opencode", "easy-workflow", "test-artifacts");
+  const reportDir = join(tempDir, "test-artifacts");
   mkdirSync(reportDir, { recursive: true });
   const reportPath = join(reportDir, `kanban-review-activity-${Date.now()}.json`);
 
@@ -1449,7 +1497,11 @@ async function testReviewActivityUI() {
 async function testDoneColumnNewestFirstOrdering() {
   const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-  const reportDir = join(process.cwd(), ".opencode", "easy-workflow", "test-artifacts");
+  // Create temp directory FIRST for complete isolation from production
+  const tempDir = mkdtempSync(join(tmpdir(), "ewf-done-ordering-"));
+  const dbPath = join(tempDir, "tasks.db");
+
+  const reportDir = join(tempDir, "test-artifacts");
   mkdirSync(reportDir, { recursive: true });
   const reportPath = join(reportDir, `kanban-done-ordering-${runId}.json`);
 
@@ -1476,9 +1528,6 @@ async function testDoneColumnNewestFirstOrdering() {
     passed: false,
     error: null,
   };
-
-  const tempDir = mkdtempSync(join(tmpdir(), "ewf-done-ordering-"));
-  const dbPath = join(tempDir, "tasks.db");
 
   let kanbanDb: KanbanDB | null = null;
   let kanbanServer: KanbanServer | null = null;
@@ -1620,7 +1669,11 @@ async function testDoneColumnNewestFirstOrdering() {
 async function testDependencyBadgeUI() {
   const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-  const reportDir = join(process.cwd(), ".opencode", "easy-workflow", "test-artifacts");
+  // Create temp directory FIRST for complete isolation from production
+  const tempDir = mkdtempSync(join(tmpdir(), "ewf-dep-badge-"));
+  const dbPath = join(tempDir, "tasks.db");
+
+  const reportDir = join(tempDir, "test-artifacts");
   mkdirSync(reportDir, { recursive: true });
   const reportPath = join(reportDir, `kanban-dep-badge-${runId}.json`);
 
@@ -1669,9 +1722,6 @@ async function testDependencyBadgeUI() {
     passed: false,
     error: null,
   };
-
-  const tempDir = mkdtempSync(join(tmpdir(), "ewf-dep-badge-"));
-  const dbPath = join(tempDir, "tasks.db");
 
   let kanbanDb: KanbanDB | null = null;
   let kanbanServer: KanbanServer | null = null;

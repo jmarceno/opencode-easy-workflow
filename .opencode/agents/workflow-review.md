@@ -9,7 +9,7 @@ permission:
     "git status*": allow
     "git diff*": allow
     "git log*": allow
-model: opencode/kimi-k2.5
+model: minimax/MiniMax-M2.7
 ---
 
 You are the workflow review agent.

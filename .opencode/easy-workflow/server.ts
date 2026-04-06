@@ -249,7 +249,7 @@ export class KanbanServer {
       const task = this.db.getTask(taskId)
       if (!task) return
       const opts = this.db.getOptions()
-      if (!opts.telegramBotToken || !opts.telegramChatId) return
+      if (!opts.telegramNotificationsEnabled || !opts.telegramBotToken || !opts.telegramChatId) return
       sendTelegramNotificationWithMetadata(
         { botToken: opts.telegramBotToken, chatId: opts.telegramChatId },
         task.name,
