@@ -11,6 +11,7 @@ const DEFAULT_OPTIONS: Options = {
   planModel: "default",
   executionModel: "default",
   reviewModel: "minimax/MiniMax-M2.7",
+  repairModel: "minimax/MiniMax-M2.7",
   command: "",
   parallelTasks: 1,
   autoDeleteNormalSessions: false,
@@ -366,6 +367,11 @@ export class KanbanDB {
     const hasReviewModelKey = this.db.prepare("SELECT COUNT(*) as cnt FROM options WHERE key = 'review_model'").get() as any
     if (hasReviewModelKey.cnt === 0) {
       this.db.prepare("INSERT OR IGNORE INTO options (key, value) VALUES ('review_model', ?)").run(DEFAULT_OPTIONS.reviewModel)
+    }
+
+    const hasRepairModelKey = this.db.prepare("SELECT COUNT(*) as cnt FROM options WHERE key = 'repair_model'").get() as any
+    if (hasRepairModelKey.cnt === 0) {
+      this.db.prepare("INSERT OR IGNORE INTO options (key, value) VALUES ('repair_model', ?)").run(DEFAULT_OPTIONS.repairModel)
     }
 
     const hasAutoDeleteNormalSessionsKey = this.db.prepare("SELECT COUNT(*) as cnt FROM options WHERE key = 'auto_delete_normal_sessions'").get() as any
@@ -799,6 +805,7 @@ export class KanbanDB {
       planModel: opts.plan_model ?? DEFAULT_OPTIONS.planModel,
       executionModel: opts.execution_model ?? DEFAULT_OPTIONS.executionModel,
       reviewModel: opts.review_model ?? DEFAULT_OPTIONS.reviewModel,
+      repairModel: opts.repair_model ?? DEFAULT_OPTIONS.repairModel,
       command: opts.command ?? DEFAULT_OPTIONS.command,
       parallelTasks: parseInt(opts.parallel_tasks ?? "1", 10) || 1,
       autoDeleteNormalSessions: normalizeOptionBoolean(opts.auto_delete_normal_sessions, DEFAULT_OPTIONS.autoDeleteNormalSessions),
@@ -821,6 +828,7 @@ export class KanbanDB {
     if (partial.planModel !== undefined) upsert.run("plan_model", partial.planModel)
     if (partial.executionModel !== undefined) upsert.run("execution_model", partial.executionModel)
     if (partial.reviewModel !== undefined) upsert.run("review_model", partial.reviewModel)
+    if (partial.repairModel !== undefined) upsert.run("repair_model", partial.repairModel)
     if (partial.command !== undefined) upsert.run("command", partial.command)
     if (partial.parallelTasks !== undefined) upsert.run("parallel_tasks", String(partial.parallelTasks))
     if (partial.autoDeleteNormalSessions !== undefined) upsert.run("auto_delete_normal_sessions", String(partial.autoDeleteNormalSessions))

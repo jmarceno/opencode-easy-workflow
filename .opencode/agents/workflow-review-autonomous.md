@@ -1,7 +1,6 @@
 ---
 description: Autonomous workflow review without permission pauses
 mode: subagent
-model: minimax/MiniMax-M2.7
 permission:
   edit: deny
   webfetch: deny

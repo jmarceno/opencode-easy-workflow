@@ -869,6 +869,18 @@ sl-tooltip {
           </template>
         </datalist>
       </div>
+      <div class="form-group" x-data="modelPicker('optRepairModel')" x-init="attach()">
+        <div class="label-row">
+          <label for="optRepairModel">Repair Model</label>
+          <sl-icon-button class="help-btn" type="button" title="Model used by the workflow-repair agent for state repair analysis." aria-label="Repair model help" name="question-circle"></sl-icon-button>
+        </div>
+        <input type="text" id="optRepairModel" class="model-search" placeholder="Type model name..." list="optRepairModel-suggestions" x-model="query" @focus="refreshSuggestions()" @input="refreshSuggestions()" @blur="commit()">
+        <datalist id="optRepairModel-suggestions">
+          <template x-for="match in matches" :key="match.value + '-' + match.providerId">
+            <option :value="match.value" :label="match.labelWithProvider"></option>
+          </template>
+        </datalist>
+      </div>
       <div class="form-group">
         <div class="label-row">
           <label for="optThinkingLevel">Thinking Level (global default)</label>
@@ -1041,6 +1053,7 @@ const MODEL_INPUT_IDS = [
   'optPlanModel',
   'optExecModel',
   'optReviewModel',
+  'optRepairModel',
   'bonFinalApplierModel',
 ]
 
@@ -2521,6 +2534,7 @@ function openOptionsModal() {
   resetModelInput('optPlanModel', allOptions.planModel || 'default')
   resetModelInput('optExecModel', allOptions.executionModel || 'default')
   resetModelInput('optReviewModel', allOptions.reviewModel || 'default')
+  resetModelInput('optRepairModel', allOptions.repairModel || 'default')
   document.getElementById('optCommand').value = allOptions.command || ''
   document.getElementById('optParallel').value = allOptions.parallelTasks || 1
   document.getElementById('optAutoDeleteNormalSessions').checked = !!allOptions.autoDeleteNormalSessions
@@ -2551,6 +2565,7 @@ async function saveOptions() {
       planModel: normalizeModelInputValue(document.getElementById('optPlanModel').value),
       executionModel: normalizeModelInputValue(document.getElementById('optExecModel').value),
       reviewModel: normalizeModelInputValue(document.getElementById('optReviewModel').value),
+      repairModel: normalizeModelInputValue(document.getElementById('optRepairModel').value),
       command: document.getElementById('optCommand').value,
       parallelTasks: parseInt(document.getElementById('optParallel').value, 10) || 1,
       autoDeleteNormalSessions: document.getElementById('optAutoDeleteNormalSessions').checked,

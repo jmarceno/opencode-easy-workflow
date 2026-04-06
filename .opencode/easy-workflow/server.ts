@@ -8,7 +8,7 @@ import { KanbanDB } from "./db"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
 import { buildExecutionGraph, getExecutableTasks, isTaskExecutable } from "./execution-plan"
 import { chooseDeterministicRepairAction, getLatestTaggedOutput, getPlanExecutionEligibility, hasCapturedPlanOutput, isTaskAwaitingPlanApproval, type TaskRepairAction } from "./task-state"
-import { sendTelegramNotification } from "./telegram"
+import { sendTelegramNotificationWithMetadata } from "./telegram"
 
 const MAX_EXPANDED_WORKER_RUNS = 8
 const MAX_EXPANDED_REVIEWER_RUNS = 4
@@ -250,11 +250,12 @@ export class KanbanServer {
       if (!task) return
       const opts = this.db.getOptions()
       if (!opts.telegramBotToken || !opts.telegramChatId) return
-      sendTelegramNotification(
+      sendTelegramNotificationWithMetadata(
         { botToken: opts.telegramBotToken, chatId: opts.telegramChatId },
         task.name,
         oldStatus,
         newStatus,
+        opts.port,
         (msg: string) => console.debug(msg)
       ).catch((err: unknown) => {
         console.error("[telegram] notification failed:", err)
@@ -394,6 +395,9 @@ export class KanbanServer {
     }
 
     const options = this.db.getOptions()
+    if (!options.repairModel || options.repairModel === "default") {
+      throw new Error("Repair model is not configured. Please set a Repair Model in options before running the workflow.")
+    }
     const client = createV2Client(serverUrl)
     const promptParts = [
       "You repair workflow task states.",
@@ -446,7 +450,7 @@ export class KanbanServer {
     const response = await client.session.prompt({
       sessionID: session?.id,
       agent: repairAgent,
-      ...(options.executionModel !== "default" ? { model: options.executionModel } : {}),
+      ...(options.repairModel !== "default" ? { model: options.repairModel } : {}),
       parts: [{ type: "text", text: prompt }],
     })
     const result = response?.data ?? response
@@ -756,6 +760,28 @@ export class KanbanServer {
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err)
             console.error("[Kanban Server] Failed to fetch providers for review model update:", msg)
+            return this.json({ error: `OpenCode server unavailable. Please try again later. Details: ${msg}` }, 503)
+          }
+        }
+        if (body?.repairModel !== undefined) {
+          if (typeof body.repairModel !== "string" || !body.repairModel.trim() || body.repairModel === "default") {
+            return this.json({ error: "Invalid repairModel. Select a concrete provider/model value." }, 400)
+          }
+
+          const serverUrl = this.getServerUrl()
+          if (!serverUrl) {
+            return this.json({ error: "OpenCode server URL is not configured" }, 500)
+          }
+
+          try {
+            const client = createV2Client(serverUrl)
+            const providersResponse = await client.config.providers()
+            const catalog = providersResponse?.data ?? providersResponse
+            const canonicalRepairModel = resolveCatalogModel(body.repairModel, catalog, "Repair")
+            body.repairModel = canonicalRepairModel
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err)
+            console.error("[Kanban Server] Failed to fetch providers for repair model update:", msg)
             return this.json({ error: `OpenCode server unavailable. Please try again later. Details: ${msg}` }, 503)
           }
         }

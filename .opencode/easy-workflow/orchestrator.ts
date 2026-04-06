@@ -2257,6 +2257,10 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
       return
     }
 
+    if (!options.reviewModel || options.reviewModel === "default") {
+      throw new Error("Review model is not configured. Please set a Review Model in options before running the workflow.")
+    }
+
     const maxRuns = task.maxReviewRunsOverride ?? config.maxReviewRuns
     let reviewCount = task.reviewCount
     const client = this.getClient()
@@ -2312,6 +2316,7 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
           const response = await client.session.prompt({
             sessionID: reviewSessionId,
             agent: reviewAgentName,
+            ...(options.reviewModel !== "default" ? { model: options.reviewModel } : {}),
             parts: [{ type: "text", text: promptText }],
           })
 

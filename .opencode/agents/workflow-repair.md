@@ -1,7 +1,6 @@
 ---
 description: Workflow-owned state repair analysis
 mode: subagent
-model: minimax/MiniMax-M2.7
 permission:
   edit: deny
   webfetch: deny

@@ -136,6 +136,7 @@ export interface Options {
   planModel: string
   executionModel: string
   reviewModel: string
+  repairModel: string
   command: string
   parallelTasks: number
   autoDeleteNormalSessions: boolean

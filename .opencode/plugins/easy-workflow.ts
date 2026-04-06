@@ -472,11 +472,288 @@ async function startStandaloneServer(projectRoot: string): Promise<number | null
 function killStandaloneServer(projectRoot: string): void {
   const pid = readServerPid(projectRoot)
   if (!pid) return
-    
+     
   process.kill(pid, "SIGKILL")
   console.log(`[easy-workflow-bridge] Sent SIGKILL to server (PID: ${pid})`)
     
   clearServerPid(projectRoot)
+}
+
+// ---- Telegram Reply Polling ----
+
+interface TelegramUpdate {
+  update_id: number
+  message?: {
+    message_id: number
+    chat: { id: number; type: string }
+    from?: { id: number; is_bot: boolean; username?: string }
+    reply_to_message?: {
+      message_id: number
+      from?: { id: number; is_bot: boolean; username?: string }
+      text?: string
+    }
+    text?: string
+  }
+}
+
+interface TelegramPollingConfig {
+  botToken: string
+  chatId: string
+  localPort: number
+  standaloneServerUrl: string
+  projectDirectory: string
+}
+
+/**
+ * Extract bot username from bot token by calling getMe API.
+ * The token format is typically: botId:botSecret, so we derive the username from API response.
+ */
+async function getBotUsername(botToken: string): Promise<string | null> {
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${botToken}/getMe`, {
+      method: "GET",
+      signal: AbortSignal.timeout(10000),
+    })
+    if (!response.ok) return null
+    const data = await response.json() as any
+    return data?.result?.username ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Sleep for specified milliseconds
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+/**
+ * Parse port from a message text that contains EWF metadata markers.
+ */
+function parseEwPort(text: string): number | null {
+  const match = text.match(/<!-- EWF_PORT:(\d+):EWF_PORT -->/)
+  if (!match) return null
+  const port = parseInt(match[1], 10)
+  return isNaN(port) ? null : port
+}
+
+/**
+ * Validate that a Telegram update is a valid Easy Workflow reply.
+ * Rules:
+ * 1. Message must be a reply (reply_to_message exists)
+ * 2. The replied message must be from a bot
+ * 3. The bot must be our bot (username matches)
+ * 4. Chat ID must match configured chat ID
+ * 5. The replied message text must contain a valid EWF port marker
+ * 6. The port must match our local port
+ */
+async function validateEwReply(
+  update: TelegramUpdate,
+  config: TelegramPollingConfig,
+  botUsername: string | null
+): Promise<{ valid: boolean; userText: string | null; replyMsgId: number | null }> {
+  const msg = update.message
+  if (!msg) return { valid: false, userText: null, replyMsgId: null }
+
+  // Must be a reply
+  if (!msg.reply_to_message) return { valid: false, userText: null, replyMsgId: null }
+
+  const reply = msg.reply_to_message
+
+  // The replied message must be from a bot
+  if (!reply.from?.is_bot) return { valid: false, userText: null, replyMsgId: null }
+
+  // If we have a bot username, verify it matches
+  if (botUsername && reply.from?.username !== botUsername) return { valid: false, userText: null, replyMsgId: null }
+
+  // Chat ID must match
+  const chatIdStr = String(msg.chat.id)
+  const configChatIdStr = String(config.chatId)
+  if (chatIdStr !== configChatIdStr) return { valid: false, userText: null, replyMsgId: null }
+
+  // The replied message must contain EWF port marker
+  if (!reply.text || !reply.text.includes("EWF_PORT:")) return { valid: false, userText: null, replyMsgId: null }
+
+  // Parse and validate port
+  const port = parseEwPort(reply.text)
+  if (port === null || port !== config.localPort) return { valid: false, userText: null, replyMsgId: null }
+
+  // Extract user text (the actual reply content)
+  const userText = msg.text?.trim() ?? null
+  if (!userText) return { valid: false, userText: null, replyMsgId: null }
+
+  return { valid: true, userText, replyMsgId: reply.message_id }
+}
+
+/**
+ * Build the prompt for a Telegram reply-driven session.
+ * The prompt begins with an instruction pointing to the Easy Workflow plugin skill,
+ * includes structured context with port and reply metadata.
+ */
+function buildTelegramReplyPrompt(
+  userText: string,
+  port: number,
+  chatId: string,
+  replyMsgId: number
+): string {
+  const contextLines = [
+    "Use the Easy Workflow plugin skill to handle this request.",
+    "",
+    "<!-- EWF_CONTEXT",
+    `EWF_PORT:${port}`,
+    `EWF_CHAT_ID:${chatId}`,
+    `EWF_REPLY_MSG_ID:${replyMsgId}`,
+    "EWF_CONTEXT -->",
+    "",
+    userText,
+  ]
+  return contextLines.join("\n")
+}
+
+/**
+ * Forward a valid Telegram reply to a new OpenCode session.
+ */
+async function forwardTelegramReplyToSession(
+  client: any,
+  userText: string,
+  port: number,
+  chatId: string,
+  replyMsgId: number,
+  projectDirectory: string,
+  logger: (msg: string) => void
+): Promise<void> {
+  try {
+    const prompt = buildTelegramReplyPrompt(userText, port, chatId, replyMsgId)
+
+    // Create a new session
+    const sessionResponse = await client.session.create({
+      title: `Telegram reply (port ${port})`,
+    })
+    const session = sessionResponse?.data ?? sessionResponse
+    const sessionId = session?.id
+
+    if (!sessionId) {
+      logger("[telegram-polling] Failed to create session: no session ID returned")
+      return
+    }
+
+    // Send the prompt to the new session
+    await client.session.prompt({
+      path: { id: sessionId },
+      body: {
+        parts: [{ type: "text", text: prompt }],
+      },
+    })
+
+    logger(`[telegram-polling] Forwarded Telegram reply to new session: ${sessionId}`)
+  } catch (err) {
+    logger(`[telegram-polling] Failed to forward reply to session: ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
+/**
+ * Start the Telegram polling loop for reply-driven session routing.
+ * Returns a function to stop the polling.
+ */
+function startTelegramPolling(
+  client: any,
+  config: TelegramPollingConfig,
+  logger: (msg: string) => void
+): () => void {
+  const abortController = new AbortController()
+  let lastUpdateId = 0
+  let stopped = false
+
+  const poll = async () => {
+    const botUsername = await getBotUsername(config.botToken)
+    if (botUsername) {
+      logger(`[telegram-polling] Verified bot username: @${botUsername}`)
+    } else {
+      logger("[telegram-polling] Could not verify bot username, will accept any bot in reply")
+    }
+
+    while (!stopped && !abortController.signal.aborted) {
+      try {
+        // Use long polling with getUpdates
+        // offset parameter ensures we only get new updates
+        const url = `https://api.telegram.org/bot${config.botToken}/getUpdates?offset=${lastUpdateId}&timeout=30`
+        const response = await fetch(url, {
+          signal: AbortSignal.timeout(35000), // 35s timeout to ensure we catch abort
+        })
+
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => "unknown")
+          logger(`[telegram-polling] getUpdates failed: ${response.status} ${errorText}`)
+          await sleep(5000) // Back off on error
+          continue
+        }
+
+        const updates = await response.json() as { ok: boolean; result?: TelegramUpdate[] }
+        if (!updates.ok || !updates.result || updates.result.length === 0) {
+          // No new updates, continue polling
+          continue
+        }
+
+        for (const update of updates.result) {
+          if (stopped || abortController.signal.aborted) break
+
+          // Validate the update
+          const validation = await validateEwReply(update, config, botUsername)
+          if (!validation.valid) {
+            // Not a valid EWF reply, skip but update offset
+            if (update.update_id >= lastUpdateId) {
+              lastUpdateId = update.update_id + 1
+            }
+            continue
+          }
+
+          // Valid reply! Forward to new session
+          await forwardTelegramReplyToSession(
+            client,
+            validation.userText!,
+            config.localPort,
+            String(config.chatId),
+            validation.replyMsgId!,
+            config.projectDirectory,
+            logger
+          )
+
+          // Update offset so we don't process this again
+          if (update.update_id >= lastUpdateId) {
+            lastUpdateId = update.update_id + 1
+          }
+        }
+      } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") {
+          // Shutdown requested
+          break
+        }
+        logger(`[telegram-polling] Polling error: ${err instanceof Error ? err.message : String(err)}`)
+        await sleep(5000) // Back off on error
+      }
+
+      // Small delay between successful polls
+      if (!stopped && !abortController.signal.aborted) {
+        await sleep(1000)
+      }
+    }
+
+    logger("[telegram-polling] Polling loop ended")
+  }
+
+  // Start polling in background
+  poll().catch(err => {
+    logger(`[telegram-polling] Fatal polling error: ${err instanceof Error ? err.message : String(err)}`)
+  })
+
+  // Return stop function
+  return () => {
+    stopped = true
+    abortController.abort()
+    logger("[telegram-polling] Stopping...")
+  }
 }
 
 // ---- Plugin export ----
@@ -484,12 +761,12 @@ function killStandaloneServer(projectRoot: string): void {
 export const EasyWorkflowBridgePlugin = async (input: any) => {
   const { client, directory } = input
   const projectRoot = findProjectRoot(directory)
-  
+
   // Auto-start standalone server if not running
   let serverPid: number | null = null
   if (projectRoot) {
     const existingPid = readServerPid(projectRoot)
-    
+
     if (existingPid && isServerRunning(existingPid)) {
       console.log(`[easy-workflow-bridge] Server already running (PID: ${existingPid})`)
       serverPid = existingPid
@@ -498,31 +775,36 @@ export const EasyWorkflowBridgePlugin = async (input: any) => {
       if (existingPid) {
         clearServerPid(projectRoot)
       }
-      
+
       // Try to start server
       serverPid = await startStandaloneServer(projectRoot)
     }
-    
+
     // Register shutdown handlers - kill server immediately without waiting
-    if (serverPid) {
-      const cleanup = () => killStandaloneServer(projectRoot!)
+    if (serverPid || telegramConfig) {
+      const cleanup = () => {
+        if (serverPid) killStandaloneServer(projectRoot!)
+        if (stopTelegramPolling) stopTelegramPolling()
+      }
       process.on("exit", cleanup)
-      
+
       process.on("SIGINT", () => {
-        killStandaloneServer(projectRoot!)
+        if (serverPid) killStandaloneServer(projectRoot!)
+        if (stopTelegramPolling) stopTelegramPolling()
         process.exit(0)
       })
-      
+
       process.on("SIGTERM", () => {
-        killStandaloneServer(projectRoot!)
+        if (serverPid) killStandaloneServer(projectRoot!)
+        if (stopTelegramPolling) stopTelegramPolling()
         process.exit(0)
       })
     }
   }
-  
+
   // Load bridge configuration
   const config = loadBridgeConfig(directory)
-  
+
   if (!config) {
     console.log("[easy-workflow-bridge] Standalone server config not found. Bridge will not forward events.")
     console.log("[easy-workflow-bridge] Please start the standalone server first:")
@@ -532,6 +814,36 @@ export const EasyWorkflowBridgePlugin = async (input: any) => {
 
   console.log("[easy-workflow-bridge] Bridge initialized")
   console.log("[easy-workflow-bridge] Forwarding events to:", config.standaloneServerUrl)
+
+  // Fetch Telegram options from the standalone server
+  let telegramConfig: TelegramPollingConfig | null = null
+  try {
+    const optionsResponse = await fetch(`${config.standaloneServerUrl}/api/options`)
+    if (optionsResponse.ok) {
+      const options = await optionsResponse.json() as any
+      if (options.telegramBotToken && options.telegramChatId && options.port) {
+        telegramConfig = {
+          botToken: options.telegramBotToken,
+          chatId: options.telegramChatId,
+          localPort: options.port,
+          standaloneServerUrl: config.standaloneServerUrl,
+          projectDirectory: config.projectDirectory,
+        }
+        console.log("[easy-workflow-bridge] Telegram polling configured for port:", options.port)
+      } else {
+        console.log("[easy-workflow-bridge] Telegram not fully configured (botToken, chatId, or port missing)")
+      }
+    }
+  } catch (err) {
+    console.log("[easy-workflow-bridge] Could not fetch Telegram options:", err instanceof Error ? err.message : String(err))
+  }
+
+  // Start Telegram polling if configured
+  let stopTelegramPolling: (() => void) | null = null
+  if (telegramConfig) {
+    stopTelegramPolling = startTelegramPolling(client, telegramConfig, (msg: string) => console.log(msg))
+    console.log("[easy-workflow-bridge] Telegram reply polling started")
+  }
 
   // Helper to forward events to standalone server
   async function forwardEvent(eventType: string, payload: any): Promise<void> {
