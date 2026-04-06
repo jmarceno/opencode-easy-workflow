@@ -6,7 +6,7 @@
 
 import { readFileSync } from "fs"
 import { join } from "path"
-import { AUTONOMY_INSTRUCTION } from "../.opencode/easy-workflow/orchestrator"
+import { AUTONOMY_INSTRUCTION, PLANNING_ONLY_INSTRUCTION } from "../.opencode/easy-workflow/orchestrator"
 
 const ORCHESTRATOR_PATH = join(process.cwd(), ".opencode", "easy-workflow", "orchestrator.ts")
 
@@ -27,6 +27,15 @@ function testAutonomyInstructionIsExported() {
   console.log("  ✓ AUTONOMY_INSTRUCTION is properly defined")
 }
 
+function testPlanningOnlyInstructionIsExported() {
+  console.log("Testing PLANNING_ONLY_INSTRUCTION is exported...")
+  assert(typeof PLANNING_ONLY_INSTRUCTION === "string", "PLANNING_ONLY_INSTRUCTION should be a string")
+  assert(PLANNING_ONLY_INSTRUCTION.length > 0, "PLANNING_ONLY_INSTRUCTION should not be empty")
+  assert(PLANNING_ONLY_INSTRUCTION.includes("PREPARE PLAN ONLY"), "PLANNING_ONLY_INSTRUCTION should contain 'PREPARE PLAN ONLY'")
+  assert(PLANNING_ONLY_INSTRUCTION.includes("Output only the plan"), "PLANNING_ONLY_INSTRUCTION should mention 'Output only the plan'")
+  console.log("  ✓ PLANNING_ONLY_INSTRUCTION is properly defined")
+}
+
 function testAutonomyInstructionInDirectExecutionPrompt() {
   console.log("Testing AUTONOMY_INSTRUCTION in direct execution prompt...")
   const content = readFileSync(ORCHESTRATOR_PATH, "utf-8")
@@ -38,13 +47,13 @@ function testAutonomyInstructionInDirectExecutionPrompt() {
 }
 
 function testAutonomyInstructionInPlanModePlanningPrompt() {
-  console.log("Testing AUTONOMY_INSTRUCTION in plan-mode planning prompt...")
+  console.log("Testing PLANNING_ONLY_INSTRUCTION in plan-mode planning prompt...")
   const content = readFileSync(ORCHESTRATOR_PATH, "utf-8")
 
-  const planModePlanningPattern = /agent:\s*resolvePlanningAgent\(task\.skipPermissionAsking\),\s*model:\s*planModelParsed,\s*parts:\s*\[{\s*type:\s*"text",\s*text:\s*`\$\{AUTONOMY_INSTRUCTION\}/
-  assert(planModePlanningPattern.test(content), "Plan-mode planning prompt should include AUTONOMY_INSTRUCTION")
+  const planModePlanningPattern = /agent:\s*resolvePlanningAgent\(task\.skipPermissionAsking\),\s*model:\s*planModelParsed,\s*parts:\s*\[{\s*type:\s*"text",\s*text:\s*`\$\{PLANNING_ONLY_INSTRUCTION\}/
+  assert(planModePlanningPattern.test(content), "Plan-mode planning prompt should include PLANNING_ONLY_INSTRUCTION")
 
-  console.log("  ✓ Plan-mode planning prompt includes AUTONOMY_INSTRUCTION")
+  console.log("  ✓ Plan-mode planning prompt includes PLANNING_ONLY_INSTRUCTION")
 }
 
 function testAutonomyInstructionInPlanModeImplementationPrompt() {
@@ -58,13 +67,13 @@ function testAutonomyInstructionInPlanModeImplementationPrompt() {
 }
 
 function testAutonomyInstructionInPlanRevisionPrompt() {
-  console.log("Testing AUTONOMY_INSTRUCTION in plan revision prompt...")
+  console.log("Testing PLANNING_ONLY_INSTRUCTION in plan revision prompt...")
   const content = readFileSync(ORCHESTRATOR_PATH, "utf-8")
 
-  const revisionPattern = /revisionPrompt[\s\S]*?AUTONOMY_INSTRUCTION[\s\S]*?The user has reviewed your plan/
-  assert(revisionPattern.test(content), "Plan revision prompt should include AUTONOMY_INSTRUCTION before 'The user has reviewed'")
+  const revisionPattern = /revisionPrompt[\s\S]*?PLANNING_ONLY_INSTRUCTION[\s\S]*?The user has reviewed your plan/
+  assert(revisionPattern.test(content), "Plan revision prompt should include PLANNING_ONLY_INSTRUCTION before 'The user has reviewed'")
 
-  console.log("  ✓ Plan revision prompt includes AUTONOMY_INSTRUCTION")
+  console.log("  ✓ Plan revision prompt includes PLANNING_ONLY_INSTRUCTION")
 }
 
 function testAutonomyInstructionInBuildWorkerPrompt() {
@@ -111,6 +120,7 @@ function runAllTests() {
 
   try {
     testAutonomyInstructionIsExported()
+    testPlanningOnlyInstructionIsExported()
     testAutonomyInstructionInDirectExecutionPrompt()
     testAutonomyInstructionInPlanModePlanningPrompt()
     testAutonomyInstructionInPlanModeImplementationPrompt()

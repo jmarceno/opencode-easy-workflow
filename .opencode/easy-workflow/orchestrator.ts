@@ -35,6 +35,8 @@ const EXPECTED_THINKING_AGENTS = Object.values(THINKING_LEVEL_AGENT_MAP)
 
 export const AUTONOMY_INSTRUCTION = "EXECUTE END-TO-END. Do not ask follow-up questions unless blocked by: missing credentials, missing required external input, or an irreversible product decision. Make reasonable assumptions from the codebase."
 
+export const PLANNING_ONLY_INSTRUCTION = "PREPARE PLAN ONLY. Do not ask follow-up questions. Make reasonable assumptions from the codebase. Output only the plan — do not proceed to implementation."
+
 // ---- SDK v2 client wrapper ----
 
 function createV2Client(baseUrl: string, directory?: string) {
@@ -864,7 +866,7 @@ export class Orchestrator {
             sessionID: sessionId,
             agent: resolvePlanningAgent(task.skipPermissionAsking),
             model: planModelParsed,
-            parts: [{ type: "text", text: `${AUTONOMY_INSTRUCTION}\n\n${task.prompt}` }],
+            parts: [{ type: "text", text: `${PLANNING_ONLY_INSTRUCTION}\n\n${task.prompt}` }],
           })
           const planResult = unwrapResponseDataOrThrow<any>(planResponse, "Planning prompt")
           const planFailure = this.extractExecutionFailure(planResult)
@@ -923,7 +925,7 @@ export class Orchestrator {
             throw new Error("Revision prompt failed: no captured plan output was found to revise")
           }
           const revisionPrompt = [
-            AUTONOMY_INSTRUCTION,
+            PLANNING_ONLY_INSTRUCTION,
             "",
             "The user has reviewed your plan and requested changes. Revise the plan based on their feedback.",
             `Original task:\n${task.prompt}`,
