@@ -771,6 +771,7 @@ export class Orchestrator {
     let sessionId: string | null = null
     const resolvedServerUrl = this.resolveServerUrl()
     const client = this.getClient(undefined, resolvedServerUrl)
+    let worktreeClient: any = null
 
     try {
       // 1. Create worktree
@@ -784,6 +785,9 @@ export class Orchestrator {
       currentTask = this.getTaskOrThrow(task.id, "saving the worktree location", task.name)
       lastKnownTask = currentTask
       this.server.broadcast({ type: "task_updated", payload: currentTask })
+
+      // Create a client bound to the worktree for all session operations
+      worktreeClient = this.getClient(worktreeInfo.directory, resolvedServerUrl)
 
       // 2. Pre-execution command (using Bun shell directly)
       const command = options.command?.trim()
@@ -819,7 +823,7 @@ export class Orchestrator {
       }
 
       // 3. Create session
-      const sessionResponse = await client.session.create({
+      const sessionResponse = await worktreeClient.session.create({
         title: `Task: ${task.name}`,
       })
       const session = unwrapResponseDataOrThrow<any>(sessionResponse, "Session creation")
@@ -862,7 +866,7 @@ export class Orchestrator {
 
         if (!isPlanImplementationResume && !isPlanRevisionResume) {
           appendDebugLog("info", "plan mode: sending planning prompt", { taskId: task.id })
-          const planResponse = await client.session.prompt({
+          const planResponse = await worktreeClient.session.prompt({
             sessionID: sessionId,
             agent: resolvePlanningAgent(task.skipPermissionAsking),
             model: planModelParsed,
@@ -942,7 +946,7 @@ export class Orchestrator {
             options.extraPrompt ? `Additional context:\n${options.extraPrompt}` : "",
             "Provide a revised plan that addresses the feedback. Output only the revised plan.",
           ].filter(Boolean).join("\n\n")
-          const planResponse = await client.session.prompt({
+          const planResponse = await worktreeClient.session.prompt({
             sessionID: sessionId,
             agent: resolvePlanningAgent(task.skipPermissionAsking),
             model: planModelParsed,
@@ -1024,7 +1028,7 @@ export class Orchestrator {
         if (executionAgent) execPromptOpts.agent = executionAgent
         let execResult: any
         try {
-          const execResponse = await client.session.prompt(execPromptOpts)
+          const execResponse = await worktreeClient.session.prompt(execPromptOpts)
           execResult = unwrapResponseDataOrThrow<any>(execResponse, "Execution prompt")
         } catch (promptErr) {
           throw remapThinkingAgentError(promptErr, executionAgent)
@@ -1056,7 +1060,7 @@ export class Orchestrator {
         if (executionAgent) promptOpts.agent = executionAgent
         let result: any
         try {
-          const response = await client.session.prompt(promptOpts)
+          const response = await worktreeClient.session.prompt(promptOpts)
           result = unwrapResponseDataOrThrow<any>(response, "Task prompt")
         } catch (promptErr) {
           throw remapThinkingAgentError(promptErr, executionAgent)
@@ -1096,7 +1100,7 @@ export class Orchestrator {
             commitPromptText += "\n\nImportant: do NOT delete the worktree at the end; keep it for manual follow-up."
           }
           
-          const commitResponse = await client.session.prompt({
+          const commitResponse = await worktreeClient.session.prompt({
             sessionID: sessionId,
             parts: [{ type: "text", text: commitPromptText }],
           })
@@ -1477,6 +1481,7 @@ export class Orchestrator {
     await Promise.all(pendingWorkers.map(async (workerRun) => {
       if (this.shouldStop) return
       let sessionId: string | null = null
+      let worktreeClient: any = null
       try {
         this.db.updateTaskRun(workerRun.id, { status: "running" })
         this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(workerRun.id) })
@@ -1489,7 +1494,9 @@ export class Orchestrator {
         this.db.updateTaskRun(workerRun.id, { worktreeDir: worktreeInfo.directory, status: "running" })
         this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(workerRun.id) })
 
-        const sessionResponse = await client.session.create({ title: `Worker: ${task.name} (slot ${workerRun.slotIndex})` })
+        worktreeClient = this.getClient(worktreeInfo.directory, serverUrl)
+
+        const sessionResponse = await worktreeClient.session.create({ title: `Worker: ${task.name} (slot ${workerRun.slotIndex})` })
         const session = unwrapResponseDataOrThrow<any>(sessionResponse, "Worker session creation")
         sessionId = session?.id
         if (!sessionId) throw new Error("Failed to create worker session")
@@ -1517,7 +1524,7 @@ export class Orchestrator {
 
         let result: any
         try {
-          const response = await client.session.prompt(promptOpts)
+          const response = await worktreeClient.session.prompt(promptOpts)
           result = unwrapResponseDataOrThrow<any>(response, "Worker prompt")
         } catch (promptErr) {
           throw remapThinkingAgentError(promptErr, executionAgent)
@@ -2044,6 +2051,7 @@ RECOMMENDED_PROMPT:
 
     const client = this.getClient(undefined, serverUrl)
     let sessionId: string | null = null
+    let worktreeClient: any = null
 
     try {
       this.db.updateTaskRun(finalApplierRun.id, { status: "running" })
@@ -2057,7 +2065,9 @@ RECOMMENDED_PROMPT:
       this.db.updateTaskRun(finalApplierRun.id, { worktreeDir: worktreeInfo.directory })
       this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(finalApplierRun.id) })
 
-      const sessionResponse = await client.session.create({ title: `Final Applier: ${task.name}` })
+      worktreeClient = this.getClient(worktreeInfo.directory, serverUrl)
+
+      const sessionResponse = await worktreeClient.session.create({ title: `Final Applier: ${task.name}` })
       const session = unwrapResponseDataOrThrow<any>(sessionResponse, "Final applier session creation")
       sessionId = session?.id
       if (!sessionId) throw new Error("Failed to create final applier session")
@@ -2086,7 +2096,7 @@ RECOMMENDED_PROMPT:
 
       let result: any
       try {
-        const response = await client.session.prompt(promptOpts)
+        const response = await worktreeClient.session.prompt(promptOpts)
         result = unwrapResponseDataOrThrow<any>(response, "Final applier prompt")
       } catch (promptErr) {
         throw remapThinkingAgentError(promptErr, executionAgent)
@@ -2118,7 +2128,7 @@ RECOMMENDED_PROMPT:
             commitPromptText += "\n\nImportant: do NOT delete the worktree at the end; keep it for manual follow-up."
           }
 
-          const commitResponse = await client.session.prompt({
+          const commitResponse = await worktreeClient.session.prompt({
             sessionID: sessionId,
             parts: [{ type: "text", text: commitPromptText }],
           })
