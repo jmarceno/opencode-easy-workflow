@@ -20,6 +20,7 @@ const DB_PATH = join(WORKFLOW_DIR, "tasks.db")
 interface Config {
   opencodeServerUrl: string
   projectDirectory: string
+  kanbanPort?: number
 }
 
 function ensureWorkflowDir(): void {
@@ -36,6 +37,7 @@ function loadConfig(): Config | null {
     return {
       opencodeServerUrl: parsed.opencodeServerUrl,
       projectDirectory: parsed.projectDirectory || process.cwd(),
+      kanbanPort: parsed.kanbanPort ? Number(parsed.kanbanPort) : undefined,
     }
   } catch (err) {
     console.error("[config] Failed to load config:", err instanceof Error ? err.message : String(err))
@@ -128,6 +130,11 @@ async function main() {
   console.log("[db] Initializing database at:", DB_PATH)
   const db = new KanbanDB(DB_PATH)
   db.cleanupStaleWorkflowSessions()
+
+  // Override database port with config value if available, to ensure consistency
+  if (config.kanbanPort) {
+    db.updateOptions({ port: config.kanbanPort })
+  }
   console.log("[db] Database ready\n")
 
   // Create server URL resolver function

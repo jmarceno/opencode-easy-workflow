@@ -470,24 +470,32 @@ export class KanbanServer {
 
   start(): number {
     const port = this.db.getOptions().port
-    const server = Bun.serve({
-      port,
-      fetch: (req, server) => {
-        const url = new URL(req.url)
+    let server: ReturnType<typeof Bun.serve>
+    try {
+      server = Bun.serve({
+        port,
+        fetch: (req, server) => {
+          const url = new URL(req.url)
 
-        if (url.pathname === "/ws") {
-          if (server.upgrade(req)) return undefined
-          return new Response("Upgrade failed", { status: 500 })
-        }
+          if (url.pathname === "/ws") {
+            if (server.upgrade(req)) return undefined
+            return new Response("Upgrade failed", { status: 500 })
+          }
 
-        return this.handleHTTP(req)
-      },
-      websocket: {
-        open: (ws) => { this.clients.add(ws) },
-        close: (ws) => { this.clients.delete(ws) },
-        message: () => {},
-      },
-    })
+          return this.handleHTTP(req)
+        },
+        websocket: {
+          open: (ws) => { this.clients.add(ws) },
+          close: (ws) => { this.clients.delete(ws) },
+          message: () => {},
+        },
+      })
+    } catch (err: any) {
+      if (err?.code === "EADDRINUSE" || err?.message?.includes("address already in use")) {
+        throw new Error(`Port ${port} is already in use. Is another server running?`)
+      }
+      throw err
+    }
 
     this.server = server
     console.log(`[kanban] server started on http://localhost:${server.port}`)

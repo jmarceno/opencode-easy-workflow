@@ -1618,6 +1618,322 @@ async function testDoneColumnNewestFirstOrdering() {
   }
 }
 
+async function testDependencyBadgeUI() {
+  const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  const reportDir = join(process.cwd(), ".opencode", "easy-workflow", "test-artifacts");
+  mkdirSync(reportDir, { recursive: true });
+  const reportPath = join(reportDir, `kanban-dep-badge-${runId}.json`);
+
+  type DepBadgeReport = {
+    runId: string;
+    timestamp: string;
+    kanbanUrl: string;
+    task1Id: string | null;
+    task2Id: string | null;
+    task3Id: string | null;
+    task1Idx: number;
+    task2Idx: number;
+    task3Idx: number;
+    cardBadgeText: string | null;
+    modalShowsFullNames: boolean;
+    modalDepItemText: string | null;
+    orphanedDepBadgeText: string | null;
+    orphanedDepCardRenders: boolean;
+    orphanedDepJsErrors: string[];
+    nullReqsBadgeText: string | null;
+    nullReqsCardRenders: boolean;
+    nullReqsJsErrors: string[];
+    passed: boolean;
+    error: string | null;
+  };
+
+  const report: DepBadgeReport = {
+    runId,
+    timestamp: new Date().toISOString(),
+    kanbanUrl: "",
+    task1Id: null,
+    task2Id: null,
+    task3Id: null,
+    task1Idx: 0,
+    task2Idx: 0,
+    task3Idx: 0,
+    cardBadgeText: null,
+    modalShowsFullNames: false,
+    modalDepItemText: null,
+    orphanedDepBadgeText: null,
+    orphanedDepCardRenders: false,
+    orphanedDepJsErrors: [],
+    nullReqsBadgeText: null,
+    nullReqsCardRenders: false,
+    nullReqsJsErrors: [],
+    passed: false,
+    error: null,
+  };
+
+  const tempDir = mkdtempSync(join(tmpdir(), "ewf-dep-badge-"));
+  const dbPath = join(tempDir, "tasks.db");
+
+  let kanbanDb: KanbanDB | null = null;
+  let kanbanServer: KanbanServer | null = null;
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+
+  try {
+    console.log("=== Dependency Badge UI Test ===");
+
+    kanbanDb = new KanbanDB(dbPath);
+    const kanbanPort = getFreePort();
+    report.kanbanUrl = `http://127.0.0.1:${kanbanPort}`;
+    kanbanDb.updateOptions({ port: kanbanPort, parallelTasks: 1, command: "" });
+
+    kanbanServer = new KanbanServer(kanbanDb, {
+      onStart: async () => {},
+      onStop: () => {},
+      getExecuting: () => false,
+      getStartError: () => null,
+      getServerUrl: () => report.kanbanUrl,
+    });
+    kanbanServer.start();
+    console.log(`Kanban UI: ${report.kanbanUrl}`);
+
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+
+    await page.goto(report.kanbanUrl, { waitUntil: "networkidle" });
+    await page.waitForSelector(".conn-status.connected", { timeout: 10000 });
+
+    // Create three tasks via API (they get idx 0, 1, 2 respectively)
+    // task1: no dependencies
+    // task2: depends on task1
+    // task3: depends on task1 and task2
+
+    const task1Resp = await page.request.post(`${report.kanbanUrl}/api/tasks`, {
+      headers: { "Content-Type": "application/json" },
+      data: { name: `Dep Test Task 1 ${runId}`, prompt: "test prompt 1", status: "backlog" },
+    });
+    if (!task1Resp.ok()) throw new Error(`Failed to create task1: ${task1Resp.status()}`);
+    const task1 = await task1Resp.json();
+    report.task1Id = task1.id;
+    report.task1Idx = task1.idx;
+    console.log(`Created task1: id=${task1.id}, idx=${task1.idx}`);
+
+    const task2Resp = await page.request.post(`${report.kanbanUrl}/api/tasks`, {
+      headers: { "Content-Type": "application/json" },
+      data: { name: `Dep Test Task 2 ${runId}`, prompt: "test prompt 2", status: "backlog", requirements: [task1.id] },
+    });
+    if (!task2Resp.ok()) throw new Error(`Failed to create task2: ${task2Resp.status()}`);
+    const task2 = await task2Resp.json();
+    report.task2Id = task2.id;
+    report.task2Idx = task2.idx;
+    console.log(`Created task2: id=${task2.id}, idx=${task2.idx}, deps=[${task2.requirements}]`);
+
+    const task3Resp = await page.request.post(`${report.kanbanUrl}/api/tasks`, {
+      headers: { "Content-Type": "application/json" },
+      data: { name: `Dep Test Task 3 ${runId}`, prompt: "test prompt 3", status: "backlog", requirements: [task1.id, task2.id] },
+    });
+    if (!task3Resp.ok()) throw new Error(`Failed to create task3: ${task3Resp.status()}`);
+    const task3 = await task3Resp.json();
+    report.task3Id = task3.id;
+    report.task3Idx = task3.idx;
+    console.log(`Created task3: id=${task3.id}, idx=${task3.idx}, deps=[${task3.requirements}]`);
+
+    // Reload to pick up all tasks
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForSelector(".conn-status.connected", { timeout: 10000 });
+
+    // --- Test 1: Card badge shows numeric dependency labels ---
+    console.log("\n-- Test 1: Card badge shows numeric dependency labels --");
+
+    // Find task3's card and read its dependency badge
+    const task3CardBadge = await page.locator(`.card:has(.card-title:has-text("Dep Test Task 3 ${runId}")) .badge-dep`).first().textContent();
+    report.cardBadgeText = task3CardBadge;
+    console.log(`Task3 dependency badge text: "${task3CardBadge}"`);
+
+    // Badge should be "deps: #<idx1>, #<idx2>" where idx1/idx2 are 1-indexed
+    // task3 depends on task1 and task2, so badge should show their 1-indexed idx values
+    const expectedBadgePattern = `deps: #${task1.idx + 1}, #${task2.idx + 1}`;
+    if (task3CardBadge !== expectedBadgePattern) {
+      throw new Error(`Expected badge "${expectedBadgePattern}", got "${task3CardBadge}"`);
+    }
+    console.log(`✓ Task3 card badge shows numeric deps: ${task3CardBadge}`);
+
+    // Also verify task2's badge shows only its dependency (task1)
+    const task2CardBadge = await page.locator(`.card:has(.card-title:has-text("Dep Test Task 2 ${runId}")) .badge-dep`).first().textContent();
+    const expectedTask2Badge = `deps: #${task1.idx + 1}`;
+    if (task2CardBadge !== expectedTask2Badge) {
+      throw new Error(`Expected task2 badge "${expectedTask2Badge}", got "${task2CardBadge}"`);
+    }
+    console.log(`✓ Task2 card badge shows numeric deps: ${task2CardBadge}`);
+
+    // Task1 should have no dependency badge
+    const task1HasDepBadge = await page.locator(`.card:has(.card-title:has-text("Dep Test Task 1 ${runId}")) .badge-dep`).count();
+    if (task1HasDepBadge > 0) {
+      throw new Error("Task1 should not have a dependency badge");
+    }
+    console.log("✓ Task1 has no dependency badge (correct)");
+
+    // --- Test 2: Modal dependency selector shows full task names ---
+    console.log("\n-- Test 2: Modal dependency selector shows full task names --");
+
+    // Open task3's edit modal
+    await page.locator(`.card:has(.card-title:has-text("Dep Test Task 3 ${runId}")) button[title="Edit Task"]`).click();
+    await page.waitForFunction(
+      () => document.getElementById("taskModal")?.classList.contains("hidden") === false,
+      undefined,
+      { timeout: 5000 },
+    );
+
+    // Read the requirement list items in the modal
+    const reqItems = await page.locator("#taskReqs .req-item").allTextContents();
+    console.log(`Modal requirement items: ${JSON.stringify(reqItems)}`);
+
+    // Verify each item contains a full task name (not just #number)
+    // The selector shows " ${t.name} (#${t.idx + 1})" format
+    const task1FullName = `Dep Test Task 1 ${runId}`;
+    const task2FullName = `Dep Test Task 2 ${runId}`;
+
+    report.modalShowsFullNames = reqItems.some(text => text.includes(task1FullName) && text.includes(`#${task1.idx + 1}`));
+    if (!report.modalShowsFullNames) {
+      throw new Error(`Modal selector should show full task names. Got: ${JSON.stringify(reqItems)}`);
+    }
+    console.log(`✓ Modal selector shows full task names: ${JSON.stringify(reqItems)}`);
+
+    // Also check that the checkboxes are correctly checked for task1 and task2
+    const checkedReqs = await page.locator("#taskReqs input:checked").evaluateAll(els => els.map(el => (el as HTMLInputElement).value));
+    console.log(`Checked requirement IDs: ${JSON.stringify(checkedReqs)}`);
+
+    if (!checkedReqs.includes(task1.id) || !checkedReqs.includes(task2.id)) {
+      throw new Error(`Expected requirements [${task1.id}, ${task2.id}] to be checked. Got: ${JSON.stringify(checkedReqs)}`);
+    }
+    console.log("✓ Modal correctly shows checked dependencies");
+
+    // Close modal
+    await page.locator("#taskModal .modal-close").click();
+    await page.waitForFunction(
+      () => document.getElementById("taskModal")?.classList.contains("hidden") === true,
+      undefined,
+      { timeout: 5000 },
+    );
+
+    // --- Test 3: Orphaned (non-existent) dependency reference is handled safely ---
+    console.log("\n-- Test 3: Orphaned dependency reference handled safely --");
+
+    // Capture console errors
+    const orphanedDepErrors: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error") {
+        orphanedDepErrors.push(msg.text());
+      }
+    });
+
+    // Patch task3 to have a non-existent dependency ID mixed with a valid one
+    const nonExistentId = `non-existent-dep-${runId}`;
+    const patchOrphanedResp = await page.request.patch(`${report.kanbanUrl}/api/tasks/${task3.id}`, {
+      headers: { "Content-Type": "application/json" },
+      data: { requirements: [task1.id, nonExistentId] },
+    });
+    if (!patchOrphanedResp.ok()) {
+      throw new Error(`Failed to patch task3 with orphaned dep: ${patchOrphanedResp.status()}`);
+    }
+    console.log(`Patched task3 requirements to include orphaned ID: ${nonExistentId}`);
+
+    // Reload the page
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForSelector(".conn-status.connected", { timeout: 10000 });
+
+    // Verify card still renders
+    const orphanedCardCount = await page.locator(`.card-title:has-text("Dep Test Task 3 ${runId}")`).count();
+    report.orphanedDepCardRenders = orphanedCardCount > 0;
+    if (!report.orphanedDepCardRenders) {
+      throw new Error("Task3 card should still render with orphaned dependency");
+    }
+    console.log("✓ Task3 card still renders with orphaned dependency");
+
+    // Verify badge shows only the valid dependency (not the orphaned one)
+    const orphanedBadgeText = await page.locator(`.card:has(.card-title:has-text("Dep Test Task 3 ${runId}")) .badge-dep`).first().textContent();
+    report.orphanedDepBadgeText = orphanedBadgeText;
+    const expectedOrphanedBadge = `deps: #${task1.idx + 1}`;
+    if (orphanedBadgeText !== expectedOrphanedBadge) {
+      throw new Error(`Expected badge "${expectedOrphanedBadge}" with orphaned dep, got "${orphanedBadgeText}"`);
+    }
+    console.log(`✓ Orphaned dependency filtered out, badge shows: ${orphanedBadgeText}`);
+
+    // Check for JS errors
+    report.orphanedDepJsErrors = orphanedDepErrors.filter(e => !e.includes("Failed to fetch model catalog"));
+    if (report.orphanedDepJsErrors.length > 0) {
+      throw new Error(`JS errors found with orphaned dep: ${report.orphanedDepJsErrors.join("; ")}`);
+    }
+    console.log("✓ No JS errors with orphaned dependency");
+
+    // --- Test 4: Task with requirements: null renders without errors ---
+    console.log("\n-- Test 4: requirements: null handled safely --");
+
+    // Capture console errors
+    const nullReqsErrors: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error") {
+        nullReqsErrors.push(msg.text());
+      }
+    });
+
+    // Patch task2 to have requirements: null
+    const patchNullReqsResp = await page.request.patch(`${report.kanbanUrl}/api/tasks/${task2.id}`, {
+      headers: { "Content-Type": "application/json" },
+      data: { requirements: null },
+    });
+    if (!patchNullReqsResp.ok()) {
+      throw new Error(`Failed to patch task2 with null requirements: ${patchNullReqsResp.status()}`);
+    }
+    console.log("Patched task2 requirements to null");
+
+    // Reload the page
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForSelector(".conn-status.connected", { timeout: 10000 });
+
+    // Verify task2 card still renders
+    const nullReqsCardCount = await page.locator(`.card-title:has-text("Dep Test Task 2 ${runId}")`).count();
+    report.nullReqsCardRenders = nullReqsCardCount > 0;
+    if (!report.nullReqsCardRenders) {
+      throw new Error("Task2 card should still render with null requirements");
+    }
+    console.log("✓ Task2 card still renders with requirements: null");
+
+    // Verify task2 has NO dependency badge
+    const nullReqsBadgeCount = await page.locator(`.card:has(.card-title:has-text("Dep Test Task 2 ${runId}")) .badge-dep`).count();
+    report.nullReqsBadgeText = nullReqsBadgeCount > 0
+      ? await page.locator(`.card:has(.card-title:has-text("Dep Test Task 2 ${runId}")) .badge-dep`).first().textContent()
+      : null;
+    if (nullReqsBadgeCount > 0) {
+      throw new Error(`Task2 should have no dependency badge with null requirements, got: ${report.nullReqsBadgeText}`);
+    }
+    console.log("✓ Task2 has no dependency badge (correct)");
+
+    // Check for JS errors
+    report.nullReqsJsErrors = nullReqsErrors.filter(e => !e.includes("Failed to fetch model catalog"));
+    if (report.nullReqsJsErrors.length > 0) {
+      throw new Error(`JS errors found with null requirements: ${report.nullReqsJsErrors.join("; ")}`);
+    }
+    console.log("✓ No JS errors with requirements: null");
+
+    report.passed = true;
+    writeFileSync(reportPath, JSON.stringify(report, null, 2), "utf-8");
+    console.log(`\nEvidence report: ${reportPath}`);
+    console.log("\n✓ TEST PASSED");
+
+  } catch (err) {
+    report.error = err instanceof Error ? err.message : String(err);
+    writeFileSync(reportPath, JSON.stringify(report, null, 2), "utf-8");
+    console.error("\n✗ TEST FAILED");
+    console.error(report.error);
+    process.exitCode = 1;
+  } finally {
+    if (browser) await browser.close();
+    if (kanbanServer) kanbanServer.stop();
+    if (kanbanDb) kanbanDb.close();
+    cleanupTempDir(tempDir);
+  }
+}
+
 if (process.env.PLAN_UI_TEST === "1") {
   testPlanModeApprovalUI();
 } else if (process.env.SKIP_PERM_TEST === "1") {
@@ -1628,6 +1944,8 @@ if (process.env.PLAN_UI_TEST === "1") {
   testReviewActivityUI();
 } else if (process.env.DONE_ORDERING_TEST === "1") {
   testDoneColumnNewestFirstOrdering();
+} else if (process.env.DEP_BADGE_TEST === "1") {
+  testDependencyBadgeUI();
 } else {
   await main();
 }

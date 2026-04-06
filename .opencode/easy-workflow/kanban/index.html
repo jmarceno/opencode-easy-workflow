@@ -1808,13 +1808,15 @@ function renderCard(task, colStatus) {
     b.textContent = 'waiting for human'
     meta.appendChild(b)
   }
-  const depNames = task.requirements
-    .map(id => allTasks.find(t => t.id === id)?.name)
-    .filter(Boolean)
-  if (depNames.length > 0) {
+  // Safely build numeric dependency badge - handle missing/undefined requirements and orphaned refs
+  const depIds = (task.requirements || [])
+    .map(id => allTasks.find(t => t.id === id))
+    .filter(dep => dep && typeof dep.idx === 'number')
+    .map(dep => `#${dep.idx + 1}`)
+  if (depIds.length > 0) {
     const b = document.createElement('span')
     b.className = 'badge badge-dep'
-    b.textContent = `deps: ${depNames.join(', ')}`
+    b.textContent = `deps: ${depIds.join(', ')}`
     meta.appendChild(b)
   }
   if (task.errorMessage) {
