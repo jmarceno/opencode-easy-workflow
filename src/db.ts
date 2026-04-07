@@ -885,7 +885,8 @@ export class KanbanDB {
       }
     }
 
-    return this.getTask(id)
+    // Return the original task object (getTask filters out archived tasks)
+    return { ...task, isArchived: true, archivedAt: now }
   }
 
   unarchiveTask(id: string): Task | null {
