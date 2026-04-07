@@ -33,6 +33,7 @@ const SOURCE_PLUGIN_FILE = join(PROJECT_ROOT, "easy-workflow-bridge.ts")
 const SOURCE_AGENTS_DIR = join(PROJECT_ROOT, "agents")
 // Skills are in root skills/ directory
 const SOURCE_SKILL_DIR = join(PROJECT_ROOT, "skills", "workflow-task-setup")
+const SOURCE_TASK_DEBUG_SKILL_DIR = join(PROJECT_ROOT, "skills", "task-debug")
 // Workflow files are in src/ directory (not in .opencode/easy-workflow/)
 const SOURCE_WORKFLOW_DIR = join(PROJECT_ROOT, "src")
 
@@ -40,6 +41,7 @@ const SOURCE_WORKFLOW_DIR = join(PROJECT_ROOT, "src")
 const DEST_PLUGIN_DIR = join(OPENCODE_DIR, "plugins")  // Directly in plugins/, NOT in a subdirectory
 const DEST_AGENTS_DIR = join(OPENCODE_DIR, "agents")
 const DEST_SKILL_DIR = join(OPENCODE_DIR, "skills", "workflow-task-setup")
+const DEST_TASK_DEBUG_SKILL_DIR = join(OPENCODE_DIR, "skills", "task-debug")
 const DEST_WORKFLOW_DIR = join(OPENCODE_DIR, "easy-workflow")
 
 // Explicit list of files to copy from easy-workflow directory (NO recursive copy)
@@ -52,6 +54,7 @@ const WORKFLOW_FILES = [
   "orchestrator.ts",
   "standalone.ts",
   "execution-plan.ts",
+  "message-logger.ts",
   "workflow.md",
   "kanban/index.html",
 ]
@@ -169,6 +172,13 @@ function status(): void {
     console.log("Skill (workflow-task-setup): NOT INSTALLED")
   }
   
+  if (existsSync(DEST_TASK_DEBUG_SKILL_DIR)) {
+    console.log("Skill (task-debug): INSTALLED")
+    console.log(`  Location: ${DEST_TASK_DEBUG_SKILL_DIR}`)
+  } else {
+    console.log("Skill (task-debug): NOT INSTALLED")
+  }
+  
   console.log("")
 }
 
@@ -225,11 +235,17 @@ function install(): void {
     }
   }
   
-  // 4. Copy skill (skill is small, recursive is fine here)
+  // 4. Copy skills (skills are small, recursive is fine here)
   if (existsSync(SOURCE_SKILL_DIR)) {
     ensureDir(dirname(DEST_SKILL_DIR))
     copyRecursive(SOURCE_SKILL_DIR, DEST_SKILL_DIR)
     console.log(`✓ Copied skill to ${DEST_SKILL_DIR}`)
+  }
+  
+  if (existsSync(SOURCE_TASK_DEBUG_SKILL_DIR)) {
+    ensureDir(dirname(DEST_TASK_DEBUG_SKILL_DIR))
+    copyRecursive(SOURCE_TASK_DEBUG_SKILL_DIR, DEST_TASK_DEBUG_SKILL_DIR)
+    console.log(`✓ Copied skill to ${DEST_TASK_DEBUG_SKILL_DIR}`)
   }
   
   console.log("\n=== Installation Complete ===\n")
@@ -284,12 +300,19 @@ function remove(): void {
     }
   }
   
-  // 4. Remove skill
+  // 4. Remove skills
   if (existsSync(DEST_SKILL_DIR)) {
     removeRecursive(DEST_SKILL_DIR)
     console.log(`✓ Removed skill: ${DEST_SKILL_DIR}`)
   } else {
     console.log(`○ Skill not installed: ${DEST_SKILL_DIR}`)
+  }
+  
+  if (existsSync(DEST_TASK_DEBUG_SKILL_DIR)) {
+    removeRecursive(DEST_TASK_DEBUG_SKILL_DIR)
+    console.log(`✓ Removed skill: ${DEST_TASK_DEBUG_SKILL_DIR}`)
+  } else {
+    console.log(`○ Skill not installed: ${DEST_TASK_DEBUG_SKILL_DIR}`)
   }
   
   console.log("\n=== Removal Complete ===\n")
