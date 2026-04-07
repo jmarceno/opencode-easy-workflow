@@ -436,7 +436,7 @@ function buildRunState(frontmatter: Record<string, unknown>): WorkflowRunState {
     running: frontmatter.running === true,
     status: (frontmatter.status as WorkflowStatus) ?? "pending",
     reviewCount: typeof frontmatter.reviewCount === "number" ? frontmatter.reviewCount : 0,
-    maxReviewRuns: typeof frontmatter.maxReviewRuns === "number" ? frontmatter.maxReviewRuns : 2,
+    maxReviewRuns: typeof frontmatter.maxReviewRuns === "number" ? frontmatter.maxReviewRuns : undefined as undefined,
     createdAt: typeof frontmatter.createdAt === "string" ? frontmatter.createdAt : null,
     updatedAt: typeof frontmatter.updatedAt === "string" ? frontmatter.updatedAt : null,
     sessionId: typeof frontmatter.sessionId === "string" ? frontmatter.sessionId : null,

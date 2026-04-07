@@ -4,9 +4,6 @@ runreview: false
 running: false
 status: pending
 reviewCount: 0
-# maxReviewRuns is now controlled by the global "Maximum Review Runs" option in the Options Modal.
-# The value below is no longer read by the workflow - it is written only for backward compatibility.
-maxReviewRuns: 2
 createdAt: null
 updatedAt: null
 sessionId: null

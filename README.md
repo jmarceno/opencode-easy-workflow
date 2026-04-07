@@ -110,7 +110,6 @@ Edit `.opencode/easy-workflow/workflow.md`:
 ```yaml
 ---
 reviewAgent: workflow-review
-maxReviewRuns: 2
 ---
 ```
 
