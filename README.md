@@ -7,7 +7,10 @@ A plugin for [OpenCode](https://opencode.ai) that provides two modes of operatio
 
 It also includes a project-local skill for agents that need to translate user-provided planning material into kanban tasks.
 
+## Screenshots
 
+![Kanban Board](images/screenhot1.png)
+![Task Execution](images/screenhot2.png)
 
 ## Installation
 
