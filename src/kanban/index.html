@@ -1832,7 +1832,7 @@ function renderCard(task, colStatus) {
   if (task.status === 'backlog' && !isTaskMutationLocked(task) && !isExecuting) {
     const templateBtn = document.createElement('button')
     templateBtn.className = 'action-text'
-    templateBtn.textContent = 'Template'
+    templateBtn.textContent = '\u{1F4D6}'
     templateBtn.title = 'Convert to Template'
     templateBtn.onclick = () => convertTaskToTemplate(task.id)
     actions.appendChild(templateBtn)
