@@ -206,3 +206,74 @@ export interface ReviewResult {
   gaps: string[]
   recommendedPrompt: string
 }
+
+// Session message logging types
+export type MessageRole = "user" | "assistant" | "system" | "tool"
+export type MessageType = "text" | "tool_call" | "tool_result" | "error" | "step_finish" | "session_start" | "session_end"
+
+export interface SessionMessage {
+  id: number
+  messageId: string | null
+  sessionId: string
+  taskId: string | null
+  taskRunId: string | null
+  timestamp: number
+  role: MessageRole
+  messageType: MessageType
+  contentJson: Record<string, any>
+  modelProvider: string | null
+  modelId: string | null
+  agentName: string | null
+  promptTokens: number | null
+  completionTokens: number | null
+  totalTokens: number | null
+  toolName: string | null
+  toolArgsJson: Record<string, any> | null
+  toolResultJson: Record<string, any> | null
+  toolStatus: string | null
+  editDiff: string | null
+  editFilePath: string | null
+  sessionStatus: string | null
+  workflowPhase: string | null
+  rawEventJson: Record<string, any> | null
+}
+
+export interface CreateSessionMessageInput {
+  messageId?: string | null
+  sessionId: string
+  taskId?: string | null
+  taskRunId?: string | null
+  timestamp?: number
+  role: MessageRole
+  messageType: MessageType
+  contentJson: Record<string, any>
+  modelProvider?: string | null
+  modelId?: string | null
+  agentName?: string | null
+  promptTokens?: number | null
+  completionTokens?: number | null
+  totalTokens?: number | null
+  toolName?: string | null
+  toolArgsJson?: Record<string, any> | null
+  toolResultJson?: Record<string, any> | null
+  toolStatus?: string | null
+  editDiff?: string | null
+  editFilePath?: string | null
+  sessionStatus?: string | null
+  workflowPhase?: string | null
+  rawEventJson?: Record<string, any> | null
+}
+
+export interface TimelineEntry {
+  id: number
+  timestamp: number
+  relativeTime: number
+  role: MessageRole
+  messageType: MessageType
+  summary: string
+  hasToolCalls: boolean
+  hasEdits: boolean
+  modelProvider: string | null
+  modelId: string | null
+  agentName: string | null
+}

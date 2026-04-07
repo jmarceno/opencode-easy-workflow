@@ -10,6 +10,7 @@ import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
 import { buildExecutionGraph, getExecutableTasks, isTaskExecutable } from "./execution-plan"
 import { chooseDeterministicRepairAction, getLatestTaggedOutput, getPlanExecutionEligibility, hasCapturedPlanOutput, isTaskAwaitingPlanApproval, type TaskRepairAction } from "./task-state"
 import { sendTelegramNotificationWithMetadata } from "./telegram"
+import { MessageLogger, createMessageLogger } from "./message-logger"
 
 const MAX_EXPANDED_WORKER_RUNS = 8
 const MAX_EXPANDED_REVIEWER_RUNS = 4
@@ -232,6 +233,7 @@ export class KanbanServer {
   private getStartError: StartPreflightFn
   private getServerUrl: ServerUrlFn
   private ownerDirectory: string
+  private messageLoggers: Map<string, MessageLogger> = new Map()
 
   constructor(
     db: KanbanDB,
@@ -1418,6 +1420,66 @@ export class KanbanServer {
         return this.json({ ok: true })
       }
 
+      // Session Messages API - for timeline reconstruction
+      const sessionMessagesMatch = method === "GET" ? url.pathname.match(/^\/api\/sessions\/([^\/]+)\/messages$/) : null
+      if (sessionMessagesMatch) {
+        const sessionId = sessionMessagesMatch[1]
+        const messages = this.db.getSessionTimeline(sessionId)
+        return this.json(messages)
+      }
+
+      const sessionTimelineMatch = method === "GET" ? url.pathname.match(/^\/api\/sessions\/([^\/]+)\/timeline$/) : null
+      if (sessionTimelineMatch) {
+        const sessionId = sessionTimelineMatch[1]
+        const messages = this.db.getSessionTimeline(sessionId)
+        
+        // Get first message timestamp for relative time calculation
+        const firstTimestamp = messages.length > 0 ? messages[0].timestamp : Date.now()
+        
+        // Format as timeline entries
+        const timeline = messages.map(m => ({
+          id: m.id,
+          timestamp: m.timestamp,
+          relativeTime: m.timestamp - firstTimestamp,
+          role: m.role,
+          messageType: m.messageType,
+          summary: this.summarizeMessage(m),
+          hasToolCalls: !!m.toolName,
+          hasEdits: !!m.editDiff,
+          modelProvider: m.modelProvider,
+          modelId: m.modelId,
+          agentName: m.agentName,
+        }))
+        
+        return this.json({
+          sessionId,
+          messageCount: messages.length,
+          startTime: firstTimestamp,
+          endTime: messages.length > 0 ? messages[messages.length - 1].timestamp : firstTimestamp,
+          timeline,
+        })
+      }
+
+      const taskMessagesMatch = method === "GET" ? url.pathname.match(/^\/api\/tasks\/([^\/]+)\/messages$/) : null
+      if (taskMessagesMatch) {
+        const taskId = taskMessagesMatch[1]
+        const task = this.db.getTask(taskId)
+        if (!task) return this.json({ error: "Task not found" }, 404)
+        
+        const messages = this.db.getSessionMessagesByTask(taskId)
+        return this.json(messages)
+      }
+
+      const taskRunMessagesMatch = method === "GET" ? url.pathname.match(/^\/api\/task-runs\/([^\/]+)\/messages$/) : null
+      if (taskRunMessagesMatch) {
+        const taskRunId = taskRunMessagesMatch[1]
+        const taskRun = this.db.getTaskRun(taskRunId)
+        if (!taskRun) return this.json({ error: "Task run not found" }, 404)
+        
+        const messages = this.db.getSessionMessagesByTaskRun(taskRunId)
+        return this.json(messages)
+      }
+
       // Workflow Session lookup - for permission auto-reply
       const workflowSessionMatch = method === "GET" ? url.pathname.match(/^\/api\/workflow-session\/([^\/]+)$/) : null
       if (workflowSessionMatch) {
@@ -1452,6 +1514,18 @@ export class KanbanServer {
     } else if (type === "event") {
       // Handle OpenCode events (permission.asked, session.idle)
       await this.handleOpencodeEvent(payload.event)
+    } else if (type === "message.updated") {
+      // Handle message events for logging
+      await this.handleMessageEvent(payload)
+    } else if (type === "tool.execute.after") {
+      // Handle tool execution events for logging
+      await this.handleToolExecuteEvent(payload)
+    } else if (type === "session.updated") {
+      // Handle session update events for logging
+      await this.handleSessionUpdateEvent(payload)
+    } else if (type === "session.idle") {
+      // Handle session idle events for logging
+      await this.handleSessionIdleEvent(payload)
     }
   }
 
@@ -1568,5 +1642,116 @@ export class KanbanServer {
     // This would check workflow runs directory for runs associated with this session
     // and trigger reviews. For now, this is a placeholder.
     console.log("[bridge] Session idle:", sessionId)
+  }
+
+  // ---- Message Logging Handlers ----
+
+  private getOrCreateMessageLogger(sessionId: string): MessageLogger {
+    if (!this.messageLoggers.has(sessionId)) {
+      // Look up task info from workflow_sessions
+      const workflowSession = this.db.getWorkflowSession(sessionId)
+      
+      const logger = createMessageLogger({
+        db: this.db,
+        taskId: workflowSession?.taskId ?? null,
+        taskRunId: workflowSession?.taskRunId ?? null,
+        workflowPhase: workflowSession?.sessionKind ?? null,
+        sessionStatus: workflowSession?.status ?? null,
+      })
+      
+      this.messageLoggers.set(sessionId, logger)
+    }
+    return this.messageLoggers.get(sessionId)!
+  }
+
+  private async handleMessageEvent(payload: any): Promise<void> {
+    try {
+      const sessionId = payload?.sessionId
+      if (!sessionId) return
+
+      const logger = this.getOrCreateMessageLogger(sessionId)
+      await logger.logMessageUpdated({
+        properties: payload?.output,
+        parts: payload?.output?.parts,
+        ...payload?.output,
+      })
+    } catch (err) {
+      console.error("[message-logger] Error handling message event:", err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  private async handleToolExecuteEvent(payload: any): Promise<void> {
+    try {
+      const sessionId = payload?.sessionId
+      if (!sessionId) return
+
+      const logger = this.getOrCreateMessageLogger(sessionId)
+      await logger.logToolExecuteAfter(payload?.input, payload?.output)
+    } catch (err) {
+      console.error("[message-logger] Error handling tool execute event:", err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  private async handleSessionUpdateEvent(payload: any): Promise<void> {
+    try {
+      const sessionId = payload?.sessionId
+      if (!sessionId) return
+
+      const logger = this.getOrCreateMessageLogger(sessionId)
+      await logger.logSessionUpdated({
+        properties: payload?.output,
+        ...payload?.output,
+      })
+    } catch (err) {
+      console.error("[message-logger] Error handling session update event:", err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  private async handleSessionIdleEvent(payload: any): Promise<void> {
+    try {
+      const sessionId = payload?.sessionId
+      if (!sessionId) return
+
+      const logger = this.getOrCreateMessageLogger(sessionId)
+      await logger.logSessionIdle({
+        properties: payload?.event,
+        ...payload?.event,
+      })
+
+      // Clean up the logger for this session
+      this.messageLoggers.delete(sessionId)
+    } catch (err) {
+      console.error("[message-logger] Error handling session idle event:", err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  private summarizeMessage(message: import("./types").SessionMessage): string {
+    const maxLength = 100
+    
+    if (message.toolName) {
+      if (message.editFilePath) {
+        return `Edited ${message.editFilePath}`
+      }
+      return `Called ${message.toolName}`
+    }
+    
+    const content = message.contentJson
+    let text = ""
+    
+    if (typeof content.text === "string") {
+      text = content.text
+    } else if (Array.isArray(content.text)) {
+      text = content.text.join(" ")
+    } else if (content.stepFinish) {
+      return `Step finished: ${content.stepFinish.reason || "completed"}`
+    } else if (content.retry) {
+      return `Retry attempt ${content.retry.attempt || 1}`
+    }
+    
+    if (text.length > maxLength) {
+      return text.slice(0, maxLength) + "..."
+    }
+    
+    return text || `[${message.messageType}]`
   }
 }

@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite"
 import { mkdirSync } from "fs"
 import { dirname } from "path"
-import type { Task, TaskStatus, Options, ThinkingLevel, ExecutionPhase, ExecutionStrategy, BestOfNConfig, BestOfNSubstage, TaskRun, TaskCandidate, RunPhase, RunStatus } from "./types"
+import type { Task, TaskStatus, Options, ThinkingLevel, ExecutionPhase, ExecutionStrategy, BestOfNConfig, BestOfNSubstage, TaskRun, TaskCandidate, RunPhase, RunStatus, SessionMessage, CreateSessionMessageInput } from "./types"
 import { DEFAULT_COMMIT_PROMPT } from "./types"
 import { hasCapturedPlanOutput, hasCapturedRevisionRequest } from "./task-state"
 
@@ -426,6 +426,47 @@ export class KanbanDB {
         CREATE INDEX idx_workflow_sessions_task_id ON workflow_sessions(task_id);
         CREATE INDEX idx_workflow_sessions_status ON workflow_sessions(status);
         CREATE INDEX idx_workflow_sessions_session_kind ON workflow_sessions(session_kind);
+      `)
+    }
+
+    // Migration: Create session_messages table for detailed message logging
+    const hasSessionMessagesTable = this.db.prepare("SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name='session_messages'").get() as any
+    if (hasSessionMessagesTable.cnt === 0) {
+      this.db.exec(`
+        CREATE TABLE session_messages (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          message_id TEXT,
+          session_id TEXT NOT NULL,
+          task_id TEXT,
+          task_run_id TEXT,
+          timestamp INTEGER NOT NULL,
+          role TEXT NOT NULL,
+          message_type TEXT NOT NULL,
+          content_json TEXT NOT NULL,
+          model_provider TEXT,
+          model_id TEXT,
+          agent_name TEXT,
+          prompt_tokens INTEGER,
+          completion_tokens INTEGER,
+          total_tokens INTEGER,
+          tool_name TEXT,
+          tool_args_json TEXT,
+          tool_result_json TEXT,
+          tool_status TEXT,
+          edit_diff TEXT,
+          edit_file_path TEXT,
+          session_status TEXT,
+          workflow_phase TEXT,
+          raw_event_json TEXT,
+          FOREIGN KEY(session_id) REFERENCES workflow_sessions(session_id),
+          FOREIGN KEY(task_id) REFERENCES tasks(id),
+          FOREIGN KEY(task_run_id) REFERENCES task_runs(id)
+        );
+        CREATE INDEX idx_session_messages_session_id ON session_messages(session_id);
+        CREATE INDEX idx_session_messages_task_id ON session_messages(task_id);
+        CREATE INDEX idx_session_messages_timestamp ON session_messages(timestamp);
+        CREATE INDEX idx_session_messages_role ON session_messages(role);
+        CREATE INDEX idx_session_messages_session_timestamp ON session_messages(session_id, timestamp);
       `)
     }
   }
@@ -1098,6 +1139,99 @@ export class KanbanDB {
     this.db.prepare("DELETE FROM workflow_sessions WHERE status IN ('deleted', 'stale')").run()
   }
 
+  // Session message logging methods
+  createSessionMessage(data: CreateSessionMessageInput): SessionMessage {
+    const timestamp = data.timestamp ?? Date.now()
+    
+    const result = this.db.prepare(`
+      INSERT INTO session_messages (
+        message_id, session_id, task_id, task_run_id, timestamp, role, message_type,
+        content_json, model_provider, model_id, agent_name, prompt_tokens,
+        completion_tokens, total_tokens, tool_name, tool_args_json, tool_result_json,
+        tool_status, edit_diff, edit_file_path, session_status, workflow_phase, raw_event_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      data.messageId ?? null,
+      data.sessionId,
+      data.taskId ?? null,
+      data.taskRunId ?? null,
+      timestamp,
+      data.role,
+      data.messageType,
+      JSON.stringify(data.contentJson),
+      data.modelProvider ?? null,
+      data.modelId ?? null,
+      data.agentName ?? null,
+      data.promptTokens ?? null,
+      data.completionTokens ?? null,
+      data.totalTokens ?? null,
+      data.toolName ?? null,
+      data.toolArgsJson ? JSON.stringify(data.toolArgsJson) : null,
+      data.toolResultJson ? JSON.stringify(data.toolResultJson) : null,
+      data.toolStatus ?? null,
+      data.editDiff ?? null,
+      data.editFilePath ?? null,
+      data.sessionStatus ?? null,
+      data.workflowPhase ?? null,
+      data.rawEventJson ? JSON.stringify(data.rawEventJson) : null
+    )
+    
+    return this.getSessionMessage(result.lastInsertRowid as number)!
+  }
+
+  getSessionMessage(id: number): SessionMessage | null {
+    const row = this.db.prepare("SELECT * FROM session_messages WHERE id = ?").get(id) as any
+    return row ? rowToSessionMessage(row) : null
+  }
+
+  getSessionMessages(sessionId: string): SessionMessage[] {
+    const rows = this.db.prepare("SELECT * FROM session_messages WHERE session_id = ? ORDER BY timestamp ASC").all(sessionId) as any[]
+    return rows.map(rowToSessionMessage)
+  }
+
+  getSessionMessagesByTask(taskId: string): SessionMessage[] {
+    const rows = this.db.prepare("SELECT * FROM session_messages WHERE task_id = ? ORDER BY timestamp ASC").all(taskId) as any[]
+    return rows.map(rowToSessionMessage)
+  }
+
+  getSessionMessagesByTaskRun(taskRunId: string): SessionMessage[] {
+    const rows = this.db.prepare("SELECT * FROM session_messages WHERE task_run_id = ? ORDER BY timestamp ASC").all(taskRunId) as any[]
+    return rows.map(rowToSessionMessage)
+  }
+
+  getSessionTimeline(sessionId: string, limit?: number, offset?: number): SessionMessage[] {
+    let query = "SELECT * FROM session_messages WHERE session_id = ? ORDER BY timestamp ASC"
+    const params: any[] = [sessionId]
+    
+    if (limit !== undefined) {
+      query += " LIMIT ?"
+      params.push(limit)
+    }
+    if (offset !== undefined) {
+      query += " OFFSET ?"
+      params.push(offset)
+    }
+    
+    const rows = this.db.prepare(query).all(...params) as any[]
+    return rows.map(rowToSessionMessage)
+  }
+
+  getMessageCount(sessionId: string): number {
+    const result = this.db.prepare("SELECT COUNT(*) as count FROM session_messages WHERE session_id = ?").get(sessionId) as any
+    return result?.count ?? 0
+  }
+
+  deleteSessionMessages(sessionId: string): number {
+    const result = this.db.prepare("DELETE FROM session_messages WHERE session_id = ?").run(sessionId)
+    return result.changes
+  }
+
+  cleanupOldSessionMessages(maxAgeDays = 30): number {
+    const cutoff = Date.now() - (maxAgeDays * 24 * 60 * 60 * 1000)
+    const result = this.db.prepare("DELETE FROM session_messages WHERE timestamp < ?").run(cutoff)
+    return result.changes
+  }
+
   close() {
     this.db.close()
   }
@@ -1139,5 +1273,34 @@ function rowToTaskCandidate(row: any): TaskCandidate {
     errorMessage: row.error_message,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  }
+}
+
+function rowToSessionMessage(row: any): SessionMessage {
+  return {
+    id: row.id,
+    messageId: row.message_id,
+    sessionId: row.session_id,
+    taskId: row.task_id,
+    taskRunId: row.task_run_id,
+    timestamp: row.timestamp,
+    role: row.role as import("./types").MessageRole,
+    messageType: row.message_type as import("./types").MessageType,
+    contentJson: JSON.parse(row.content_json || "{}"),
+    modelProvider: row.model_provider,
+    modelId: row.model_id,
+    agentName: row.agent_name,
+    promptTokens: row.prompt_tokens,
+    completionTokens: row.completion_tokens,
+    totalTokens: row.total_tokens,
+    toolName: row.tool_name,
+    toolArgsJson: row.tool_args_json ? JSON.parse(row.tool_args_json) : null,
+    toolResultJson: row.tool_result_json ? JSON.parse(row.tool_result_json) : null,
+    toolStatus: row.tool_status,
+    editDiff: row.edit_diff,
+    editFilePath: row.edit_file_path,
+    sessionStatus: row.session_status,
+    workflowPhase: row.workflow_phase,
+    rawEventJson: row.raw_event_json ? JSON.parse(row.raw_event_json) : null,
   }
 }

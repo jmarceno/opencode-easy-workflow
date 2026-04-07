@@ -1026,9 +1026,64 @@ export const EasyWorkflowBridgePlugin = async (input: any) => {
       })
     },
 
+    "message.updated": async (input: any, output: any) => {
+      // Forward message events to standalone server for logging
+      const sessionId = extractSessionId(input, output)
+      if (!sessionId) return
+
+      await forwardEvent("message.updated", {
+        input,
+        output,
+        sessionId,
+        timestamp: Date.now(),
+        directory: config!.projectDirectory,
+      })
+    },
+
+    "tool.execute.after": async (input: any, output: any) => {
+      // Forward tool execution events to standalone server for logging
+      const sessionId = extractSessionId(input, output)
+      if (!sessionId) return
+
+      await forwardEvent("tool.execute.after", {
+        input,
+        output,
+        sessionId,
+        timestamp: Date.now(),
+        directory: config!.projectDirectory,
+      })
+    },
+
+    "session.updated": async (input: any, output: any) => {
+      // Forward session update events to standalone server for logging
+      const sessionId = extractSessionId(input, output)
+      if (!sessionId) return
+
+      await forwardEvent("session.updated", {
+        input,
+        output,
+        sessionId,
+        timestamp: Date.now(),
+        directory: config!.projectDirectory,
+      })
+    },
+
     event: async ({ event }: any) => {
       // Forward all events to standalone server
       await forwardEvent("event", { event })
+
+      // Handle session.idle events for message logging
+      if (event?.type === "session.idle") {
+        const sessionId = extractSessionId(event)
+        if (sessionId) {
+          await forwardEvent("session.idle", {
+            event,
+            sessionId,
+            timestamp: Date.now(),
+            directory: config!.projectDirectory,
+          })
+        }
+      }
 
       // Handle permission auto-reply locally (we need the client for this)
       if (event?.type === "permission.asked") {
