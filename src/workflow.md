@@ -28,7 +28,7 @@ You are in review mode. Your objective is to verify whether all changes in this 
 
 ## Response Format
 
-You must use the StructuredOutput tool to respond with JSON in this exact format:
+Your response must be a valid JSON object matching this schema:
 
 ```json
 {

@@ -263,10 +263,9 @@ When debugging plugin issues, verify:
 3. **Always use try/finally** when creating scratch sessions to ensure cleanup
 4. **Log everything** during development - use debug.log for diagnostics
 5. **Check agent availability** before routing to subagents
-6. **Use text parsing** as a fallback when structured output isn't available
-7. **Preserve user context** - use the same agent/model from input when creating scratch sessions
-8. **Handle missing data gracefully** - always provide fallback values
-9. **Always run the integration tests** - always run the integration tests yourself and fix any issues.
+6. **Preserve user context** - use the same agent/model from input when creating scratch sessions
+7. **Handle missing data gracefully** - always provide fallback values
+8. **Always run the integration tests** - always run the integration tests yourself and fix any issues.
 
 ---
 

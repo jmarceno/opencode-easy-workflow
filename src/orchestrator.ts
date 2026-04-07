@@ -41,7 +41,7 @@ export const PLANNING_ONLY_INSTRUCTION = "PREPARE PLAN ONLY. Do not ask follow-u
 
 /**
  * JSON Schema for standard review output (used in runReviewLoop)
- * This replaces the markdown format: STATUS:, SUMMARY:, GAPS:, RECOMMENDED_PROMPT:
+ * Enforced via the SDK's format parameter for structured JSON output
  */
 export const REVIEW_RESULT_SCHEMA = {
   type: "object",
@@ -70,7 +70,7 @@ export const REVIEW_RESULT_SCHEMA = {
 
 /**
  * JSON Schema for best-of-n reviewer output (used in runBestOfNReviewers)
- * This replaces the markdown format for best-of-n review
+ * Enforced via the SDK's format parameter for structured JSON output
  */
 export const REVIEWER_OUTPUT_SCHEMA = {
   type: "object",
@@ -2010,7 +2010,7 @@ ${taskSuffix}`
         if (failure) throw new Error(`Reviewer prompt failed: ${failure}`)
 
         const output = this.extractTextOutput(result)
-        const reviewerOutput = this.parseReviewerOutput(result, output)
+        const reviewerOutput = this.parseReviewerOutput(result)
 
         const now = Math.floor(Date.now() / 1000)
         this.db.updateTaskRun(reviewerRun.id, {
@@ -2079,7 +2079,7 @@ Changed files: ${c.changedFilesJson.join(", ") || "None"}
 Verification: ${this.stringifyVerificationSummary(c.verificationJson)}
 `).join("\n")}
 
-You must use the StructuredOutput tool to respond with JSON in this exact format:
+Your response must be a valid JSON object matching this schema:
 
 {
   "status": "pass|needs_manual_review",
@@ -2096,79 +2096,24 @@ You must use the StructuredOutput tool to respond with JSON in this exact format
     return prompt
   }
 
-  private parseReviewerOutput(result: any, fallbackText?: string): ReviewerOutput {
-    // First, try to use structured output from the SDK
+  private parseReviewerOutput(result: any): ReviewerOutput {
     const structuredOutput = result?.data?.info?.structured_output
-    if (structuredOutput && typeof structuredOutput === "object") {
-      this.appendDebugLog("info", "using structured output for reviewer result", { taskId: undefined })
-      return {
-        status: structuredOutput.status as ReviewerOutput["status"] || "needs_manual_review",
-        summary: structuredOutput.summary || "No summary provided",
-        bestCandidateIds: Array.isArray(structuredOutput.bestCandidateIds) ? structuredOutput.bestCandidateIds : [],
-        gaps: Array.isArray(structuredOutput.gaps) ? structuredOutput.gaps : [],
-        recommendedFinalStrategy: structuredOutput.recommendedFinalStrategy as SelectionMode || "synthesize",
-        recommendedPrompt: structuredOutput.recommendedPrompt ?? null,
+    if (!structuredOutput || typeof structuredOutput !== "object") {
+      const structuredError = result?.data?.info?.error
+      if (structuredError?.name === "StructuredOutputError") {
+        throw new Error(`Structured output is not supported by the configured model/provider: ${structuredError.message}. Use a model that supports JSON schema constrained output.`)
       }
+      throw new Error("Review response missing structured output. The model or provider may not support JSON schema constrained output.")
     }
 
-    // Check for structured output error and log it
-    const structuredError = result?.data?.info?.error
-    if (structuredError?.name === "StructuredOutputError") {
-      this.appendDebugLog("warn", "structured output failed for reviewer, falling back to regex parsing", {
-        error: structuredError.message,
-        retries: structuredError.retries
-      })
-    }
-
-    // Fallback to regex-based parsing for backwards compatibility
-    const output = fallbackText || this.extractTextOutput(result)
-    const text = output.replace(/^(?:\s*|#|\*)*(STATUS|SUMMARY|GAPS|RECOMMENDED_PROMPT|BEST_CANDIDATES|RECOMMENDED_FINAL_STRATEGY)(?:\s*|:|\*)*\s*/gim, "$1:\n");
-
-    const statusMatch = text.match(/(?:^|\n)STATUS:\s*([\s\S]*?)(?=(?:\n(?:SUMMARY|BEST_CANDIDATES|GAPS|RECOMMENDED_FINAL_STRATEGY|RECOMMENDED_PROMPT):)|$)/i)
-    const summaryMatch = text.match(/(?:^|\n)SUMMARY:\s*([\s\S]*?)(?=(?:\n(?:BEST_CANDIDATES|GAPS|RECOMMENDED_FINAL_STRATEGY|RECOMMENDED_PROMPT):)|$)/i)
-    const bestMatch = text.match(/(?:^|\n)BEST_CANDIDATES:\s*([\s\S]*?)(?=(?:\n(?:GAPS|RECOMMENDED_FINAL_STRATEGY|RECOMMENDED_PROMPT):)|$)/i)
-    const gapsMatch = text.match(/(?:^|\n)GAPS:\s*([\s\S]*?)(?=(?:\n(?:RECOMMENDED_FINAL_STRATEGY|RECOMMENDED_PROMPT):)|$)/i)
-    const strategyMatch = text.match(/(?:^|\n)RECOMMENDED_FINAL_STRATEGY:\s*([\s\S]*?)(?=(?:\nRECOMMENDED_PROMPT:)|$)/i)
-    const promptMatch = text.match(/(?:^|\n)RECOMMENDED_PROMPT:\s*([\s\S]*?)$/i)
-
-    const statusRaw = statusMatch?.[1]?.toLowerCase().trim() || "needs_manual_review"
-    let status: ReviewerOutput["status"] = "needs_manual_review"
-    if (statusRaw.includes("pass") || statusRaw.match(/succ|approv|ok|done|good/)) {
-      status = "pass"
-    }
-
-    const summary = summaryMatch?.[1]?.trim() || "No summary provided"
-
-    const bestText = bestMatch?.[1] || ""
-    const bestCandidateIds = bestText
-      .split("\n")
-      .map(l => l.trim())
-      .filter(l => l.startsWith("- ") || l.startsWith("* "))
-      .map(l => l.replace(/^[-*]\s*/, "").trim())
-      .filter(l => l.length > 0)
-
-    const gapsText = gapsMatch?.[1] || ""
-    const gaps = gapsText
-      .split("\n")
-      .map(l => l.trim())
-      .filter(l => l.startsWith("- ") || l.startsWith("* "))
-      .map(l => l.replace(/^[-*]\s*/, "").trim())
-      .filter(g => g.length > 0 && g.toLowerCase() !== "none")
-
-    const strategyRaw = strategyMatch?.[1]?.toLowerCase().trim() || "synthesize"
-    const recommendedFinalStrategy: SelectionMode =
-      strategyRaw === "pick_best" ? "pick_best" :
-      strategyRaw === "pick_or_synthesize" ? "pick_or_synthesize" : "synthesize"
-
-    const recommendedPrompt = promptMatch?.[1]?.trim() || null
-
+    this.appendDebugLog("info", "using structured output for reviewer result", { taskId: undefined })
     return {
-      status,
-      summary,
-      bestCandidateIds,
-      gaps,
-      recommendedFinalStrategy,
-      recommendedPrompt,
+      status: structuredOutput.status as ReviewerOutput["status"] || "needs_manual_review",
+      summary: structuredOutput.summary || "No summary provided",
+      bestCandidateIds: Array.isArray(structuredOutput.bestCandidateIds) ? structuredOutput.bestCandidateIds : [],
+      gaps: Array.isArray(structuredOutput.gaps) ? structuredOutput.gaps : [],
+      recommendedFinalStrategy: structuredOutput.recommendedFinalStrategy as SelectionMode || "synthesize",
+      recommendedPrompt: structuredOutput.recommendedPrompt ?? null,
     }
   }
 
@@ -2578,6 +2523,20 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
             "Use the run file as the source of truth for review.",
             "Do not rely on prior session history.",
             "Inspect the current codebase and branch state.",
+            "Lack of commit in this phase is not an issue",
+            "Your response must be a valid JSON object matching this schema",
+            "```json",
+            "{",
+            "  \"status\": \"pass|gaps_found|blocked\",",
+            "  \"summary\": \"<brief summary of review findings>\"",
+            "  \"gaps\": [\"<first gap if any>\", \"<second gap if any>\"]",
+            "  \"recommendedPrompt\": \"<specific prompt to address gaps, or empty string if no gaps>\"",
+            "}",
+            "```",
+            "- **status**: \"pass\" if all goals are met, \"gaps_found\" if issues exist, \"blocked\" if review cannot complete",
+            "- **summary**: Brief summary of what you found",
+            "- **recommendedPrompt**: Specific prompt to address the gaps, or empty string if no gaps            ",
+            "- **gaps**: Array of specific gaps found (empty array if status is \"pass\")",
           ].join("\n")
 
           const modelSelection = options.reviewModel !== "default" ? parseModelSelection(options.reviewModel) : null
@@ -2715,64 +2674,21 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
   }
 
   private parseReviewResponse(result: any): ReviewResult {
-    // First, try to use structured output from the SDK
     const structuredOutput = result?.data?.info?.structured_output
-    if (structuredOutput && typeof structuredOutput === "object") {
-      this.appendDebugLog("info", "using structured output for review result", { taskId: undefined })
-      return {
-        status: structuredOutput.status as ReviewResult["status"] || "blocked",
-        summary: structuredOutput.summary || "No summary provided",
-        gaps: Array.isArray(structuredOutput.gaps) ? structuredOutput.gaps : [],
-        recommendedPrompt: structuredOutput.recommendedPrompt || "",
+    if (!structuredOutput || typeof structuredOutput !== "object") {
+      const structuredError = result?.data?.info?.error
+      if (structuredError?.name === "StructuredOutputError") {
+        throw new Error(`Structured output is not supported by the configured review model/provider: ${structuredError.message}. Use a model that supports JSON schema constrained output.`)
       }
+      throw new Error("Review response missing structured output. The model or provider may not support JSON schema constrained output.")
     }
 
-    // Check for structured output error and log it
-    const structuredError = result?.data?.info?.error
-    if (structuredError?.name === "StructuredOutputError") {
-      this.appendDebugLog("warn", "structured output failed, falling back to regex parsing", {
-        error: structuredError.message,
-        retries: structuredError.retries
-      })
-    }
-
-    // Fallback to regex-based parsing for backwards compatibility
-    const parts = result?.parts ?? result?.data?.parts
-    const textPart = parts?.find(
-      (p: any) => p?.type === "text" && typeof p.text === "string"
-    )
-    let rawText = textPart?.text ?? ""
-    const text = rawText.replace(/^(?:\s*|#|\*)*(STATUS|SUMMARY|GAPS|RECOMMENDED_PROMPT)(?:\s*|:|\*)*\s*/gim, "$1:\n");
-
-    const statusMatch = text.match(/(?:^|\n)STATUS:\s*([\s\S]*?)(?=(?:\n(?:SUMMARY|GAPS|RECOMMENDED_PROMPT):)|$)/i)
-    const summaryMatch = text.match(/(?:^|\n)SUMMARY:\s*([\s\S]*?)(?=(?:\n(?:GAPS|RECOMMENDED_PROMPT):)|$)/i)
-    const gapsMatch = text.match(/(?:^|\n)GAPS:\s*([\s\S]*?)(?=(?:\n(?:RECOMMENDED_PROMPT):)|$)/i)
-    const recommendedMatch = text.match(/(?:^|\n)RECOMMENDED_PROMPT:\s*([\s\S]*?)$/i)
-
-    const statusRaw = statusMatch?.[1]?.toLowerCase().trim() || "blocked"
-    let status: ReviewResult["status"] = "blocked"
-    if (statusRaw.includes("pass") || statusRaw.match(/succ|approv|ok|done|good/)) {
-      status = "pass"
-    } else if (statusRaw.includes("gap") || statusRaw.match(/fail|need|reject/)) {
-      status = "gaps_found"
-    }
-
-    const summary = summaryMatch?.[1]?.trim() || "Review could not be completed"
-
-    const gapsText = gapsMatch?.[1] || ""
-    const gaps = gapsText
-      .split("\n")
-      .map((l: string) => l.trim())
-      .filter((l: string) => l.startsWith("- ") || l.startsWith("* "))
-      .map((l: string) => l.replace(/^[-*]\s+/, "").trim())
-      .filter((g: string) => g.length > 0 && g.toLowerCase() !== "none")
-
-    const recommendedPrompt = recommendedMatch?.[1]?.trim() || ""
+    this.appendDebugLog("info", "using structured output for review result", { taskId: undefined })
     return {
-      status,
-      summary,
-      gaps,
-      recommendedPrompt: recommendedPrompt.toLowerCase() === "none" ? "" : recommendedPrompt,
+      status: structuredOutput.status as ReviewResult["status"] || "blocked",
+      summary: structuredOutput.summary || "No summary provided",
+      gaps: Array.isArray(structuredOutput.gaps) ? structuredOutput.gaps : [],
+      recommendedPrompt: structuredOutput.recommendedPrompt || "",
     }
   }
 }

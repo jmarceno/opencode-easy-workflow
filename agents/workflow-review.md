@@ -22,7 +22,7 @@ Do not make code changes.
 
 ## Response Format
 
-You must use the StructuredOutput tool to respond with JSON in this exact format:
+Your response must be a valid JSON object matching this schema:
 
 ```json
 {
