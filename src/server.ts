@@ -1529,8 +1529,9 @@ export class KanbanServer {
     writeFileSync(runPath, runContent, "utf-8")
     console.log("[bridge] Created workflow run:", runPath)
 
-    // Append to debug log
-    const DEBUG_LOG_PATH = join(WORKFLOW_ROOT, "debug.log")
+    // Append to per-project debug log
+    const DEBUG_LOG_PATH = join(directory, ".opencode", "easy-workflow", "debug.log")
+    mkdirSync(join(directory, ".opencode", "easy-workflow"), { recursive: true })
     appendFileSync(DEBUG_LOG_PATH, `[${new Date().toISOString()}] info: Workflow run created via bridge: ${runPath}\n`, "utf-8")
 
     // Note: Goal extraction and full workflow orchestration would need to be

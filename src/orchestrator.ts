@@ -17,8 +17,6 @@ const OPENCODE_DIR = join(homedir(), ".config", "opencode")
 const WORKFLOW_ROOT = OPENCODE_DIR
 const TEMPLATE_PATH = join(WORKFLOW_ROOT, "easy-workflow", "workflow.md")
 const AGENTS_DIR = join(WORKFLOW_ROOT, "agents")
-const DEBUG_LOG_PATH = join(WORKFLOW_ROOT, "easy-workflow", "debug.log")
-let debugLogErrorReporter: ((message: string) => void) | null = null
 
 const THINKING_LEVEL_AGENT_MAP: Record<Exclude<ThinkingLevel, "default">, string> = {
   low: "build-fast",
@@ -67,10 +65,10 @@ function registerWorkflowSessionSafe(
       ownerDirectory,
       skipPermissionAsking,
     })
-    appendDebugLog("info", "workflow session registered", { sessionId, taskId, sessionKind })
+    appendDebugLog(ownerDirectory, "info", "workflow session registered", { sessionId, taskId, sessionKind })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    appendDebugLog("warn", "failed to register workflow session", { sessionId, taskId, sessionKind, error: msg })
+    appendDebugLog(ownerDirectory, "warn", "failed to register workflow session", { sessionId, taskId, sessionKind, error: msg })
   }
 }
 
@@ -85,7 +83,7 @@ function writeRootOwnerPointerSafe(worktreeDirectory: string, ownerDirectory: st
     )
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    appendDebugLog("warn", "failed to write root-owner pointer", { worktreeDirectory, error: msg })
+    appendDebugLog(ownerDirectory, "warn", "failed to write root-owner pointer", { worktreeDirectory, error: msg })
   }
 }
 
@@ -136,16 +134,14 @@ function normalizeAgentName(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null
 }
 
-function appendDebugLog(kind: string, message: string, extra?: Record<string, unknown>): void {
+function appendDebugLog(ownerDirectory: string, kind: string, message: string, extra?: Record<string, unknown>): void {
   const payload = extra ? ` ${JSON.stringify(extra)}` : ""
   try {
-    mkdirSync(join(WORKFLOW_ROOT, "easy-workflow"), { recursive: true })
-    appendFileSync(DEBUG_LOG_PATH, `[${new Date().toISOString()}] ${kind}: ${message}${payload}\n`, "utf-8")
+    const debugLogPath = join(ownerDirectory, ".opencode", "easy-workflow", "debug.log")
+    mkdirSync(join(ownerDirectory, ".opencode", "easy-workflow"), { recursive: true })
+    appendFileSync(debugLogPath, `[${new Date().toISOString()}] ${kind}: ${message}${payload}\n`, "utf-8")
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    if (debugLogErrorReporter) {
-      debugLogErrorReporter(`Failed to write debug log: ${msg}`)
-    }
+    // Silently ignore debug log errors - it's diagnostic only
   }
 }
 
@@ -253,6 +249,7 @@ export class Orchestrator {
   private running = false
   private shouldStop = false
   private providerCatalog: any | null = null
+  private debugLogErrorReporter: ((message: string) => void) | null = null
 
   constructor(db: KanbanDB, server: KanbanServer, serverUrl: string | (() => string | null), worktreeDir: string, ownerDirectory?: string) {
     this.db = db
@@ -260,8 +257,23 @@ export class Orchestrator {
     this.serverUrlSource = serverUrl
     this.worktreeDir = worktreeDir
     this.ownerDirectory = ownerDirectory || worktreeDir
-    debugLogErrorReporter = (message: string) => {
+    this.debugLogErrorReporter = (message: string) => {
       this.server.broadcast({ type: "error", payload: { message } })
+    }
+  }
+
+  private appendDebugLog(kind: string, message: string, extra?: Record<string, unknown>): void {
+    const payload = extra ? ` ${JSON.stringify(extra)}` : ""
+    try {
+      // Debug log is per-project, stored in the owner's .opencode directory
+      const debugLogPath = join(this.ownerDirectory, ".opencode", "easy-workflow", "debug.log")
+      mkdirSync(join(this.ownerDirectory, ".opencode", "easy-workflow"), { recursive: true })
+      appendFileSync(debugLogPath, `[${new Date().toISOString()}] ${kind}: ${message}${payload}\n`, "utf-8")
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (this.debugLogErrorReporter) {
+        this.debugLogErrorReporter(`Failed to write debug log: ${msg}`)
+      }
     }
   }
 
@@ -305,10 +317,10 @@ export class Orchestrator {
     if (!sessionId) return false
     try {
       await client.session.delete({ path: { id: sessionId } })
-      appendDebugLog("info", "session auto-deleted", { context, sessionId, ...metadata })
+      this.appendDebugLog("info", "session auto-deleted", { context, sessionId, ...metadata })
       return true
     } catch (err) {
-      appendDebugLog("warn", "session auto-delete failed", {
+      this.appendDebugLog("warn", "session auto-delete failed", {
         context,
         sessionId,
         error: err instanceof Error ? err.message : String(err),
@@ -470,10 +482,10 @@ export class Orchestrator {
 
   private resolveTargetBranch(task: Task, options: Options, worktreeInfo?: any): string {
     const worktreeDirectory = typeof worktreeInfo?.directory === "string" ? worktreeInfo.directory : undefined
-    appendDebugLog("info", "resolveTargetBranch called", { taskId: task.id, worktreeDir: worktreeDirectory, taskBranch: task.branch, worktreeInfoBranch: worktreeInfo?.branch, worktreeInfoBaseRef: worktreeInfo?.baseRef, optionBranch: options.branch })
+    this.appendDebugLog("info", "resolveTargetBranch called", { taskId: task.id, worktreeDir: worktreeDirectory, taskBranch: task.branch, worktreeInfoBranch: worktreeInfo?.branch, worktreeInfoBaseRef: worktreeInfo?.baseRef, optionBranch: options.branch })
     const taskBranch = typeof task.branch === "string" ? task.branch.trim() : ""
     if (this.gitBranchExists(taskBranch, worktreeDirectory)) {
-      appendDebugLog("info", "resolveTargetBranch using task branch", { taskId: task.id, branch: taskBranch })
+      this.appendDebugLog("info", "resolveTargetBranch using task branch", { taskId: task.id, branch: taskBranch })
       return taskBranch
     }
 
@@ -482,13 +494,13 @@ export class Orchestrator {
 
     const optionBranch = typeof options.branch === "string" ? options.branch.trim() : ""
     if (this.gitBranchExists(optionBranch, worktreeDirectory)) {
-      appendDebugLog("info", "resolveTargetBranch using options branch", { taskId: task.id, branch: optionBranch })
+      this.appendDebugLog("info", "resolveTargetBranch using options branch", { taskId: task.id, branch: optionBranch })
       return optionBranch
     }
 
     const remoteDefaultBranch = this.readRemoteDefaultBranch(worktreeDirectory)
     if (this.gitBranchExists(remoteDefaultBranch || "", worktreeDirectory)) {
-      appendDebugLog("info", "resolveTargetBranch using remote default branch", { taskId: task.id, branch: remoteDefaultBranch })
+      this.appendDebugLog("info", "resolveTargetBranch using remote default branch", { taskId: task.id, branch: remoteDefaultBranch })
       return remoteDefaultBranch!
     }
 
@@ -497,11 +509,11 @@ export class Orchestrator {
       .filter((branch) => branch !== worktreeBranch)
       .filter((branch) => !branch.startsWith("opencode/"))
     if (localBranches.length > 0) {
-      appendDebugLog("info", "resolveTargetBranch using local branch", { taskId: task.id, branch: localBranches[0], allLocalBranches: localBranches })
+      this.appendDebugLog("info", "resolveTargetBranch using local branch", { taskId: task.id, branch: localBranches[0], allLocalBranches: localBranches })
       return localBranches[0]
     }
 
-    appendDebugLog("error", "resolveTargetBranch failed", { 
+    this.appendDebugLog("error", "resolveTargetBranch failed", { 
       taskId: task.id, 
       worktreeDir: worktreeDirectory,
       taskBranch,
@@ -627,12 +639,12 @@ export class Orchestrator {
     try {
       resolvedServerUrl = this.resolveServerUrl()
     } catch (resolveErr) {
-      appendDebugLog("warn", "unable to resolve server URL during orchestrator start", {
+      this.appendDebugLog("warn", "unable to resolve server URL during orchestrator start", {
         error: resolveErr instanceof Error ? resolveErr.message : String(resolveErr),
       })
       // Keep unresolved marker; execution will fail with explicit error later.
     }
-    appendDebugLog("info", "orchestrator starting", { taskCount: initialTasks.length, serverUrl: resolvedServerUrl })
+    this.appendDebugLog("info", "orchestrator starting", { taskCount: initialTasks.length, serverUrl: resolvedServerUrl })
     this.server.broadcast({ type: "execution_started", payload: {} })
 
     try {
@@ -666,12 +678,12 @@ export class Orchestrator {
       try {
         resolvedServerUrl = this.resolveServerUrl()
       } catch (resolveErr) {
-        appendDebugLog("warn", "unable to resolve server URL while handling execution error", {
+        this.appendDebugLog("warn", "unable to resolve server URL while handling execution error", {
           error: resolveErr instanceof Error ? resolveErr.message : String(resolveErr),
         })
         // Keep unresolved marker in logs.
       }
-      appendDebugLog("error", "orchestrator execution failed", { error: msg, serverUrl: resolvedServerUrl })
+      this.appendDebugLog("error", "orchestrator execution failed", { error: msg, serverUrl: resolvedServerUrl })
       this.server.broadcast({ type: "error", payload: { message: msg } })
     } finally {
       this.running = false
@@ -704,11 +716,11 @@ export class Orchestrator {
     try {
       resolvedServerUrl = this.resolveServerUrl()
     } catch (resolveErr) {
-      appendDebugLog("warn", "unable to resolve server URL during orchestrator start", {
+      this.appendDebugLog("warn", "unable to resolve server URL during orchestrator start", {
         error: resolveErr instanceof Error ? resolveErr.message : String(resolveErr),
       })
     }
-    appendDebugLog("info", "orchestrator starting single task", {
+    this.appendDebugLog("info", "orchestrator starting single task", {
       targetTaskId: taskId,
       targetTaskName: targetTask.name,
       dependencyCount: dependencyTasks.length,
@@ -742,11 +754,11 @@ export class Orchestrator {
       try {
         resolvedServerUrl = this.resolveServerUrl()
       } catch (resolveErr) {
-        appendDebugLog("warn", "unable to resolve server URL while handling execution error", {
+        this.appendDebugLog("warn", "unable to resolve server URL while handling execution error", {
           error: resolveErr instanceof Error ? resolveErr.message : String(resolveErr),
         })
       }
-      appendDebugLog("error", "orchestrator execution failed", { error: msg, serverUrl: resolvedServerUrl })
+      this.appendDebugLog("error", "orchestrator execution failed", { error: msg, serverUrl: resolvedServerUrl })
       this.server.broadcast({ type: "error", payload: { message: msg } })
     } finally {
       this.running = false
@@ -799,7 +811,7 @@ export class Orchestrator {
 
     try {
       // 1. Create worktree
-      appendDebugLog("info", "creating worktree", { taskId: task.id, taskName: task.name, serverUrl: resolvedServerUrl })
+      this.appendDebugLog("info", "creating worktree", { taskId: task.id, taskName: task.name, serverUrl: resolvedServerUrl })
       worktreeInfo = await this.createWorktree(`task-${task.id}`)
       if (!worktreeInfo?.directory) {
         throw new Error(`Worktree creation returned invalid response: ${JSON.stringify(worktreeInfo)}`)
@@ -816,7 +828,7 @@ export class Orchestrator {
       // 2. Pre-execution command (using Bun shell directly)
       const command = options.command?.trim()
       if (command && worktreeInfo?.directory) {
-        appendDebugLog("info", "running pre-execution command", { taskId: task.id, command })
+        this.appendDebugLog("info", "running pre-execution command", { taskId: task.id, command })
         try {
           const proc = Bun.spawn(["sh", "-c", command], {
             cwd: worktreeInfo.directory,
@@ -840,7 +852,7 @@ export class Orchestrator {
           }
         } catch (cmdErr) {
           const msg = cmdErr instanceof Error ? cmdErr.message : String(cmdErr)
-          appendDebugLog("error", "pre-execution command failed", { taskId: task.id, error: msg })
+          this.appendDebugLog("error", "pre-execution command failed", { taskId: task.id, error: msg })
           this.db.appendAgentOutput(task.id, `[command error] ${msg}\n`)
           throw new Error(`Pre-execution command failed: ${msg}`)
         }
@@ -875,7 +887,7 @@ export class Orchestrator {
       const effectiveThinkingLevel = resolveThinkingLevel(task, options)
       const executionAgent = resolveExecutionAgent(task.skipPermissionAsking, effectiveThinkingLevel)
       if (effectiveThinkingLevel !== "default" || task.skipPermissionAsking) {
-        appendDebugLog("info", "using thinking level", { taskId: task.id, level: effectiveThinkingLevel, agent: executionAgent, skipPermissionAsking: task.skipPermissionAsking })
+        this.appendDebugLog("info", "using thinking level", { taskId: task.id, level: effectiveThinkingLevel, agent: executionAgent, skipPermissionAsking: task.skipPermissionAsking })
       }
 
       // 5. Execute: plan mode or direct
@@ -889,7 +901,7 @@ export class Orchestrator {
         const planModelParsed = await this.resolveModelSelection(planModel, client, "Plan")
 
         if (!isPlanImplementationResume && !isPlanRevisionResume) {
-          appendDebugLog("info", "plan mode: sending planning prompt", { taskId: task.id })
+          this.appendDebugLog("info", "plan mode: sending planning prompt", { taskId: task.id })
           const planResponse = await worktreeClient.session.prompt({
             sessionID: sessionId,
             agent: resolvePlanningAgent(task.skipPermissionAsking),
@@ -925,14 +937,14 @@ export class Orchestrator {
             currentTask = this.getTaskOrThrow(task.id, "transitioning auto-approved plan to implementation", task.name)
             lastKnownTask = currentTask
             this.server.broadcast({ type: "task_updated", payload: currentTask })
-            appendDebugLog("info", "plan mode: plan auto-approved, continuing to implementation", { taskId: task.id })
+            this.appendDebugLog("info", "plan mode: plan auto-approved, continuing to implementation", { taskId: task.id })
           } else {
             const shouldDeletePausedWorktree = currentTask.deleteWorktree !== false
             if (worktreeInfo?.directory && shouldDeletePausedWorktree) {
               try {
                 await this.removeWorktree(worktreeInfo.directory)
               } catch (cleanupErr) {
-                appendDebugLog("warn", "plan mode worktree cleanup failed", { taskId: task.id, error: String(cleanupErr) })
+                this.appendDebugLog("warn", "plan mode worktree cleanup failed", { taskId: task.id, error: String(cleanupErr) })
               }
             }
 
@@ -945,13 +957,13 @@ export class Orchestrator {
             currentTask = this.getTaskOrThrow(task.id, "saving the completed plan", task.name)
             lastKnownTask = currentTask
             this.server.broadcast({ type: "task_updated", payload: currentTask })
-            appendDebugLog("info", "plan mode: plan complete, awaiting approval", { taskId: task.id })
+            this.appendDebugLog("info", "plan mode: plan complete, awaiting approval", { taskId: task.id })
             return
           }
         }
 
         if (isPlanRevisionResume) {
-          appendDebugLog("info", "plan mode: sending revision prompt", { taskId: task.id })
+          this.appendDebugLog("info", "plan mode: sending revision prompt", { taskId: task.id })
           const latestRevisionRequest = getLatestTaggedOutput(task.agentOutput, "user-revision-request")
           const originalPlan = getLatestTaggedOutput(task.agentOutput, "plan")
           if (!latestRevisionRequest) {
@@ -995,14 +1007,14 @@ export class Orchestrator {
             currentTask = this.getTaskOrThrow(task.id, "transitioning revised auto-approved plan to implementation", task.name)
             lastKnownTask = currentTask
             this.server.broadcast({ type: "task_updated", payload: currentTask })
-            appendDebugLog("info", "plan mode: revised plan auto-approved, continuing to implementation", { taskId: task.id })
+            this.appendDebugLog("info", "plan mode: revised plan auto-approved, continuing to implementation", { taskId: task.id })
           } else {
             const shouldDeletePausedWorktree = currentTask.deleteWorktree !== false
             if (worktreeInfo?.directory && shouldDeletePausedWorktree) {
               try {
                 await this.removeWorktree(worktreeInfo.directory)
               } catch (cleanupErr) {
-                appendDebugLog("warn", "plan revision worktree cleanup failed", { taskId: task.id, error: String(cleanupErr) })
+                this.appendDebugLog("warn", "plan revision worktree cleanup failed", { taskId: task.id, error: String(cleanupErr) })
               }
             }
 
@@ -1015,12 +1027,12 @@ export class Orchestrator {
             currentTask = this.getTaskOrThrow(task.id, "saving the revised plan", task.name)
             lastKnownTask = currentTask
             this.server.broadcast({ type: "task_updated", payload: currentTask })
-            appendDebugLog("info", "plan mode: revision complete, awaiting approval", { taskId: task.id })
+            this.appendDebugLog("info", "plan mode: revision complete, awaiting approval", { taskId: task.id })
             return
           }
         }
 
-        appendDebugLog("info", "plan mode: sending execution prompt", { taskId: task.id })
+        this.appendDebugLog("info", "plan mode: sending execution prompt", { taskId: task.id })
         const executionTaskState = this.getTaskOrThrow(task.id, "loading approved plan context", task.name)
         const approvedPlanContext = getLatestTaggedOutput(executionTaskState.agentOutput, "plan")
         if (!approvedPlanContext) {
@@ -1069,7 +1081,7 @@ export class Orchestrator {
         this.db.updateTask(task.id, { executionPhase: "implementation_done" })
       } else {
         // Direct execution
-        appendDebugLog("info", "sending task prompt", { taskId: task.id })
+        this.appendDebugLog("info", "sending task prompt", { taskId: task.id })
         const promptParts = [
           AUTONOMY_INSTRUCTION,
           "",
@@ -1117,7 +1129,7 @@ export class Orchestrator {
       // 7. Commit via agent prompt (if enabled)
       if (currentTask.autoCommit && worktreeInfo) {
         try {
-          appendDebugLog("info", "sending commit prompt to agent", { taskId: task.id })
+          this.appendDebugLog("info", "sending commit prompt to agent", { taskId: task.id })
           const baseRef = this.resolveTargetBranch(currentTask, options, worktreeInfo)
           let commitPromptText = options.commitPrompt.replace(/\{\{base_ref\}\}/g, baseRef)
           if (!currentTask.deleteWorktree) {
@@ -1136,10 +1148,10 @@ export class Orchestrator {
             this.db.appendAgentOutput(task.id, `\n[commit] ${commitOutput}\n`)
             this.server.broadcast({ type: "agent_output", payload: { taskId: task.id, output: `\n[commit] ${commitOutput}\n` } })
           }
-          appendDebugLog("info", "commit prompt completed", { taskId: task.id })
+          this.appendDebugLog("info", "commit prompt completed", { taskId: task.id })
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e)
-          appendDebugLog("error", "commit prompt failed", { taskId: task.id, error: message })
+          this.appendDebugLog("error", "commit prompt failed", { taskId: task.id, error: message })
           this.db.appendAgentOutput(task.id, `\n[commit error] ${message}\n`)
           this.server.broadcast({ type: "agent_output", payload: { taskId: task.id, output: `\n[commit error] ${message}\n` } })
           throw new Error(`Commit prompt failed: ${message}`)
@@ -1165,9 +1177,9 @@ export class Orchestrator {
           }
 
           if (!branchExists) {
-            appendDebugLog("info", "worktree branch already merged or deleted, skipping merge", { taskId: task.id, worktreeBranch })
+            this.appendDebugLog("info", "worktree branch already merged or deleted, skipping merge", { taskId: task.id, worktreeBranch })
           } else {
-            appendDebugLog("info", "merging worktree", { taskId: task.id, branch: worktreeInfo.branch })
+            this.appendDebugLog("info", "merging worktree", { taskId: task.id, branch: worktreeInfo.branch })
 
             // Resolve merge target branch from task/options first, then git defaults.
             let mainBranch = this.resolveTargetBranch(currentTask, options, worktreeInfo)
@@ -1180,7 +1192,7 @@ export class Orchestrator {
                 })
                 hasTargetBranch = true
               } catch (showRefErr) {
-                appendDebugLog("warn", "target branch lookup failed before fallback", {
+                this.appendDebugLog("warn", "target branch lookup failed before fallback", {
                   taskId: task.id,
                   branch: mainBranch,
                   error: showRefErr instanceof Error ? showRefErr.message : String(showRefErr),
@@ -1202,7 +1214,7 @@ export class Orchestrator {
                   mainBranch = defaultBranch
                 }
               } catch (e) {
-                appendDebugLog("warn", "could not resolve origin HEAD for merge target", {
+                this.appendDebugLog("warn", "could not resolve origin HEAD for merge target", {
                   taskId: task.id,
                   error: e instanceof Error ? e.message : String(e),
                 })
@@ -1230,14 +1242,14 @@ export class Orchestrator {
               throw new Error(`Branch ${mainBranch} does not exist: ${e}`);
             }
 
-            appendDebugLog("info", "merge target branch selected", { taskId: task.id, mainBranch })
+            this.appendDebugLog("info", "merge target branch selected", { taskId: task.id, mainBranch })
             let mergeCwd = worktreeInfo.directory
             let wasCheckedOut = false
             try {
               execFileSync("git", ["checkout", mainBranch], { cwd: worktreeInfo.directory, stdio: "ignore" })
               wasCheckedOut = true
             } catch (checkoutErr) {
-              appendDebugLog("warn", "branch checkout skipped before merge, searching for worktree", {
+              this.appendDebugLog("warn", "branch checkout skipped before merge, searching for worktree", {
                 taskId: task.id,
                 branch: mainBranch,
                 error: checkoutErr instanceof Error ? checkoutErr.message : String(checkoutErr),
@@ -1258,13 +1270,13 @@ export class Orchestrator {
                     if (currentWorktree) {
                       mergeCwd = currentWorktree
                       wasCheckedOut = true
-                      appendDebugLog("info", "found target branch in existing worktree", { mergeCwd })
+                      this.appendDebugLog("info", "found target branch in existing worktree", { mergeCwd })
                       break
                     }
                   }
                 }
               } catch (wtErr) {
-                appendDebugLog("warn", "failed to list worktrees", { error: String(wtErr) })
+                this.appendDebugLog("warn", "failed to list worktrees", { error: String(wtErr) })
               }
             }
 
@@ -1290,7 +1302,7 @@ export class Orchestrator {
         try {
           await this.removeWorktree(worktreeInfo.directory)
         } catch (e) {
-          appendDebugLog("warn", "worktree cleanup failed", { taskId: task.id, error: String(e) })
+          this.appendDebugLog("warn", "worktree cleanup failed", { taskId: task.id, error: String(e) })
         }
       }
 
@@ -1303,20 +1315,20 @@ export class Orchestrator {
       })
       const doneTask = this.getTaskOrThrow(task.id, "marking the task as done", task.name)
       this.server.broadcast({ type: "task_updated", payload: doneTask })
-      appendDebugLog("info", "task completed", { taskId: task.id, taskName: task.name })
+      this.appendDebugLog("info", "task completed", { taskId: task.id, taskName: task.name })
 
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       const contextMsg = msg.includes("fetch") || msg.includes("connect") || msg.includes("ECONNREFUSED")
         ? `${msg} (opencode server: ${resolvedServerUrl})`
         : msg
-      appendDebugLog("error", "task execution failed", { taskId: task.id, error: contextMsg, serverUrl: resolvedServerUrl })
+      this.appendDebugLog("error", "task execution failed", { taskId: task.id, error: contextMsg, serverUrl: resolvedServerUrl })
       const failedTask = this.db.updateTask(task.id, { status: "failed", errorMessage: contextMsg })
       if (failedTask) {
         lastKnownTask = failedTask
         this.server.broadcast({ type: "task_updated", payload: failedTask })
       } else {
-        appendDebugLog("warn", "failed task record missing during error handling", { taskId: task.id })
+        this.appendDebugLog("warn", "failed task record missing during error handling", { taskId: task.id })
       }
       this.server.broadcast({ type: "error", payload: { message: `Task \"${task.name}\" failed: ${contextMsg}` } })
 
@@ -1325,7 +1337,7 @@ export class Orchestrator {
         try {
           await this.removeWorktree(worktreeInfo.directory)
         } catch (cleanupErr) {
-          appendDebugLog("warn", "worktree cleanup on failure failed", {
+          this.appendDebugLog("warn", "worktree cleanup on failure failed", {
             taskId: task.id,
             directory: worktreeInfo.directory,
             error: String(cleanupErr),
@@ -1378,7 +1390,7 @@ export class Orchestrator {
       const currentTask = this.getTaskOrThrow(task.id, "marking best-of-n task as executing", task.name)
       this.server.broadcast({ type: "task_updated", payload: currentTask })
 
-      appendDebugLog("info", "starting best-of-n execution", { taskId: task.id, config })
+      this.appendDebugLog("info", "starting best-of-n execution", { taskId: task.id, config })
 
       const workerRuns = this.expandBestOfNSlots(config.workers)
       for (const worker of workerRuns) {
@@ -1408,13 +1420,13 @@ export class Orchestrator {
         const updated = this.db.getTask(task.id)!
         this.server.broadcast({ type: "task_updated", payload: updated })
         this.emitError(`Task "${task.name}" failed: ${msg}`)
-        appendDebugLog("error", "best-of-n workers failed threshold", { taskId: task.id, successful: successfulWorkers.length, required: config.minSuccessfulWorkers })
+        this.appendDebugLog("error", "best-of-n workers failed threshold", { taskId: task.id, successful: successfulWorkers.length, required: config.minSuccessfulWorkers })
         this.shouldStop = true
         return
       }
 
       const candidates = this.db.getTaskCandidates(task.id)
-      appendDebugLog("info", "best-of-n workers completed", { taskId: task.id, successfulWorkers: successfulWorkers.length, candidates: candidates.length })
+      this.appendDebugLog("info", "best-of-n workers completed", { taskId: task.id, successfulWorkers: successfulWorkers.length, candidates: candidates.length })
 
       let reviewerResult: { halt: boolean; routeToReview?: boolean; error?: string; usableResults: ReviewerOutput[] } = {
         halt: false,
@@ -1512,10 +1524,10 @@ export class Orchestrator {
       })
       const doneTask = this.db.getTask(task.id)!
       this.server.broadcast({ type: "task_updated", payload: doneTask })
-      appendDebugLog("info", "best-of-n task completed", { taskId: task.id })
+      this.appendDebugLog("info", "best-of-n task completed", { taskId: task.id })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      appendDebugLog("error", "best-of-n task execution failed", { taskId: task.id, error: msg })
+      this.appendDebugLog("error", "best-of-n task execution failed", { taskId: task.id, error: msg })
       const failedTask = this.db.updateTask(task.id, {
         status: "failed",
         bestOfNSubstage: "idle",
@@ -1585,7 +1597,7 @@ export class Orchestrator {
         const workerPrompt = this.buildWorkerPrompt(task.prompt, workerRun.taskSuffix, options.extraPrompt)
         const model = await this.resolveModelSelection(workerRun.model, client, "Worker")
 
-        appendDebugLog("info", "running best-of-n worker", { taskId: task.id, workerRunId: workerRun.id, model: workerRun.model })
+        this.appendDebugLog("info", "running best-of-n worker", { taskId: task.id, workerRunId: workerRun.id, model: workerRun.model })
 
         const promptOpts: any = {
           sessionID: sessionId,
@@ -1625,7 +1637,7 @@ export class Orchestrator {
           candidateInput = this.collectCandidateArtifacts(task, workerRun, output, worktreeInfo.directory, verificationJson)
         } catch (artifactErr) {
           const artifactErrorMessage = artifactErr instanceof Error ? artifactErr.message : String(artifactErr)
-          appendDebugLog("warn", "failed to collect worker diff artifacts", {
+          this.appendDebugLog("warn", "failed to collect worker diff artifacts", {
             taskId: task.id,
             workerRunId: workerRun.id,
             error: artifactErrorMessage,
@@ -1667,13 +1679,13 @@ export class Orchestrator {
             await this.removeWorktree(worktreeInfo.directory)
           } catch (cleanupErr) {
             const cleanupMessage = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)
-            appendDebugLog("warn", "worker worktree cleanup failed", { taskId: task.id, workerRunId: workerRun.id, error: cleanupMessage })
+            this.appendDebugLog("warn", "worker worktree cleanup failed", { taskId: task.id, workerRunId: workerRun.id, error: cleanupMessage })
             this.emitError(`Worker cleanup failed for task "${task.name}" (run ${workerRun.id}): ${cleanupMessage}. Worktree preserved at ${worktreeInfo.directory}.`)
           }
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        appendDebugLog("error", "best-of-n worker failed", { taskId: task.id, workerRunId: workerRun.id, error: msg })
+        this.appendDebugLog("error", "best-of-n worker failed", { taskId: task.id, workerRunId: workerRun.id, error: msg })
         const now = Math.floor(Date.now() / 1000)
         this.db.updateTaskRun(workerRun.id, { status: "failed", errorMessage: msg, completedAt: now })
         this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(workerRun.id) })
@@ -1849,7 +1861,7 @@ ${taskSuffix}`
       return { status: "skipped", reason: "No verification command configured" }
     }
 
-    appendDebugLog("info", "running verification command", { taskId: task.id, label, command })
+    this.appendDebugLog("info", "running verification command", { taskId: task.id, label, command })
     try {
       const proc = Bun.spawn(["sh", "-c", command], {
         cwd: worktreeDir,
@@ -1911,7 +1923,7 @@ ${taskSuffix}`
         const reviewerPrompt = this.buildReviewerPrompt(task.prompt, candidates, reviewerRun.taskSuffix, options.extraPrompt)
         const model = await this.resolveModelSelection(reviewerRun.model, client, "Reviewer")
 
-        appendDebugLog("info", "running best-of-n reviewer", { taskId: task.id, reviewerRunId: reviewerRun.id, model: reviewerRun.model })
+        this.appendDebugLog("info", "running best-of-n reviewer", { taskId: task.id, reviewerRunId: reviewerRun.id, model: reviewerRun.model })
 
         const response = await client.session.prompt({
           sessionID: sessionId,
@@ -1935,7 +1947,7 @@ ${taskSuffix}`
         this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(reviewerRun.id) })
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        appendDebugLog("error", "best-of-n reviewer failed", { taskId: task.id, reviewerRunId: reviewerRun.id, error: msg })
+        this.appendDebugLog("error", "best-of-n reviewer failed", { taskId: task.id, reviewerRunId: reviewerRun.id, error: msg })
         const now = Math.floor(Date.now() / 1000)
         this.db.updateTaskRun(reviewerRun.id, { status: "failed", errorMessage: msg, completedAt: now })
         this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(reviewerRun.id) })
@@ -2161,7 +2173,7 @@ RECOMMENDED_PROMPT:
       const finalPrompt = this.buildFinalApplierPrompt(task.prompt, candidates, aggregatedReview, selectionMode, task.bestOfNConfig?.finalApplier?.taskSuffix, options.extraPrompt)
       const model = await this.resolveModelSelection(finalApplierRun.model, client, "Final Applier")
 
-      appendDebugLog("info", "running best-of-n final applier", { taskId: task.id, finalApplierRunId: finalApplierRun.id, model: finalApplierRun.model })
+      this.appendDebugLog("info", "running best-of-n final applier", { taskId: task.id, finalApplierRunId: finalApplierRun.id, model: finalApplierRun.model })
 
       const effectiveThinkingLevel = resolveThinkingLevel(task, options)
       const executionAgent = resolveExecutionAgent(task.skipPermissionAsking, effectiveThinkingLevel)
@@ -2197,7 +2209,7 @@ RECOMMENDED_PROMPT:
         task.bestOfNConfig?.verificationCommand,
       )
 
-      appendDebugLog("info", "best-of-n final applier completed, starting merge", { taskId: task.id })
+      this.appendDebugLog("info", "best-of-n final applier completed, starting merge", { taskId: task.id })
 
       if (task.autoCommit && worktreeInfo) {
         try {
@@ -2216,7 +2228,7 @@ RECOMMENDED_PROMPT:
           if (commitFailure) throw new Error(`Commit prompt failed: ${commitFailure}`)
         } catch (e) {
           const commitErrorMessage = e instanceof Error ? e.message : String(e)
-          appendDebugLog("error", "commit prompt failed during best-of-n final apply", { taskId: task.id, error: commitErrorMessage })
+          this.appendDebugLog("error", "commit prompt failed during best-of-n final apply", { taskId: task.id, error: commitErrorMessage })
           this.db.appendAgentOutput(task.id, `\n[final-applier commit error] ${commitErrorMessage}\n`)
           this.server.broadcast({ type: "agent_output", payload: { taskId: task.id, output: `\n[final-applier commit error] ${commitErrorMessage}\n` } })
           throw new Error(`Final applier commit step failed for task "${task.name}": ${commitErrorMessage}`)
@@ -2235,7 +2247,7 @@ RECOMMENDED_PROMPT:
             })
           } catch (branchErr) {
             const branchErrorMessage = branchErr instanceof Error ? branchErr.message : String(branchErr)
-            appendDebugLog("warn", "final applier target branch not found, falling back to main", {
+            this.appendDebugLog("warn", "final applier target branch not found, falling back to main", {
               taskId: task.id,
               attemptedBranch: mainBranch,
               error: branchErrorMessage,
@@ -2249,7 +2261,7 @@ RECOMMENDED_PROMPT:
             execFileSync("git", ["checkout", mainBranch], { cwd: worktreeInfo.directory, stdio: "ignore" })
             wasCheckedOut = true
           } catch (checkoutErr) {
-            appendDebugLog("warn", "final applier branch checkout skipped, searching for worktree", {
+            this.appendDebugLog("warn", "final applier branch checkout skipped, searching for worktree", {
               taskId: task.id,
               branch: mainBranch,
               error: checkoutErr instanceof Error ? checkoutErr.message : String(checkoutErr),
@@ -2269,13 +2281,13 @@ RECOMMENDED_PROMPT:
                   if (currentWorktree) {
                     mergeCwd = currentWorktree
                     wasCheckedOut = true
-                    appendDebugLog("info", "found target branch in existing worktree", { mergeCwd })
+                    this.appendDebugLog("info", "found target branch in existing worktree", { mergeCwd })
                     break
                   }
                 }
               }
             } catch (wtErr) {
-              appendDebugLog("warn", "failed to list worktrees", { error: String(wtErr) })
+              this.appendDebugLog("warn", "failed to list worktrees", { error: String(wtErr) })
             }
           }
 
@@ -2288,7 +2300,7 @@ RECOMMENDED_PROMPT:
           } else {
             throw new Error(`Cannot merge: branch ${mainBranch} could not be checked out and was not found in any worktree.`)
           }
-          appendDebugLog("info", "best-of-n final merge completed", { taskId: task.id, branch: mainBranch })
+          this.appendDebugLog("info", "best-of-n final merge completed", { taskId: task.id, branch: mainBranch })
         } catch (mergeErr) {
           const msg = `Merge failed: ${mergeErr instanceof Error ? mergeErr.message : String(mergeErr)}`
           throw new Error(msg)
@@ -2300,7 +2312,7 @@ RECOMMENDED_PROMPT:
           await this.removeWorktree(worktreeInfo.directory)
         } catch (cleanupErr) {
           const cleanupMessage = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)
-          appendDebugLog("warn", "final applier worktree cleanup failed", { taskId: task.id, error: cleanupMessage })
+          this.appendDebugLog("warn", "final applier worktree cleanup failed", { taskId: task.id, error: cleanupMessage })
           this.emitError(`Final applier cleanup failed for task "${task.name}": ${cleanupMessage}. Worktree preserved at ${worktreeInfo.directory}.`)
         }
       }
@@ -2319,7 +2331,7 @@ RECOMMENDED_PROMPT:
       return { failed: false }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      appendDebugLog("error", "best-of-n final applier failed", { taskId: task.id, finalApplierRunId: finalApplierRun.id, error: msg })
+      this.appendDebugLog("error", "best-of-n final applier failed", { taskId: task.id, finalApplierRunId: finalApplierRun.id, error: msg })
       const now = Math.floor(Date.now() / 1000)
       this.db.updateTaskRun(finalApplierRun.id, { status: "failed", errorMessage: msg, completedAt: now })
       this.server.broadcast({ type: "task_run_updated", payload: this.db.getTaskRun(finalApplierRun.id) })
@@ -2406,7 +2418,7 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
 
   private async runReviewLoop(task: Task, sessionId: string, config: ReviewConfig, options: Options, worktreeInfo?: any) {
     if (!config.reviewAgent) {
-      appendDebugLog("warn", "no review agent configured, skipping review", { taskId: task.id })
+      this.appendDebugLog("warn", "no review agent configured, skipping review", { taskId: task.id })
       return
     }
 
@@ -2424,14 +2436,14 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
     const reviewDir = join(effectiveWorktreeDir, ".opencode", "easy-workflow")
     mkdirSync(reviewDir, { recursive: true })
     const reviewFilePath = join(reviewDir, `review-${task.id}.md`)
-    appendDebugLog("info", "review file path", { taskId: task.id, worktreeDir: effectiveWorktreeDir, reviewDir, reviewFilePath })
+    this.appendDebugLog("info", "review file path", { taskId: task.id, worktreeDir: effectiveWorktreeDir, reviewDir, reviewFilePath })
     const goalsContent = `## Task Goals\n\n${task.prompt}\n\n## Task Name\n\n${task.name}`
     const reviewContent = readFileSync(TEMPLATE_PATH, "utf-8")
       .replace("[REPLACE THIS WITH THE TASK GOALS]", goalsContent)
 
     try {
       writeFileSync(reviewFilePath, reviewContent, "utf-8")
-      appendDebugLog("info", "review file written", { taskId: task.id, reviewFilePath, fileExists: existsSync(reviewFilePath) })
+      this.appendDebugLog("info", "review file written", { taskId: task.id, reviewFilePath, fileExists: existsSync(reviewFilePath) })
 
       while (reviewCount < maxRuns) {
         // Move to review column
@@ -2439,7 +2451,7 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
         const reviewTask = this.db.getTask(task.id)!
         this.server.broadcast({ type: "task_updated", payload: reviewTask })
 
-        appendDebugLog("info", "running review", { taskId: task.id, reviewCount, maxRuns })
+        this.appendDebugLog("info", "running review", { taskId: task.id, reviewCount, maxRuns })
 
         let reviewSessionId: string | null = null
         try {
@@ -2471,7 +2483,7 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
           ].join("\n")
 
           const modelSelection = options.reviewModel !== "default" ? parseModelSelection(options.reviewModel) : null
-          appendDebugLog("info", "sending review prompt", { taskId: task.id, reviewSessionId, reviewAgentName, model: modelSelection || "default" })
+          this.appendDebugLog("info", "sending review prompt", { taskId: task.id, reviewSessionId, reviewAgentName, model: modelSelection || "default" })
 
           let response: any
           try {
@@ -2498,11 +2510,11 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
             } else if (promptErr instanceof Error) {
               errorMsg = promptErr.message
             }
-            appendDebugLog("error", "review prompt failed", { taskId: task.id, reviewSessionId, errorMessage: errorMsg })
+            this.appendDebugLog("error", "review prompt failed", { taskId: task.id, reviewSessionId, errorMessage: errorMsg })
             throw new Error(`Review prompt failed: ${errorMsg}`)
           }
 
-          appendDebugLog("info", "review prompt completed", { taskId: task.id, reviewSessionId, hasResponse: !!response })
+          this.appendDebugLog("info", "review prompt completed", { taskId: task.id, reviewSessionId, hasResponse: !!response })
 
           // Review prompt completed - mark as idle
           this.db.updateTask(task.id, { reviewActivity: "idle" })
@@ -2512,7 +2524,7 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
           if (reviewFailure) throw new Error(`Review prompt failed: ${reviewFailure}`)
           const reviewResult = this.parseReviewResponse(result)
 
-          appendDebugLog("info", "review result", {
+          this.appendDebugLog("info", "review result", {
             taskId: task.id,
             status: reviewResult.status,
             gaps: reviewResult.gaps,
@@ -2560,7 +2572,7 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
           const fixPrompt = reviewResult.recommendedPrompt
             || `Fix the following issues found during review:\n${reviewResult.gaps.map(g => `- ${g}`).join("\n")}`
 
-          appendDebugLog("info", "sending fix prompt after review", { taskId: task.id, reviewCount })
+          this.appendDebugLog("info", "sending fix prompt after review", { taskId: task.id, reviewCount })
           const fixResponse = await client.session.prompt({
             sessionID: sessionId,
             parts: [{ type: "text", text: fixPrompt }],
@@ -2586,7 +2598,7 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
       try {
         unlinkSync(reviewFilePath)
       } catch (cleanupErr) {
-        appendDebugLog("warn", "review file cleanup failed", { taskId: task.id, reviewFilePath, error: String(cleanupErr) })
+        this.appendDebugLog("warn", "review file cleanup failed", { taskId: task.id, reviewFilePath, error: String(cleanupErr) })
       }
     }
   }
