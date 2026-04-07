@@ -12,6 +12,7 @@ import { existsSync, readFileSync, writeFileSync, unlinkSync } from "fs"
 import { join, resolve } from "path"
 import { createHash } from "crypto"
 import { spawn } from "child_process"
+import { tool } from "@opencode-ai/plugin"
 
 // ---- Constants ----
 
@@ -89,6 +90,29 @@ interface WorkflowSessionOwner {
   taskId: string
   sessionKind: string
   skipPermissionAsking: boolean
+}
+
+interface ToolFilter {
+  name: string
+  patterns: RegExp[]
+  message: string
+}
+
+const TOOL_FILTERS: ToolFilter[] = [
+  {
+    name: "structure_output",
+    patterns: [/structure/i, /structured/i, /StructureOutput/i],
+    message: "The StructureOutput tool does not exist. Instead of calling a tool, provide your response as a JSON object directly in your response text."
+  }
+]
+
+function createToolDeniedOutput(toolName: string, filters: ToolFilter[]): string {
+  for (const filter of filters) {
+    if (filter.patterns.some(pattern => pattern.test(toolName))) {
+      return filter.message
+    }
+  }
+  return `The tool "${toolName}" does not exist.`
 }
 
 // ---- Config loading ----
@@ -1003,6 +1027,24 @@ export const EasyWorkflowBridgePlugin = async (input: any) => {
   }
 
   return {
+    tool: {
+      invalid: tool({
+        description: "Do not use - intercepts calls to non-existent tools",
+        args: {
+          tool: tool.schema.string(),
+          error: tool.schema.string(),
+        },
+        async execute(params: { tool: string; error: string }) {
+          const deniedMessage = createToolDeniedOutput(params.tool, TOOL_FILTERS)
+          return {
+            title: "Tool Not Found",
+            output: deniedMessage,
+            metadata: {},
+          }
+        },
+      }),
+    },
+
     "chat.message": async (input: any, output: any) => {
       const textPart = getUserTextPart(output)
       const promptText = textPart?.text ?? ""
