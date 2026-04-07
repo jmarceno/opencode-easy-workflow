@@ -113,15 +113,6 @@ reviewAgent: workflow-review
 ---
 ```
 
-Edit `.opencode/agents/workflow-review.md` to set your model:
-
-```yaml
----
-mode: subagent
-model: minimax/minimax-m2.7
----
-```
-
 ## Mode 2: Kanban Orchestrator
 
 Full task orchestration with dependency management, parallel execution, and automated review.

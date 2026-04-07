@@ -418,11 +418,8 @@ function loadReviewAgentConfig(agentName: string, agentsDir: string): AgentConfi
     throw new Error(`Workflow review agent must declare mode: subagent in ${path}`)
   }
 
-  if (!model) {
-    throw new Error(`Workflow review agent must declare a model in ${path}`)
-  }
-
-  if (!parseModelSelection(model)) {
+  // Model is now database-driven, not required in agent file
+  if (model && !parseModelSelection(model)) {
     throw new Error(`Workflow review agent model is invalid in ${path}: ${model}`)
   }
 

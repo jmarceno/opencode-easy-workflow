@@ -2021,16 +2021,69 @@ Your response must be a valid JSON with the following fields:
 
   private extractJsonOutput(result: any): Record<string, unknown> {
     // Extract JSON from the model's text output
-    const textOutput = this.extractTextOutput(result)
-    if (textOutput.trim()) {
-      try {
-        const parsed = JSON.parse(textOutput)
-        if (parsed && typeof parsed === "object") {
-          return parsed
+    let textOutput = this.extractTextOutput(result)
+    if (!textOutput.trim()) {
+      throw new Error("Review response missing valid JSON output. The model did not return a valid JSON response.")
+    }
+
+    // Try to find JSON in markdown code blocks first
+    const codeBlockMatch = textOutput.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/)
+    if (codeBlockMatch) {
+      textOutput = codeBlockMatch[1].trim()
+    }
+
+    // Try to find JSON object/array boundaries
+    const jsonStartMatch = textOutput.match(/[\[{]/)
+    if (jsonStartMatch) {
+      const startIndex = jsonStartMatch.index!
+      // Find matching closing bracket
+      let depth = 0
+      let inString = false
+      let escapeNext = false
+      let endIndex = startIndex
+
+      for (let i = startIndex; i < textOutput.length; i++) {
+        const char = textOutput[i]
+
+        if (escapeNext) {
+          escapeNext = false
+          continue
         }
-      } catch {
-        // Not valid JSON, fall through
+
+        if (char === '\\') {
+          escapeNext = true
+          continue
+        }
+
+        if (char === '"' && !inString) {
+          inString = true
+        } else if (char === '"' && inString) {
+          inString = false
+        } else if (!inString) {
+          if (char === '{' || char === '[') {
+            depth++
+          } else if (char === '}' || char === ']') {
+            depth--
+            if (depth === 0) {
+              endIndex = i + 1
+              break
+            }
+          }
+        }
       }
+
+      if (depth === 0) {
+        textOutput = textOutput.slice(startIndex, endIndex)
+      }
+    }
+
+    try {
+      const parsed = JSON.parse(textOutput)
+      if (parsed && typeof parsed === "object") {
+        return parsed as Record<string, unknown>
+      }
+    } catch {
+      // Not valid JSON, fall through
     }
 
     throw new Error("Review response missing valid JSON output. The model did not return a valid JSON response.")

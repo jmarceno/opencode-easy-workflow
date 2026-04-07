@@ -9,7 +9,6 @@ permission:
     "git status*": allow
     "git diff*": allow
     "git log*": allow
-model: minimax/MiniMax-M2.7
 ---
 
 You are the workflow review agent.

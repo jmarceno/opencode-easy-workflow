@@ -886,7 +886,7 @@ sl-tooltip {
       <div class="form-group" x-data="modelPicker('optReviewModel')" x-init="attach()">
         <div class="label-row">
           <label for="optReviewModel">Review Model</label>
-          <sl-icon-button class="help-btn" type="button" title="Model used by the workflow-review agent. Saving this writes the selected model into .opencode/agents/workflow-review.md." aria-label="Review model help" name="question-circle"></sl-icon-button>
+          <sl-icon-button class="help-btn" type="button" title="Model used by the workflow-review agent. This is stored in the database and used for all review operations." aria-label="Review model help" name="question-circle"></sl-icon-button>
         </div>
         <input type="text" id="optReviewModel" class="model-search" placeholder="Type model name..." list="optReviewModel-suggestions" x-model="query" @focus="refreshSuggestions()" @input="refreshSuggestions()" @blur="commit()">
         <datalist id="optReviewModel-suggestions">
