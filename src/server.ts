@@ -812,10 +812,21 @@ export class KanbanServer {
             return this.json({ error: getExecutionMutationError() }, 409)
           }
 
-          const deleted = this.db.deleteTask(taskId)
-          if (!deleted) return this.json({ error: "Task not found" }, 404)
-          this.broadcast({ type: "task_deleted", payload: { id: taskId } })
-          return new Response(null, { status: 204 })
+          // Check if task has execution history - if so, archive instead of delete
+          const hasHistory = this.db.hasTaskExecutionHistory(taskId)
+          if (hasHistory) {
+            // Archive the task (soft delete) to preserve history
+            const archived = this.db.archiveTask(taskId)
+            if (!archived) return this.json({ error: "Task not found" }, 404)
+            this.broadcast({ type: "task_archived", payload: { id: taskId } })
+            return this.json({ id: taskId, archived: true })
+          } else {
+            // Hard delete for tasks without any execution history
+            const deleted = this.db.hardDeleteTask(taskId)
+            if (!deleted) return this.json({ error: "Task not found" }, 404)
+            this.broadcast({ type: "task_deleted", payload: { id: taskId } })
+            return new Response(null, { status: 204 })
+          }
         }
       }
 
@@ -830,6 +841,28 @@ export class KanbanServer {
           this.broadcast({ type: "task_reordered", payload: {} })
         }
         return this.json({ ok: true })
+      }
+
+      // Archive/Delete all done tasks
+      if (method === "DELETE" && url.pathname === "/api/tasks/done/all") {
+        const doneTasks = this.db.getTasksByStatus("done")
+        let archived = 0
+        let deleted = 0
+
+        for (const task of doneTasks) {
+          const hasHistory = this.db.hasTaskExecutionHistory(task.id)
+          if (hasHistory) {
+            this.db.archiveTask(task.id)
+            this.broadcast({ type: "task_archived", payload: { id: task.id } })
+            archived++
+          } else {
+            this.db.hardDeleteTask(task.id)
+            this.broadcast({ type: "task_deleted", payload: { id: task.id } })
+            deleted++
+          }
+        }
+
+        return this.json({ archived, deleted })
       }
 
       // Options

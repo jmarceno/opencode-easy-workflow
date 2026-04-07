@@ -325,9 +325,9 @@ sl-icon-button.add-task-btn { width: 100%; margin-top: auto; padding: 8px; borde
 sl-icon-button.add-task-btn::part(base) { width: 100%; justify-content: center; color: var(--text-dim); background: none; }
 sl-icon-button.add-task-btn:hover::part(base) { border-color: var(--accent); color: var(--accent); }
 
-/* Delete all button (done panel) */
-.delete-all-btn { width: 100%; padding: 8px; border: 1px dashed rgba(218,54,51,.3); border-radius: var(--radius); background: rgba(218,54,51,.08); color: rgba(218,54,51,.8); cursor: pointer; font-size: 13px; margin-top: auto; }
-.delete-all-btn:hover { border-color: var(--red); color: var(--red); background: rgba(218,54,51,.14); }
+/* Archive all button (done panel) */
+.archive-all-btn { width: 100%; padding: 8px; border: 1px dashed rgba(139,148,158,.3); border-radius: var(--radius); background: rgba(139,148,158,.08); color: rgba(139,148,158,.8); cursor: pointer; font-size: 13px; margin-top: auto; }
+.archive-all-btn:hover { border-color: var(--text-dim); color: var(--text); background: rgba(139,148,158,.14); }
 
 /* Modal overlay */
 .modal-overlay { position: fixed; inset: 0; padding: 20px; background: rgba(0,0,0,.72); backdrop-filter: blur(4px); z-index: 200; display: flex; align-items: center; justify-content: center; }
@@ -607,7 +607,7 @@ sl-tooltip {
       <span class="shortcut-item"><span class="shortcut-key">T</span> Create a new template</span>
       <span class="shortcut-item"><span class="shortcut-key">B</span> Create a new backlog task</span>
       <span class="shortcut-item"><span class="shortcut-key">S</span> Start all tasks (when idle)</span>
-      <span class="shortcut-item"><span class="shortcut-key">D</span> Delete all done tasks</span>
+      <span class="shortcut-item"><span class="shortcut-key">D</span> Archive all done tasks</span>
     </div>
   </div>
   <div class="topbar-actions">
@@ -1582,6 +1582,10 @@ function connectWS() {
         addLogEntry(`Task deleted: ${allTasks.find(t => t.id === msg.payload.id)?.name || msg.payload.id}`)
         delete bonSummaryByTask[msg.payload.id]
         allTasks = allTasks.filter(t => t.id !== msg.payload.id); renderBoard(); break
+      case 'task_archived':
+        addLogEntry(`Task archived: ${allTasks.find(t => t.id === msg.payload.id)?.name || msg.payload.id}`)
+        delete bonSummaryByTask[msg.payload.id]
+        allTasks = allTasks.filter(t => t.id !== msg.payload.id); renderBoard(); break
       case 'task_reordered': addLogEntry('Task order updated'); loadTasks(); break
       case 'options_updated': addLogEntry('Options updated'); loadOptions(); break
       case 'execution_started': isExecuting = true; addLogEntry('Execution started'); updateStartBtn(); break
@@ -1702,9 +1706,9 @@ function renderBoard() {
     }
     if (status === 'done') {
       const btn = document.createElement('button')
-      btn.className = 'delete-all-btn'
-      btn.textContent = 'Delete All'
-      btn.onclick = () => deleteAllDone()
+      btn.className = 'archive-all-btn'
+      btn.textContent = 'Archive All'
+      btn.onclick = () => archiveAllDone()
       col.appendChild(btn)
     }
   }
@@ -1797,12 +1801,12 @@ function renderCard(task, colStatus) {
     actions.appendChild(resetBtn)
   }
   
-  // Delete button (not while executing, but always for done tasks)
+  // Archive button (not while executing, but always for done tasks)
   if (!showInlineActionBar && (((!isTaskMutationLocked(task) && task.status !== 'executing')) || task.status === 'done')) {
     const delBtn = document.createElement('button')
     delBtn.textContent = '\u2715'
-    delBtn.title = 'Delete Task'
-    delBtn.onclick = () => deleteTask(task.id)
+    delBtn.title = 'Archive Task'
+    delBtn.onclick = () => archiveTask(task.id)
     actions.appendChild(delBtn)
   }
   
@@ -2404,31 +2408,48 @@ async function saveTask() {
   } catch (e) { showToast('Save failed: ' + e.message, 'error') }
 }
 
-async function deleteTask(id) {
+async function archiveTask(id) {
   const task = allTasks.find(t => t.id === id)
   const taskName = task ? `"${task.name}"` : 'this task'
-  if (!confirm(`Permanently delete ${taskName}? This cannot be undone.`)) return
+  if (!confirm(`Archive ${taskName}? Task history will be preserved.`)) return
   try {
-    await api(`/api/tasks/${id}`, 'DELETE')
+    const result = await api(`/api/tasks/${id}`, 'DELETE')
     await loadTasks()
-    showToast('Task deleted', 'success')
-  } catch (e) { showToast('Delete failed: ' + e.message, 'error') }
+    if (result && result.archived) {
+      showToast('Task archived', 'success')
+    } else {
+      showToast('Task deleted', 'success')
+    }
+  } catch (e) { showToast('Archive failed: ' + e.message, 'error') }
 }
 
-async function deleteAllDone() {
+async function archiveAllDone() {
   const doneTasks = allTasks.filter(t => t.status === 'done')
   if (doneTasks.length === 0) {
-    showToast('No done tasks to delete', 'error')
+    showToast('No done tasks to archive', 'error')
     return
   }
-  if (!confirm(`Permanently delete all ${doneTasks.length} done task(s)? This cannot be undone.`)) return
+  if (!confirm(`Archive all ${doneTasks.length} done task(s)? Task history will be preserved.`)) return
   try {
+    let archived = 0
+    let deleted = 0
     for (const task of doneTasks) {
-      await api(`/api/tasks/${task.id}`, 'DELETE')
+      const result = await api(`/api/tasks/${task.id}`, 'DELETE')
+      if (result && result.archived) {
+        archived++
+      } else {
+        deleted++
+      }
     }
     await loadTasks()
-    showToast('All done tasks deleted', 'success')
-  } catch (e) { showToast('Delete failed: ' + e.message, 'error') }
+    if (archived > 0 && deleted > 0) {
+      showToast(`Archived ${archived}, deleted ${deleted} task(s)`, 'success')
+    } else if (archived > 0) {
+      showToast('All tasks archived', 'success')
+    } else {
+      showToast('All tasks deleted', 'success')
+    }
+  } catch (e) { showToast('Archive failed: ' + e.message, 'error') }
 }
 
 async function markStuckDone(id) {
@@ -3163,7 +3184,7 @@ document.addEventListener('keydown', (e) => {
   if (key === 'T') { e.preventDefault(); openTemplateTaskModal() }
   else if (key === 'B') { e.preventDefault(); openTaskModal() }
   else if (key === 'S') { e.preventDefault(); if (!isExecuting) toggleExecution() }
-  else if (key === 'D') { e.preventDefault(); deleteAllDone() }
+  else if (key === 'D') { e.preventDefault(); archiveAllDone() }
 })
 
 // ---- Init ----

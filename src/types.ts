@@ -75,6 +75,8 @@ export interface Task {
   maxReviewRunsOverride: number | null
   smartRepairHints: string | null
   reviewActivity: "idle" | "running"
+  isArchived: boolean
+  archivedAt: number | null
 }
 
 export interface TaskRun {
@@ -182,6 +184,7 @@ export type WSMessageType =
   | "task_created"
   | "task_updated"
   | "task_deleted"
+  | "task_archived"
   | "task_reordered"
   | "options_updated"
   | "execution_started"

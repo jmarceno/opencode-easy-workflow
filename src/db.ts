@@ -79,6 +79,8 @@ function rowToTask(row: any): Task {
     maxReviewRunsOverride: row.max_review_runs_override ?? null,
     smartRepairHints: row.smart_repair_hints ?? null,
     reviewActivity: normalizeReviewActivity(row.review_activity),
+    isArchived: row.is_archived === 1,
+    archivedAt: row.archived_at ?? null,
   }
 }
 
@@ -196,7 +198,9 @@ export class KanbanDB {
         execution_strategy TEXT NOT NULL DEFAULT 'standard',
         best_of_n_config TEXT,
         best_of_n_substage TEXT NOT NULL DEFAULT 'idle',
-        skip_permission_asking INTEGER NOT NULL DEFAULT 1
+        skip_permission_asking INTEGER NOT NULL DEFAULT 1,
+        is_archived INTEGER NOT NULL DEFAULT 0,
+        archived_at INTEGER
       );
 
       CREATE TABLE IF NOT EXISTS task_runs (
@@ -342,6 +346,16 @@ export class KanbanDB {
     const hasReviewActivity = tableInfo.some((col: any) => col.name === "review_activity")
     if (!hasReviewActivity) {
       this.db.exec("ALTER TABLE tasks ADD COLUMN review_activity TEXT NOT NULL DEFAULT 'idle'")
+    }
+
+    const hasIsArchived = tableInfo.some((col: any) => col.name === "is_archived")
+    if (!hasIsArchived) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0")
+    }
+
+    const hasArchivedAt = tableInfo.some((col: any) => col.name === "archived_at")
+    if (!hasArchivedAt) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN archived_at INTEGER")
     }
 
     const optCount = this.db.query("SELECT COUNT(*) as cnt FROM options").get() as any
@@ -635,17 +649,17 @@ export class KanbanDB {
   }
 
   getTasks(): Task[] {
-    const rows = this.db.query("SELECT * FROM tasks ORDER BY idx ASC").all() as any[]
+    const rows = this.db.query("SELECT * FROM tasks WHERE is_archived = 0 ORDER BY idx ASC").all() as any[]
     return rows.map(rowToTask)
   }
 
   getTask(id: string): Task | null {
-    const row = this.db.query("SELECT * FROM tasks WHERE id = ?").get(id) as any
+    const row = this.db.query("SELECT * FROM tasks WHERE id = ? AND is_archived = 0").get(id) as any
     return row ? rowToTask(row) : null
   }
 
   getTasksByStatus(status: TaskStatus): Task[] {
-    const rows = this.db.query("SELECT * FROM tasks WHERE status = ? ORDER BY idx ASC").all(status) as any[]
+    const rows = this.db.query("SELECT * FROM tasks WHERE status = ? AND is_archived = 0 ORDER BY idx ASC").all(status) as any[]
     return rows.map(rowToTask)
   }
 
@@ -747,6 +761,8 @@ export class KanbanDB {
     maxReviewRunsOverride: number | null
     smartRepairHints: string | null
     reviewActivity: "idle" | "running"
+    isArchived: boolean
+    archivedAt: number | null
   }>): Task | null {
     // Capture old status before applying updates
     const oldTask = this.getTask(id)
@@ -786,6 +802,8 @@ export class KanbanDB {
     if (updates.maxReviewRunsOverride !== undefined) { sets.push("max_review_runs_override = ?"); values.push(updates.maxReviewRunsOverride) }
     if (updates.smartRepairHints !== undefined) { sets.push("smart_repair_hints = ?"); values.push(updates.smartRepairHints) }
     if (updates.reviewActivity !== undefined) { sets.push("review_activity = ?"); values.push(updates.reviewActivity) }
+    if (updates.isArchived !== undefined) { sets.push("is_archived = ?"); values.push(updates.isArchived ? 1 : 0) }
+    if (updates.archivedAt !== undefined) { sets.push("archived_at = ?"); values.push(updates.archivedAt) }
 
     if (sets.length === 0) return oldTask
 
@@ -819,6 +837,85 @@ export class KanbanDB {
     }
     const result = this.db.prepare("DELETE FROM tasks WHERE id = ?").run(id)
     return result.changes > 0
+  }
+
+  hasTaskExecutionHistory(taskId: string): boolean {
+    // Check if task has any execution history
+    const task = this.db.query("SELECT * FROM tasks WHERE id = ?").get(taskId) as any
+    if (!task) return false
+
+    // Has session tracking
+    if (task.session_id || task.session_url) return true
+
+    // Has agent output (executed at least once)
+    if (task.agent_output && task.agent_output.trim() !== "") return true
+
+    // Has task runs
+    const runsCount = this.db.query("SELECT COUNT(*) as cnt FROM task_runs WHERE task_id = ?").get(taskId) as any
+    if (runsCount && runsCount.cnt > 0) return true
+
+    // Has workflow sessions
+    const sessionsCount = this.db.query("SELECT COUNT(*) as cnt FROM workflow_sessions WHERE task_id = ?").get(taskId) as any
+    if (sessionsCount && sessionsCount.cnt > 0) return true
+
+    // Has session messages
+    const messagesCount = this.db.query("SELECT COUNT(*) as cnt FROM session_messages WHERE task_id = ?").get(taskId) as any
+    if (messagesCount && messagesCount.cnt > 0) return true
+
+    return false
+  }
+
+  archiveTask(id: string): Task | null {
+    const task = this.getTask(id)
+    if (!task) return null
+
+    // Update task to archived state
+    const now = Math.floor(Date.now() / 1000)
+    this.db.prepare(
+      "UPDATE tasks SET is_archived = 1, archived_at = ?, updated_at = unixepoch() WHERE id = ?"
+    ).run(now, id)
+
+    // Remove from other tasks' requirements
+    const allTasks = this.getTasks()
+    for (const t of allTasks) {
+      if (t.requirements.includes(id)) {
+        const newReqs = t.requirements.filter(r => r !== id)
+        this.db.prepare("UPDATE tasks SET requirements = ?, updated_at = unixepoch() WHERE id = ?")
+          .run(JSON.stringify(newReqs), t.id)
+      }
+    }
+
+    return this.getTask(id)
+  }
+
+  unarchiveTask(id: string): Task | null {
+    this.db.prepare(
+      "UPDATE tasks SET is_archived = 0, archived_at = NULL, updated_at = unixepoch() WHERE id = ?"
+    ).run(id)
+    return this.getTask(id)
+  }
+
+  hardDeleteTask(id: string): boolean {
+    // Only allow hard delete for tasks without execution history
+    if (this.hasTaskExecutionHistory(id)) {
+      return false
+    }
+
+    const allTasks = this.getTasks()
+    for (const task of allTasks) {
+      if (task.requirements.includes(id)) {
+        const newReqs = task.requirements.filter(r => r !== id)
+        this.db.prepare("UPDATE tasks SET requirements = ?, updated_at = unixepoch() WHERE id = ?")
+          .run(JSON.stringify(newReqs), task.id)
+      }
+    }
+    const result = this.db.prepare("DELETE FROM tasks WHERE id = ?").run(id)
+    return result.changes > 0
+  }
+
+  getArchivedTasks(): Task[] {
+    const rows = this.db.query("SELECT * FROM tasks WHERE is_archived = 1 ORDER BY archived_at DESC").all() as any[]
+    return rows.map(rowToTask)
   }
 
   reorderTask(id: string, newIdx: number): Task | null {
