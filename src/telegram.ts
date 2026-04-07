@@ -69,6 +69,40 @@ export function buildMessageWithMetadata(
 }
 
 /**
+ * Build a workflow completion notification message.
+ */
+function buildWorkflowCompletionMessage(completedTaskCount: number): string {
+  const emoji = "\u{1F389}"  // party popper
+  const time = new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC"
+  const lines = [
+    `${emoji} *Workflow Completed*`,
+    ``,
+    `*Tasks completed:* ${completedTaskCount}`,
+    ``,
+    `_${time}_`,
+  ]
+  return lines.join("\n")
+}
+
+/**
+ * Build a workflow completion message with embedded metadata for reply-driven session routing.
+ */
+export function buildWorkflowCompletionMessageWithMetadata(
+  completedTaskCount: number,
+  port: number,
+  chatId: string
+): string {
+  const baseMessage = buildWorkflowCompletionMessage(completedTaskCount)
+  const lines = [
+    baseMessage,
+    "",
+    `${PORT_MARKER_START}${port}${PORT_MARKER_END}`,
+    `${CHAT_ID_MARKER_START}${chatId}${CHAT_ID_MARKER_END}`,
+  ]
+  return lines.join("\n")
+}
+
+/**
  * Parse port from a Telegram message text that may contain EWF metadata markers.
  * Returns null if no valid port marker is found.
  */
@@ -209,6 +243,48 @@ export async function sendTelegramNotification(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     logger(`[telegram] send error: ${msg}`)
+    return { success: false, error: msg }
+  }
+}
+
+/**
+ * Send a workflow completion notification via Telegram.
+ */
+export async function sendWorkflowCompletionNotification(
+  config: TelegramConfig,
+  completedTaskCount: number,
+  port: number,
+  logger: (msg: string) => void = console.log
+): Promise<TelegramSendResult> {
+  if (!config.botToken || !config.chatId) {
+    return { success: false, error: "not configured" }
+  }
+
+  const message = buildWorkflowCompletionMessageWithMetadata(completedTaskCount, port, config.chatId)
+  const url = `https://api.telegram.org/bot${config.botToken}/sendMessage`
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: config.chatId,
+        text: message,
+        parse_mode: "Markdown",
+      }),
+    })
+
+    if (!response.ok) {
+      const body = await response.text()
+      logger(`[telegram] workflow completion send failed: ${response.status} ${body}`)
+      return { success: false, error: `HTTP ${response.status}: ${body}` }
+    }
+
+    logger(`[telegram] workflow completion notification sent (${completedTaskCount} tasks completed)`)
+    return { success: true }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    logger(`[telegram] workflow completion send error: ${msg}`)
     return { success: false, error: msg }
   }
 }

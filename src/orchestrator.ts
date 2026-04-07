@@ -251,6 +251,7 @@ export class Orchestrator {
   private providerCatalog: any | null = null
   private debugLogErrorReporter: ((message: string) => void) | null = null
   private executionSnapshot: Set<string> | null = null
+  private onWorkflowCompleteCallback: (() => void) | null = null
 
   constructor(db: KanbanDB, server: KanbanServer, serverUrl: string | (() => string | null), worktreeDir: string, ownerDirectory?: string) {
     this.db = db
@@ -675,6 +676,10 @@ export class Orchestrator {
         }
       }
 
+      // Call the workflow completion callback before broadcasting
+      if (this.onWorkflowCompleteCallback) {
+        this.onWorkflowCompleteCallback()
+      }
       this.server.broadcast({ type: "execution_complete", payload: {} })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -698,6 +703,10 @@ export class Orchestrator {
 
   stop() {
     this.shouldStop = true
+  }
+
+  setOnWorkflowCompleteCallback(callback: () => void): void {
+    this.onWorkflowCompleteCallback = callback
   }
 
   async startSingle(taskId: string) {
@@ -757,6 +766,10 @@ export class Orchestrator {
         if (this.shouldStop) break
       }
 
+      // Call the workflow completion callback before broadcasting
+      if (this.onWorkflowCompleteCallback) {
+        this.onWorkflowCompleteCallback()
+      }
       this.server.broadcast({ type: "execution_complete", payload: {} })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)

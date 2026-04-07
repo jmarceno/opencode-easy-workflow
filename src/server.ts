@@ -9,7 +9,7 @@ import { KanbanDB } from "./db"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
 import { buildExecutionGraph, getExecutableTasks, isTaskExecutable } from "./execution-plan"
 import { chooseDeterministicRepairAction, getLatestTaggedOutput, getPlanExecutionEligibility, hasCapturedPlanOutput, isTaskAwaitingPlanApproval, type TaskRepairAction } from "./task-state"
-import { sendTelegramNotificationWithMetadata } from "./telegram"
+import { sendTelegramNotificationWithMetadata, sendWorkflowCompletionNotification } from "./telegram"
 import { MessageLogger, createMessageLogger } from "./message-logger"
 
 const MAX_EXPANDED_WORKER_RUNS = 8
@@ -283,6 +283,22 @@ export class KanbanServer {
     const msg = err instanceof Error ? err.message : String(err)
     this.broadcast({ type: "error", payload: { message: `Execution failed: ${msg}` } })
     this.broadcast({ type: "execution_stopped", payload: {} })
+  }
+
+  handleWorkflowComplete(): void {
+    const opts = this.db.getOptions()
+    if (!opts.telegramNotificationsEnabled || !opts.telegramBotToken || !opts.telegramChatId) {
+      return
+    }
+    const completedCount = this.db.getTasksByStatus("done").filter(t => !t.isArchived).length
+    sendWorkflowCompletionNotification(
+      { botToken: opts.telegramBotToken, chatId: opts.telegramChatId },
+      completedCount,
+      opts.port,
+      (msg: string) => console.debug(msg)
+    ).catch((err: unknown) => {
+      console.error("[telegram] workflow completion notification failed:", err)
+    })
   }
 
   private classifyStartError(message: string): number {

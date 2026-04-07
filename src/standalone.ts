@@ -179,6 +179,11 @@ async function main() {
     config.projectDirectory,
   )
 
+  // Set up workflow completion notification callback
+  orchestrator.setOnWorkflowCompleteCallback(() => {
+    kanbanServer.handleWorkflowComplete()
+  })
+
   // Start server
   const port = kanbanServer.start()
   
