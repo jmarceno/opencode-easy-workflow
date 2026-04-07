@@ -529,8 +529,10 @@ sl-option[variant~="checked"]::part(base) {
 .req-item input { accent-color: var(--accent); }
 
 /* Log panel */
-.log-panel { height: var(--log-panel-height); border-top: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; min-height: 120px; }
-.log-header { padding: 8px 14px; font-size: 12px; font-weight: 600; color: var(--text-dim); border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: .4px; display: flex; align-items: center; justify-content: space-between; }
+.log-panel { height: var(--log-panel-height); border-top: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; min-height: 120px; transition: height 0.2s ease, min-height 0.2s ease; }
+.log-panel.collapsed { height: auto; min-height: auto; }
+.log-panel.collapsed .log-body { display: none; }
+.log-header { padding: 8px 14px; font-size: 12px; font-weight: 600; color: var(--text-dim); border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: .4px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; }
 .log-body { flex: 1; overflow-y: auto; padding: 8px 14px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace; font-size: 12px; line-height: 1.5; }
 .log-item { color: var(--text-dim); margin-bottom: 4px; white-space: pre-wrap; word-break: break-word; }
 .log-item.info { color: var(--text-dim); }
@@ -1060,10 +1062,13 @@ sl-tooltip {
   </div>
 </div>
 
-<div class="log-panel">
+<div class="log-panel collapsed" id="logPanel">
   <div class="log-header">
     <span>Event Log</span>
-    <sl-button size="small" onclick="clearLogs()">Clear</sl-button>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <sl-icon-button id="logPanelToggle" name="chevron-expand" onclick="toggleLogPanel()" title="Toggle event log"></sl-icon-button>
+      <sl-button size="small" onclick="clearLogs()">Clear</sl-button>
+    </div>
   </div>
   <div class="log-body" id="eventLog"></div>
 </div>
@@ -1463,6 +1468,54 @@ function renderLogs() {
 function clearLogs() {
   eventLogs = []
   renderLogs()
+}
+
+const LOG_PANEL_STORAGE_KEY = 'easy-workflow:log-panel-collapsed'
+let logPanelCollapsed = true
+
+function toggleLogPanel() {
+  const panel = document.getElementById('logPanel')
+  const toggle = document.getElementById('logPanelToggle')
+  logPanelCollapsed = !logPanelCollapsed
+  if (logPanelCollapsed) {
+    panel.classList.add('collapsed')
+    toggle.setAttribute('name', 'chevron-expand')
+  } else {
+    panel.classList.remove('collapsed')
+    toggle.setAttribute('name', 'chevron-contract')
+  }
+  localStorage.setItem(LOG_PANEL_STORAGE_KEY, logPanelCollapsed ? '1' : '0')
+  updateToastPosition()
+}
+
+function initLogPanel() {
+  const stored = localStorage.getItem(LOG_PANEL_STORAGE_KEY)
+  if (stored === null) {
+    // Default to collapsed on first visit
+    logPanelCollapsed = true
+  } else {
+    logPanelCollapsed = stored === '1'
+  }
+  const panel = document.getElementById('logPanel')
+  const toggle = document.getElementById('logPanelToggle')
+  if (logPanelCollapsed) {
+    panel.classList.add('collapsed')
+    toggle.setAttribute('name', 'chevron-expand')
+  } else {
+    panel.classList.remove('collapsed')
+    toggle.setAttribute('name', 'chevron-contract')
+  }
+  updateToastPosition()
+}
+
+function updateToastPosition() {
+  const toastContainer = document.getElementById('toasts')
+  if (!toastContainer) return
+  if (logPanelCollapsed) {
+    toastContainer.style.bottom = '16px'
+  } else {
+    toastContainer.style.bottom = ''
+  }
 }
 
 function getFallbackBranch() {
@@ -3189,6 +3242,7 @@ document.addEventListener('keydown', (e) => {
 
 // ---- Init ----
 async function init() {
+  initLogPanel()
   enhanceTooltips()
   rebuildModelSearchIndex()
   attachModalOverlayHandlers()
