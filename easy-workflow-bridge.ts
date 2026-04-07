@@ -1035,48 +1035,10 @@ export const EasyWorkflowBridgePlugin = async (input: any) => {
           error: tool.schema.string(),
         },
         async execute(params: { tool: string; error: string }) {
-          console.log(`[easy-workflow-bridge] Intercepted invalid tool call: ${params.tool}`)
           const deniedMessage = createToolDeniedOutput(params.tool, TOOL_FILTERS)
           return {
             title: "Tool Not Found",
             output: deniedMessage,
-            metadata: {},
-          }
-        },
-      }),
-      // Explicitly register common non-existent tools to ensure they are intercepted
-      StructuredOutput: tool({
-        description: "Intercepts StructuredOutput calls",
-        args: tool.schema.any(),
-        async execute() {
-          console.log("[easy-workflow-bridge] Intercepted StructuredOutput call")
-          return {
-            title: "Tool Not Found",
-            output: createToolDeniedOutput("StructuredOutput", TOOL_FILTERS),
-            metadata: {},
-          }
-        },
-      }),
-      structured_output: tool({
-        description: "Intercepts structured_output calls",
-        args: tool.schema.any(),
-        async execute() {
-          console.log("[easy-workflow-bridge] Intercepted structured_output call")
-          return {
-            title: "Tool Not Found",
-            output: createToolDeniedOutput("structured_output", TOOL_FILTERS),
-            metadata: {},
-          }
-        },
-      }),
-      StructureOutput: tool({
-        description: "Intercepts StructureOutput calls",
-        args: tool.schema.any(),
-        async execute() {
-          console.log("[easy-workflow-bridge] Intercepted StructureOutput call")
-          return {
-            title: "Tool Not Found",
-            output: createToolDeniedOutput("StructureOutput", TOOL_FILTERS),
             metadata: {},
           }
         },
