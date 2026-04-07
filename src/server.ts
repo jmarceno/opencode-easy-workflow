@@ -303,7 +303,7 @@ export class KanbanServer {
     this.onStart().catch((err) => this.reportExecutionStartFailure(err))
   }
 
-  private applyRepairAction(taskId: string, action: TaskRepairAction, reason: string, errorMessage?: string) {
+  private async applyRepairAction(taskId: string, action: TaskRepairAction, reason: string, errorMessage?: string) {
     const task = this.db.getTask(taskId)
     if (!task) {
       throw new Error("Task not found")
@@ -344,17 +344,41 @@ export class KanbanServer {
         return updated
       }
       case "mark_done": {
+        // Cleanup worktree if deleteWorktree is enabled
+        let worktreeDirToClear: string | null = null
+        if (task.worktreeDir && task.deleteWorktree !== false) {
+          try {
+            await this.removeWorktree(task.worktreeDir)
+            worktreeDirToClear = null
+          } catch (cleanupErr) {
+            console.error(`[server] worktree cleanup on mark_done failed for task ${taskId}:`, cleanupErr)
+            // Preserve worktreeDir in DB if cleanup failed but deleteWorktree was true
+            worktreeDirToClear = task.worktreeDir
+          }
+        } else {
+          worktreeDirToClear = task.deleteWorktree === false ? task.worktreeDir : null
+        }
         const updated = this.db.updateTask(taskId, {
           status: "done",
           awaitingPlanApproval: false,
           executionPhase: task.planmode && hasPlan ? "implementation_done" : task.executionPhase,
           errorMessage: null,
           completedAt: now,
+          worktreeDir: worktreeDirToClear,
         })
         this.db.appendAgentOutput(taskId, repairNote)
         return updated
       }
       case "reset_backlog": {
+        // Cleanup worktree if deleteWorktree is enabled (user wants to start fresh)
+        if (task.worktreeDir && task.deleteWorktree !== false) {
+          try {
+            await this.removeWorktree(task.worktreeDir)
+          } catch (cleanupErr) {
+            console.error(`[server] worktree cleanup on reset_backlog failed for task ${taskId}:`, cleanupErr)
+            // Continue with reset even if cleanup fails - worktree will be orphaned but DB is cleared
+          }
+        }
         const updated = this.db.updateTask(taskId, {
           status: "backlog",
           reviewCount: 0,
@@ -427,6 +451,21 @@ export class KanbanServer {
       return { status, diff }
     } catch {
       return null
+    }
+  }
+
+  private async removeWorktree(directory: string): Promise<void> {
+    const serverUrl = this.getServerUrl()
+    if (!serverUrl) {
+      throw new Error("OpenCode server URL is not configured")
+    }
+    const client = createV2Client(serverUrl)
+    const response = await client.worktree.remove({
+      worktreeRemoveInput: { directory },
+    })
+    if (response.error) {
+      const error = response.error as any
+      throw new Error(`Worktree removal failed: ${error?.message ?? JSON.stringify(error)}`)
     }
   }
 
@@ -1283,7 +1322,7 @@ export class KanbanServer {
           reason = `User requested repair action: ${requestedAction}`
         }
 
-        const updated = this.applyRepairAction(taskId, action, reason, errorMessage)
+        const updated = await this.applyRepairAction(taskId, action, reason, errorMessage)
         if (!updated) {
           return this.json({ error: "Task not found" }, 404)
         }

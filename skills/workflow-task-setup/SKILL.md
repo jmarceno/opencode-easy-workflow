@@ -65,7 +65,7 @@ Common optional fields:
 | `bestOfNConfig` | Best-of-N worker/reviewer/final-applier config | `null` unless strategy is `best_of_n` |
 | `review` | Run review loop after implementation | `true` |
 | `autoCommit` | Auto-commit on success | `true` |
-| `deleteWorktree` | Remove worktree after completion | `true` |
+| `deleteWorktree` | Remove worktree when task completes, resets, or is marked done. If `false`, worktree is preserved even on failure. | `true` |
 | `requirements` | Array of blocking task ids | `[]` |
 | `thinkingLevel` | Reasoning effort | `default` |
 
@@ -127,6 +127,10 @@ Important runtime rules from the server and orchestrator:
 - Best-of-N and plan mode cannot be combined in v1 (`planmode = true` with `executionStrategy = best_of_n` is rejected by API validation).
 - For `best_of_n`, the board still treats it as one logical task card while child runs are stored separately.
 - `failed` and `stuck` appear in the review column in the UI, but they are distinct stored statuses.
+- **Worktree preservation on failure**: When a task fails, the worktree is **NOT** automatically deleted. The worktree (and its partial/complete work) is preserved so users can inspect, debug, or recover their work. Worktrees are only deleted when:
+  - Task completes successfully (if `deleteWorktree` is `true`, the default)
+  - User explicitly resets a task to backlog (cleanup happens regardless of `deleteWorktree`)
+  - User explicitly marks a task as done (cleanup happens if `deleteWorktree` is `true`)
 
 ## Dependency Rules
 
@@ -235,7 +239,7 @@ Child run records for best-of-n internals.
 | `task_suffix` | Optional slot-specific prompt suffix |
 | `status` | `pending`, `running`, `done`, `failed`, `skipped` |
 | `session_id` / `session_url` | Session metadata |
-| `worktree_dir` | Worktree path (kept if cleanup fails or disabled) |
+| `worktree_dir` | Worktree path (kept on failure, kept if cleanup fails, kept if deleteWorktree is disabled) |
 | `summary` | Short run summary |
 | `error_message` | Run-level error details |
 | `candidate_id` | Linked candidate id (worker runs) |

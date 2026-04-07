@@ -1330,20 +1330,7 @@ export class Orchestrator {
       } else {
         this.appendDebugLog("warn", "failed task record missing during error handling", { taskId: task.id })
       }
-      this.server.broadcast({ type: "error", payload: { message: `Task \"${task.name}\" failed: ${contextMsg}` } })
-
-      // Cleanup worktree on failure
-      if (worktreeInfo?.directory && lastKnownTask?.deleteWorktree !== false) {
-        try {
-          await this.removeWorktree(worktreeInfo.directory)
-        } catch (cleanupErr) {
-          this.appendDebugLog("warn", "worktree cleanup on failure failed", {
-            taskId: task.id,
-            directory: worktreeInfo.directory,
-            error: String(cleanupErr),
-          })
-        }
-      }
+      this.server.broadcast({ type: "error", payload: { message: `Task "${task.name}" failed: ${contextMsg}` } })
 
       throw err
     } finally {
