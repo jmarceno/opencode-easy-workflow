@@ -401,7 +401,7 @@ export class KanbanServer {
       throw new Error("Repair model is not configured. Please set a Repair Model in options before running the workflow.")
     }
     const client = createV2Client(serverUrl)
-    const defaultMaxReviewRuns = 2
+    const defaultMaxReviewRuns = options.maxReviews
     const effectiveMaxReviewRuns = task.maxReviewRunsOverride ?? defaultMaxReviewRuns
     const reviewLimitExceeded = task.reviewCount >= effectiveMaxReviewRuns
 
@@ -1087,7 +1087,7 @@ export class KanbanServer {
 
         // Special handling for continue_with_more_reviews action
         if (requestedAction === "continue_with_more_reviews") {
-          const currentMax = task.maxReviewRunsOverride ?? 2
+          const currentMax = task.maxReviewRunsOverride ?? this.db.getOptions().maxReviews
           const newMaxReviewRunsOverride = task.reviewCount + additionalReviewCount
           const repairNote = `[repair] action=continue_with_more_reviews reason=User increased review limit to allow more review cycles\n`
 
@@ -1207,7 +1207,7 @@ export class KanbanServer {
           return this.json({ error: "Task not found" }, 404)
         }
 
-        const defaultMaxReviewRuns = 2
+        const defaultMaxReviewRuns = this.db.getOptions().maxReviews
         const effectiveMaxReviewRuns = task.maxReviewRunsOverride ?? defaultMaxReviewRuns
         const reviewLimitExceeded = task.reviewCount >= effectiveMaxReviewRuns
 
@@ -1398,7 +1398,7 @@ export class KanbanServer {
       running: false,
       status: "pending",
       reviewCount: 0,
-      maxReviewRuns: 2,
+      maxReviewRuns: this.db.getOptions().maxReviews,
       createdAt,
       updatedAt: createdAt,
       sessionId: null,

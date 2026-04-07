@@ -23,6 +23,7 @@ const DEFAULT_OPTIONS: Options = {
   telegramBotToken: "",
   telegramChatId: "",
   telegramNotificationsEnabled: true,
+  maxReviews: 2,
 }
 
 function normalizeOptionBoolean(value: unknown, fallback = false): boolean {
@@ -400,6 +401,11 @@ export class KanbanDB {
     const hasExtraPromptKey = this.db.prepare("SELECT COUNT(*) as cnt FROM options WHERE key = 'extra_prompt'").get() as any
     if (hasExtraPromptKey.cnt === 0) {
       this.db.prepare("INSERT OR IGNORE INTO options (key, value) VALUES ('extra_prompt', '')").run()
+    }
+
+    const hasMaxReviewsKey = this.db.prepare("SELECT COUNT(*) as cnt FROM options WHERE key = 'max_reviews'").get() as any
+    if (hasMaxReviewsKey.cnt === 0) {
+      this.db.prepare("INSERT OR IGNORE INTO options (key, value) VALUES ('max_reviews', '2')").run()
     }
 
     const hasWorkflowSessionsTable = this.db.prepare("SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name='workflow_sessions'").get() as any
@@ -825,6 +831,7 @@ export class KanbanDB {
       telegramBotToken: opts.telegram_bot_token ?? DEFAULT_OPTIONS.telegramBotToken,
       telegramChatId: opts.telegram_chat_id ?? DEFAULT_OPTIONS.telegramChatId,
       telegramNotificationsEnabled: normalizeOptionBoolean(opts.telegram_notifications_enabled, DEFAULT_OPTIONS.telegramNotificationsEnabled),
+      maxReviews: parseInt(opts.max_reviews ?? "2", 10) || 2,
     }
   }
 
@@ -850,6 +857,7 @@ export class KanbanDB {
     if (partial.telegramBotToken !== undefined) upsert.run("telegram_bot_token", partial.telegramBotToken)
     if (partial.telegramChatId !== undefined) upsert.run("telegram_chat_id", partial.telegramChatId)
     if (partial.telegramNotificationsEnabled !== undefined) upsert.run("telegram_notifications_enabled", String(partial.telegramNotificationsEnabled))
+    if (partial.maxReviews !== undefined) upsert.run("max_reviews", String(partial.maxReviews))
 
     return this.getOptions()
   }

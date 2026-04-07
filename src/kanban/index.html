@@ -935,6 +935,13 @@ sl-tooltip {
       </div>
       <div class="form-group">
         <div class="label-row">
+          <label for="optMaxReviews">Maximum Review Runs</label>
+          <sl-icon-button class="help-btn" type="button" title="Maximum number of review cycles for a task before it gets stuck. Can be overridden per-task." aria-label="Max reviews help" name="question-circle"></sl-icon-button>
+        </div>
+        <sl-input type="number" id="optMaxReviews" min="1" max="10" value="2"></sl-input>
+      </div>
+      <div class="form-group">
+        <div class="label-row">
           <label>Session Cleanup (global)</label>
           <sl-icon-button class="help-btn" type="button" title="Automatically delete OpenCode sessions after task/review runs finish. Enable only if you do not need session history for debugging." aria-label="Session cleanup help" name="question-circle"></sl-icon-button>
         </div>
@@ -1870,7 +1877,7 @@ function renderCard(task, colStatus) {
   }
   if (task.review) {
     const b = document.createElement('span')
-    const effectiveMax = task.maxReviewRunsOverride ?? 2
+    const effectiveMax = task.maxReviewRunsOverride ?? allOptions.maxReviews ?? 2
     const isNearLimit = task.reviewCount >= effectiveMax - 1
     const isAtLimit = task.reviewCount >= effectiveMax
     if (task.status === 'stuck' || isAtLimit) {
@@ -2720,6 +2727,7 @@ function openOptionsModal() {
   resetModelInput('optRepairModel', allOptions.repairModel || 'default')
   document.getElementById('optCommand').value = allOptions.command || ''
   document.getElementById('optParallel').value = allOptions.parallelTasks || 1
+  document.getElementById('optMaxReviews').value = allOptions.maxReviews || 2
   document.getElementById('optAutoDeleteNormalSessions').checked = !!allOptions.autoDeleteNormalSessions
   document.getElementById('optAutoDeleteReviewSessions').checked = !!allOptions.autoDeleteReviewSessions
   document.getElementById('optThinkingLevel').value = allOptions.thinkingLevel || 'default'
@@ -2759,6 +2767,7 @@ async function saveOptions() {
       telegramNotificationsEnabled: document.getElementById('optTelegramEnabled').checked,
       telegramBotToken: document.getElementById('optTelegramBotToken').value || '',
       telegramChatId: document.getElementById('optTelegramChatId').value || '',
+      maxReviews: parseInt(document.getElementById('optMaxReviews').value, 10) || 2,
     })
     closeOptionsModal()
     await loadOptions()

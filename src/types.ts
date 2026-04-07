@@ -148,6 +148,7 @@ export interface Options {
   telegramBotToken: string
   telegramChatId: string
   telegramNotificationsEnabled: boolean
+  maxReviews: number
 }
 
 export const DEFAULT_COMMIT_PROMPT = `You are in a worktree on a detached HEAD. When you are finished with the task, commit the working changes onto {{base_ref}}.

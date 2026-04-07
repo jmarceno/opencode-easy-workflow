@@ -258,6 +258,7 @@ async function testBestOfNWithRealCycle() {
     assert(finalTask, "Task not found after completion")
     assert(finalTask.status === "done", `Expected done status, got ${finalTask.status}`)
     assert(finalTask.bestOfNSubstage === "completed", `Expected completed substage, got ${finalTask.bestOfNSubstage}`)
+    console.log("AGENT_OUTPUT:", finalTask.agentOutput)
     assert(finalTask.agentOutput.includes("[worker-0]"), "Expected worker output in task log")
     assert(finalTask.agentOutput.includes("[final-applier]"), "Expected final-applier output in task log")
 

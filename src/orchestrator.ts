@@ -230,15 +230,15 @@ interface ReviewConfig {
   maxReviewRuns: number
 }
 
-function loadReviewConfig(): ReviewConfig {
+function loadReviewConfig(options: Options): ReviewConfig {
   if (!existsSync(TEMPLATE_PATH)) {
-    return { reviewAgent: "workflow-review", maxReviewRuns: 2 }
+    return { reviewAgent: "workflow-review", maxReviewRuns: options.maxReviews }
   }
   const content = readFileSync(TEMPLATE_PATH, "utf-8")
   const { frontmatter } = parseFrontmatter(content)
   return {
     reviewAgent: normalizeAgentName(frontmatter.reviewAgent) ?? "workflow-review",
-    maxReviewRuns: typeof frontmatter.maxReviewRuns === "number" ? frontmatter.maxReviewRuns : 2,
+    maxReviewRuns: options.maxReviews,
   }
 }
 
@@ -1103,7 +1103,7 @@ export class Orchestrator {
       lastKnownTask = currentTask
       // 6. Review loop
       if (currentTask.review) {
-        const reviewConfig = loadReviewConfig()
+        const reviewConfig = loadReviewConfig(options)
         await this.runReviewLoop(currentTask, sessionId, reviewConfig, options, worktreeInfo)
         currentTask = this.getTaskOrThrow(task.id, "refreshing task state after review", task.name)
         lastKnownTask = currentTask
@@ -1231,21 +1231,52 @@ export class Orchestrator {
             }
 
             appendDebugLog("info", "merge target branch selected", { taskId: task.id, mainBranch })
+            let mergeCwd = worktreeInfo.directory
+            let wasCheckedOut = false
             try {
               execFileSync("git", ["checkout", mainBranch], { cwd: worktreeInfo.directory, stdio: "ignore" })
+              wasCheckedOut = true
             } catch (checkoutErr) {
-              appendDebugLog("warn", "branch checkout skipped before merge", {
+              appendDebugLog("warn", "branch checkout skipped before merge, searching for worktree", {
                 taskId: task.id,
                 branch: mainBranch,
-              error: checkoutErr instanceof Error ? checkoutErr.message : String(checkoutErr),
-            })
-            // Branch may be checked out in another worktree.
-          }
-          execFileSync("git", ["merge", worktreeInfo.branch, "--no-edit"], {
-            cwd: worktreeInfo.directory,
-            encoding: "utf-8",
-            stdio: "pipe",
-          })
+                error: checkoutErr instanceof Error ? checkoutErr.message : String(checkoutErr),
+              })
+              // Branch may be checked out in another worktree.
+              try {
+                const out = execFileSync("git", ["worktree", "list", "--porcelain"], {
+                  cwd: worktreeInfo.directory,
+                  encoding: "utf-8",
+                  stdio: "pipe",
+                })
+                const lines = out.trim().split("\n")
+                let currentWorktree = ""
+                for (const line of lines) {
+                  if (line.startsWith("worktree ")) {
+                    currentWorktree = line.slice("worktree ".length).trim()
+                  } else if (line === `branch refs/heads/${mainBranch}`) {
+                    if (currentWorktree) {
+                      mergeCwd = currentWorktree
+                      wasCheckedOut = true
+                      appendDebugLog("info", "found target branch in existing worktree", { mergeCwd })
+                      break
+                    }
+                  }
+                }
+              } catch (wtErr) {
+                appendDebugLog("warn", "failed to list worktrees", { error: String(wtErr) })
+              }
+            }
+
+            if (wasCheckedOut) {
+              execFileSync("git", ["merge", worktreeInfo.branch, "--no-edit"], {
+                cwd: mergeCwd,
+                encoding: "utf-8",
+                stdio: "pipe",
+              })
+            } else {
+              throw new Error(`Cannot merge: branch ${mainBranch} could not be checked out and was not found in any worktree.`)
+            }
           }
         } catch (mergeErr) {
           const msg = `Merge failed: ${mergeErr instanceof Error ? mergeErr.message : String(mergeErr)}`
@@ -2212,21 +2243,51 @@ RECOMMENDED_PROMPT:
             mainBranch = "main"
           }
 
+          let mergeCwd = worktreeInfo.directory
+          let wasCheckedOut = false
           try {
             execFileSync("git", ["checkout", mainBranch], { cwd: worktreeInfo.directory, stdio: "ignore" })
+            wasCheckedOut = true
           } catch (checkoutErr) {
-            appendDebugLog("warn", "final applier branch checkout skipped", {
+            appendDebugLog("warn", "final applier branch checkout skipped, searching for worktree", {
               taskId: task.id,
               branch: mainBranch,
               error: checkoutErr instanceof Error ? checkoutErr.message : String(checkoutErr),
             })
+            try {
+              const out = execFileSync("git", ["worktree", "list", "--porcelain"], {
+                cwd: worktreeInfo.directory,
+                encoding: "utf-8",
+                stdio: "pipe",
+              })
+              const lines = out.trim().split("\n")
+              let currentWorktree = ""
+              for (const line of lines) {
+                if (line.startsWith("worktree ")) {
+                  currentWorktree = line.slice("worktree ".length).trim()
+                } else if (line === `branch refs/heads/${mainBranch}`) {
+                  if (currentWorktree) {
+                    mergeCwd = currentWorktree
+                    wasCheckedOut = true
+                    appendDebugLog("info", "found target branch in existing worktree", { mergeCwd })
+                    break
+                  }
+                }
+              }
+            } catch (wtErr) {
+              appendDebugLog("warn", "failed to list worktrees", { error: String(wtErr) })
+            }
           }
 
-          execFileSync("git", ["merge", worktreeInfo.branch, "--no-edit"], {
-            cwd: worktreeInfo.directory,
-            encoding: "utf-8",
-            stdio: "pipe",
-          })
+          if (wasCheckedOut) {
+            execFileSync("git", ["merge", worktreeInfo.branch, "--no-edit"], {
+              cwd: mergeCwd,
+              encoding: "utf-8",
+              stdio: "pipe",
+            })
+          } else {
+            throw new Error(`Cannot merge: branch ${mainBranch} could not be checked out and was not found in any worktree.`)
+          }
           appendDebugLog("info", "best-of-n final merge completed", { taskId: task.id, branch: mainBranch })
         } catch (mergeErr) {
           const msg = `Merge failed: ${mergeErr instanceof Error ? mergeErr.message : String(mergeErr)}`
