@@ -250,6 +250,7 @@ export class Orchestrator {
   private shouldStop = false
   private providerCatalog: any | null = null
   private debugLogErrorReporter: ((message: string) => void) | null = null
+  private executionSnapshot: Set<string> | null = null
 
   constructor(db: KanbanDB, server: KanbanServer, serverUrl: string | (() => string | null), worktreeDir: string, ownerDirectory?: string) {
     this.db = db
@@ -635,6 +636,9 @@ export class Orchestrator {
     this.running = true
     this.shouldStop = false
     this.providerCatalog = null
+    // Capture snapshot of tasks that existed before execution started
+    // New tasks added during execution will not be automatically executed
+    this.executionSnapshot = new Set(this.db.getTasks().map(t => t.id))
     let resolvedServerUrl = "unresolved"
     try {
       resolvedServerUrl = this.resolveServerUrl()
@@ -644,13 +648,13 @@ export class Orchestrator {
       })
       // Keep unresolved marker; execution will fail with explicit error later.
     }
-    this.appendDebugLog("info", "orchestrator starting", { taskCount: initialTasks.length, serverUrl: resolvedServerUrl })
+    this.appendDebugLog("info", "orchestrator starting", { taskCount: initialTasks.length, snapshotSize: this.executionSnapshot.size, serverUrl: resolvedServerUrl })
     this.server.broadcast({ type: "execution_started", payload: {} })
 
     try {
       const options = this.db.getOptions()
       while (!this.shouldStop) {
-        const executableTasks = resolveExecutionTasks(this.db.getTasks())
+        const executableTasks = resolveExecutionTasks(this.db.getTasks(), undefined, this.executionSnapshot)
         if (executableTasks.length === 0) break
 
         const batches = resolveBatches(executableTasks, options.parallelTasks)
@@ -687,6 +691,7 @@ export class Orchestrator {
       this.server.broadcast({ type: "error", payload: { message: msg } })
     } finally {
       this.running = false
+      this.executionSnapshot = null
       this.server.broadcast({ type: "execution_stopped", payload: {} })
     }
   }
@@ -703,7 +708,6 @@ export class Orchestrator {
       throw new Error(preflightError)
     }
 
-    const dependencyTasks = resolveExecutionTasks(this.db.getTasks(), taskId)
     const targetTask = this.db.getTask(taskId)
     if (!targetTask) {
       throw new Error(`Task "${taskId}" not found`)
@@ -712,6 +716,11 @@ export class Orchestrator {
     this.running = true
     this.shouldStop = false
     this.providerCatalog = null
+    // Capture snapshot of tasks that existed before execution started
+    // New tasks added during execution will not be automatically executed
+    this.executionSnapshot = new Set(this.db.getTasks().map(t => t.id))
+
+    const dependencyTasks = resolveExecutionTasks(this.db.getTasks(), taskId, this.executionSnapshot)
     let resolvedServerUrl = "unresolved"
     try {
       resolvedServerUrl = this.resolveServerUrl()
@@ -724,6 +733,7 @@ export class Orchestrator {
       targetTaskId: taskId,
       targetTaskName: targetTask.name,
       dependencyCount: dependencyTasks.length,
+      snapshotSize: this.executionSnapshot.size,
       serverUrl: resolvedServerUrl,
     })
     this.server.broadcast({ type: "execution_started", payload: {} })
@@ -762,6 +772,7 @@ export class Orchestrator {
       this.server.broadcast({ type: "error", payload: { message: msg } })
     } finally {
       this.running = false
+      this.executionSnapshot = null
       this.server.broadcast({ type: "execution_stopped", payload: {} })
     }
   }

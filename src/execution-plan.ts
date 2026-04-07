@@ -40,7 +40,7 @@ function areTaskRequirementsDone(task: Task, taskMap: Map<string, Task>): boolea
   return true
 }
 
-function collectTaskAndDependencyIds(taskId: string, taskMap: Map<string, Task>): string[] {
+function collectTaskAndDependencyIds(taskId: string, taskMap: Map<string, Task>, allowedTaskIds?: Set<string>): string[] {
   const visited = new Set<string>()
   const visiting = new Set<string>()
   const ordered: string[] = []
@@ -60,12 +60,21 @@ function collectTaskAndDependencyIds(taskId: string, taskMap: Map<string, Task>)
       throw new Error(`Task not found: ${id}`)
     }
 
+    // Skip dependencies not in allowedTaskIds (new tasks added during execution)
+    // Their dependencies are treated as satisfied
+    if (allowedTaskIds && !allowedTaskIds.has(id) && id !== taskId) {
+      return
+    }
+
     visiting.add(id)
     for (const depId of task.requirements) {
       if (!taskMap.has(depId)) {
-        throw new Error(`Task \"${task.name}\" depends on missing task \"${depId}\"`)
+        throw new Error(`Task "${task.name}" depends on missing task "${depId}"`)
       }
-      visit(depId, [...chain, id])
+      // If depId is not in allowedTaskIds, skip it (treat as satisfied)
+      if (!(allowedTaskIds && !allowedTaskIds.has(depId))) {
+        visit(depId, [...chain, id])
+      }
     }
     visiting.delete(id)
     visited.add(id)
@@ -76,8 +85,14 @@ function collectTaskAndDependencyIds(taskId: string, taskMap: Map<string, Task>)
   return ordered
 }
 
-export function resolveExecutionTasks(tasks: Task[], taskId?: string): Task[] {
-  if (!taskId) return getExecutableTasks(tasks)
+export function resolveExecutionTasks(tasks: Task[], taskId?: string, allowedTaskIds?: Set<string>): Task[] {
+  if (!taskId) {
+    let executable = getExecutableTasks(tasks)
+    if (allowedTaskIds) {
+      executable = executable.filter(t => allowedTaskIds.has(t.id))
+    }
+    return executable
+  }
 
   const taskMap = new Map<string, Task>()
   for (const task of tasks) taskMap.set(task.id, task)
@@ -87,12 +102,15 @@ export function resolveExecutionTasks(tasks: Task[], taskId?: string): Task[] {
     throw new Error(`Task not found: ${taskId}`)
   }
 
-  const candidateIds = collectTaskAndDependencyIds(taskId, taskMap)
+  const candidateIds = collectTaskAndDependencyIds(taskId, taskMap, allowedTaskIds)
   const executionTasks: Task[] = []
 
   for (const candidateId of candidateIds) {
     const candidate = taskMap.get(candidateId)!
     if (candidate.status === "done") continue
+
+    // Skip tasks not in the allowed set (new tasks added during execution)
+    if (allowedTaskIds && !allowedTaskIds.has(candidateId)) continue
 
     if (!isTaskExecutable(candidate)) {
       if (candidate.id === taskId) {
@@ -198,8 +216,8 @@ export interface ExecutionGraph {
   }[]
 }
 
-export function resolveDependencyChain(targetTaskId: string, allTasks: Task[]): Task[] {
-  return resolveExecutionTasks(allTasks, targetTaskId)
+export function resolveDependencyChain(targetTaskId: string, allTasks: Task[], allowedTaskIds?: Set<string>): Task[] {
+  return resolveExecutionTasks(allTasks, targetTaskId, allowedTaskIds)
 }
 
 function getExecutionGraphTasks(tasks: Task[]): Task[] {
