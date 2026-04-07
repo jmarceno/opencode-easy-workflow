@@ -2096,20 +2096,42 @@ Your response must be a valid JSON object matching this schema:
     return prompt
   }
 
-  private parseReviewerOutput(result: any): ReviewerOutput {
-    const structuredOutput = result?.data?.info?.structured_output
-    if (!structuredOutput || typeof structuredOutput !== "object") {
-      const structuredError = result?.data?.info?.error
-      if (structuredError?.name === "StructuredOutputError") {
-        throw new Error(`Structured output is not supported by the configured model/provider: ${structuredError.message}. Use a model that supports JSON schema constrained output.`)
-      }
-      throw new Error("Review response missing structured output. The model or provider may not support JSON schema constrained output.")
+  private extractStructuredOutput(result: any): Record<string, unknown> {
+    // Try SDK wrapper path first
+    const sdkStructuredOutput = result?.data?.info?.structured_output
+    if (sdkStructuredOutput && typeof sdkStructuredOutput === "object") {
+      return sdkStructuredOutput
     }
+
+    // Check for SDK-level structured output error
+    const structuredError = result?.data?.info?.error
+    if (structuredError?.name === "StructuredOutputError") {
+      throw new Error(`Structured output is not supported by the configured model/provider: ${structuredError.message}. Use a model that supports JSON schema constrained output.`)
+    }
+
+    // Fallback: try parsing the model's text output as JSON
+    const textOutput = this.extractTextOutput(result)
+    if (textOutput.trim()) {
+      try {
+        const parsed = JSON.parse(textOutput)
+        if (parsed && typeof parsed === "object") {
+          return parsed
+        }
+      } catch {
+        // Not valid JSON, fall through
+      }
+    }
+
+    throw new Error("Review response missing structured output. The model or provider may not support JSON schema constrained output.")
+  }
+
+  private parseReviewerOutput(result: any): ReviewerOutput {
+    const structuredOutput = this.extractStructuredOutput(result)
 
     this.appendDebugLog("info", "using structured output for reviewer result", { taskId: undefined })
     return {
       status: structuredOutput.status as ReviewerOutput["status"] || "needs_manual_review",
-      summary: structuredOutput.summary || "No summary provided",
+      summary: structuredOutput.summary as string || "No summary provided",
       bestCandidateIds: Array.isArray(structuredOutput.bestCandidateIds) ? structuredOutput.bestCandidateIds : [],
       gaps: Array.isArray(structuredOutput.gaps) ? structuredOutput.gaps : [],
       recommendedFinalStrategy: structuredOutput.recommendedFinalStrategy as SelectionMode || "synthesize",
@@ -2674,21 +2696,14 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
   }
 
   private parseReviewResponse(result: any): ReviewResult {
-    const structuredOutput = result?.data?.info?.structured_output
-    if (!structuredOutput || typeof structuredOutput !== "object") {
-      const structuredError = result?.data?.info?.error
-      if (structuredError?.name === "StructuredOutputError") {
-        throw new Error(`Structured output is not supported by the configured review model/provider: ${structuredError.message}. Use a model that supports JSON schema constrained output.`)
-      }
-      throw new Error("Review response missing structured output. The model or provider may not support JSON schema constrained output.")
-    }
+    const structuredOutput = this.extractStructuredOutput(result)
 
     this.appendDebugLog("info", "using structured output for review result", { taskId: undefined })
     return {
       status: structuredOutput.status as ReviewResult["status"] || "blocked",
-      summary: structuredOutput.summary || "No summary provided",
+      summary: structuredOutput.summary as string || "No summary provided",
       gaps: Array.isArray(structuredOutput.gaps) ? structuredOutput.gaps : [],
-      recommendedPrompt: structuredOutput.recommendedPrompt || "",
+      recommendedPrompt: (structuredOutput.recommendedPrompt as string) || "",
     }
   }
 }
