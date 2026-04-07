@@ -1469,10 +1469,9 @@ export class KanbanServer {
     const { appendFileSync, existsSync, mkdirSync, writeFileSync } = await import("fs")
     const { join } = await import("path")
 
-    const WORKFLOW_ROOT = join(directory, ".opencode", "easy-workflow")
-    const RUNS_DIR = join(WORKFLOW_ROOT, "runs")
+    const WORKFLOW_ROOT = join(OPENCODE_DIR, "easy-workflow")
+    const RUNS_DIR = join(directory, ".opencode", "easy-workflow", "runs")
     const TEMPLATE_PATH = join(WORKFLOW_ROOT, "workflow.md")
-    const AGENTS_DIR = join(directory, ".opencode", "agents")
 
     // Ensure directories exist
     mkdirSync(RUNS_DIR, { recursive: true })
