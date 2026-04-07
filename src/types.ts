@@ -212,7 +212,22 @@ export interface ReviewResult {
 
 // Session message logging types
 export type MessageRole = "user" | "assistant" | "system" | "tool"
-export type MessageType = "text" | "tool_call" | "tool_result" | "error" | "step_finish" | "session_start" | "session_end"
+export type MessageType = 
+  | "text" 
+  | "tool_call" 
+  | "tool_result" 
+  | "error" 
+  | "step_finish" 
+  | "session_start" 
+  | "session_end"
+  | "thinking"
+  | "user_prompt"
+  | "assistant_response"
+  | "tool_request"
+  | "permission_asked"
+  | "permission_replied"
+  | "session_error"
+  | "message_part"
 
 export interface SessionMessage {
   id: number

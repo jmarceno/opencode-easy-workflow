@@ -1150,6 +1150,70 @@ export const EasyWorkflowBridgePlugin = async (input: any) => {
           // Ignore errors - session might not exist
         }
       }
+
+      // Forward permission events to standalone server for logging
+      if (event?.type === "permission.asked" || event?.type === "permission.replied") {
+        const sessionId = extractPermissionSessionId(event)
+        if (sessionId) {
+          await forwardEvent(event.type, {
+            event,
+            sessionId,
+            timestamp: Date.now(),
+            directory: config!.projectDirectory,
+          })
+        }
+      }
+    },
+
+    "message.part.added": async (input: any, output: any) => {
+      const sessionId = extractSessionId(input, output)
+      if (!sessionId) return
+
+      await forwardEvent("message.part.added", {
+        input,
+        output,
+        sessionId,
+        timestamp: Date.now(),
+        directory: config!.projectDirectory,
+      })
+    },
+
+    "message.part.updated": async (input: any, output: any) => {
+      const sessionId = extractSessionId(input, output)
+      if (!sessionId) return
+
+      await forwardEvent("message.part.updated", {
+        input,
+        output,
+        sessionId,
+        timestamp: Date.now(),
+        directory: config!.projectDirectory,
+      })
+    },
+
+    "session.created": async (input: any, output: any) => {
+      const sessionId = extractSessionId(input, output)
+      if (!sessionId) return
+
+      await forwardEvent("session.created", {
+        input,
+        output,
+        sessionId,
+        timestamp: Date.now(),
+        directory: config!.projectDirectory,
+      })
+    },
+
+    "session.error": async ({ event }: any) => {
+      const sessionId = extractSessionId(event)
+      if (!sessionId) return
+
+      await forwardEvent("session.error", {
+        event,
+        sessionId,
+        timestamp: Date.now(),
+        directory: config!.projectDirectory,
+      })
     },
   }
   } catch (err) {

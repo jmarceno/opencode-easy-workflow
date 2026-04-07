@@ -47,6 +47,8 @@ export class MessageLogger {
   private currentTaskRunId: string | null
   private currentWorkflowPhase: string | null
   private currentSessionStatus: string | null
+  private recentMessageIds: Map<string, number>
+  private readonly DEDUP_WINDOW_MS = 5000
 
   constructor(context: MessageLoggerContext) {
     this.db = context.db
@@ -54,6 +56,23 @@ export class MessageLogger {
     this.currentTaskRunId = context.taskRunId ?? null
     this.currentWorkflowPhase = context.workflowPhase ?? null
     this.currentSessionStatus = context.sessionStatus ?? null
+    this.recentMessageIds = new Map()
+  }
+
+  private isDuplicate(messageId: string | null | undefined): boolean {
+    if (!messageId) return false
+    const now = Date.now()
+    const existing = this.recentMessageIds.get(messageId)
+    if (existing && now - existing < this.DEDUP_WINDOW_MS) {
+      return true
+    }
+    this.recentMessageIds.set(messageId, now)
+    for (const [key, timestamp] of this.recentMessageIds.entries()) {
+      if (now - timestamp > this.DEDUP_WINDOW_MS * 2) {
+        this.recentMessageIds.delete(key)
+      }
+    }
+    return false
   }
 
   /**
@@ -136,6 +155,131 @@ export class MessageLogger {
       },
       metadata: {
         messageId: event?.properties?.id ?? event?.id,
+      },
+    }
+
+    await this.storeMessage(message, event)
+  }
+
+  async logMessagePartAdded(input: any, output: any): Promise<void> {
+    const sessionId = this.extractSessionId(input, output)
+    if (!sessionId) return
+
+    const part = output?.part ?? input?.part
+    if (!part) return
+
+    const messageId = part?.id ?? output?.id ?? input?.id
+    if (this.isDuplicate(messageId)) return
+
+    const parsed = this.parseMessagePart(part, sessionId, messageId)
+    if (!parsed) return
+
+    await this.storeMessage(parsed, { input, output, part })
+  }
+
+  async logMessagePartUpdated(input: any, output: any): Promise<void> {
+    const sessionId = this.extractSessionId(input, output)
+    if (!sessionId) return
+
+    const part = output?.part ?? input?.part
+    if (!part) return
+
+    const messageId = part?.id ?? output?.id ?? input?.id
+    if (this.isDuplicate(messageId)) return
+
+    const parsed = this.parseMessagePartUpdate(part, sessionId, messageId)
+    if (!parsed) return
+
+    await this.storeMessage(parsed, { input, output, part })
+  }
+
+  async logSessionCreated(event: any): Promise<void> {
+    const sessionId = this.extractSessionId(event)
+    if (!sessionId) return
+
+    const messageId = event?.properties?.id ?? event?.id ?? `session_created_${sessionId}`
+    if (this.isDuplicate(messageId)) return
+
+    this.currentSessionStatus = "created"
+
+    const message: ParsedMessage = {
+      sessionId,
+      role: "system",
+      messageType: "session_start",
+      content: {
+        event: "session.created",
+        title: event?.properties?.title ?? event?.title,
+        model: event?.properties?.model ?? event?.model,
+        agent: event?.properties?.agent ?? event?.agent,
+        directory: event?.properties?.directory ?? event?.directory,
+      },
+      metadata: {
+        messageId,
+        modelProvider: this.extractModelInfo(event).provider,
+        modelId: this.extractModelInfo(event).model,
+        agentName: event?.properties?.agent ?? event?.agent,
+      },
+    }
+
+    await this.storeMessage(message, event)
+  }
+
+  async logSessionError(event: any): Promise<void> {
+    const sessionId = this.extractSessionId(event)
+    if (!sessionId) return
+
+    const messageId = event?.properties?.id ?? event?.id ?? `session_error_${sessionId}`
+    if (this.isDuplicate(messageId)) return
+
+    this.currentSessionStatus = "error"
+
+    const message: ParsedMessage = {
+      sessionId,
+      role: "system",
+      messageType: "session_error",
+      content: {
+        event: "session.error",
+        error: event?.properties?.error ?? event?.error,
+        reason: event?.properties?.reason ?? event?.reason,
+      },
+      metadata: {
+        messageId,
+      },
+    }
+
+    await this.storeMessage(message, event)
+  }
+
+  async logPermissionEvent(event: any, type: 'asked' | 'replied'): Promise<void> {
+    const sessionId = this.extractSessionId(event)
+    if (!sessionId) return
+
+    const permissionId = event?.properties?.id ?? event?.properties?.permissionID ?? event?.id ?? event?.requestID
+    const messageId = `permission_${type}_${permissionId}`
+    if (this.isDuplicate(messageId)) return
+
+    const messageType = type === 'asked' ? 'permission_asked' : 'permission_replied'
+    
+    const content: Record<string, any> = {
+      event: `permission.${type}`,
+      permissionId,
+    }
+
+    if (type === 'asked') {
+      content.message = event?.properties?.message ?? event?.message
+      content.tool = event?.properties?.tool ?? event?.tool
+      content.args = event?.properties?.args ?? event?.args
+    } else {
+      content.response = event?.properties?.response ?? event?.response
+    }
+
+    const message: ParsedMessage = {
+      sessionId,
+      role: "system",
+      messageType,
+      content,
+      metadata: {
+        messageId,
       },
     }
 
@@ -228,6 +372,118 @@ export class MessageLogger {
     }
   }
 
+  private parseMessagePart(part: any, sessionId: string, messageId: string | null): ParsedMessage | null {
+    if (!part || !part.type) return null
+
+    const role = this.inferRoleFromPart(part)
+    const { messageType, content } = this.extractPartContent(part)
+
+    return {
+      sessionId,
+      role,
+      messageType,
+      content,
+      metadata: {
+        messageId,
+        agentName: part?.agent,
+      },
+      toolInfo: messageType === 'tool_request' || messageType === 'tool_call' ? {
+        name: part?.tool,
+        args: part?.args ?? {},
+        status: 'pending',
+      } : undefined,
+    }
+  }
+
+  private parseMessagePartUpdate(part: any, sessionId: string, messageId: string | null): ParsedMessage | null {
+    if (!part || !part.type) return null
+
+    const role = this.inferRoleFromPart(part)
+    const { messageType, content } = this.extractPartContent(part, true)
+
+    return {
+      sessionId,
+      role,
+      messageType,
+      content,
+      metadata: {
+        messageId,
+        agentName: part?.agent,
+      },
+    }
+  }
+
+  private inferRoleFromPart(part: any): MessageRole {
+    const partType = part?.type
+    if (partType === 'tool' || partType === 'tool_call') return 'assistant'
+    if (partType === 'user' || partType === 'user_prompt') return 'user'
+    if (partType === 'system') return 'system'
+    if (part?.role) {
+      const normalized = part.role.toLowerCase()
+      if (normalized === 'user') return 'user'
+      if (normalized === 'assistant') return 'assistant'
+      if (normalized === 'system') return 'system'
+      if (normalized === 'tool') return 'tool'
+    }
+    if (partType === 'thinking' || partType === 'reasoning') return 'assistant'
+    return 'assistant'
+  }
+
+  private extractPartContent(part: any, isUpdate = false): { messageType: MessageType; content: Record<string, any> } {
+    const content: Record<string, any> = {}
+    const partType = part?.type ?? part?.partType
+
+    switch (partType) {
+      case 'text':
+        content.text = part?.text ?? part?.content ?? ''
+        return { messageType: 'text', content }
+      
+      case 'thinking':
+      case 'reasoning':
+        content.thinking = part?.thinking ?? part?.content ?? part?.reasoning ?? ''
+        content.reasoning = part?.reasoning ?? part?.thinking ?? ''
+        return { messageType: 'thinking', content }
+      
+      case 'tool':
+      case 'tool_call':
+      case 'tool_request':
+        content.tool = part?.tool
+        content.args = part?.args ?? {}
+        content.state = part?.state
+        return { messageType: partType === 'tool_call' || partType === 'tool_request' ? 'tool_call' : 'tool_request', content }
+      
+      case 'step':
+      case 'step_progress':
+        content.step = part?.step ?? part?.content
+        content.progress = part?.progress
+        return { messageType: 'step_finish', content }
+      
+      case 'user':
+      case 'user_prompt':
+        content.text = part?.text ?? part?.content ?? ''
+        return { messageType: 'user_prompt', content }
+      
+      case 'retry':
+        content.attempt = part?.attempt
+        content.error = part?.error
+        return { messageType: 'error', content }
+      
+      case 'error':
+        content.error = part?.error ?? part?.message
+        return { messageType: 'error', content }
+      
+      case 'assistant':
+      case 'assistant_response':
+        content.text = part?.text ?? part?.content ?? ''
+        content.model = part?.model
+        return { messageType: 'assistant_response', content }
+      
+      default:
+        content.raw = part
+        return { messageType: 'message_part', content }
+    }
+  }
+
   /**
    * Store a parsed message in the database
    */
@@ -311,6 +567,9 @@ export class MessageLogger {
     if (parts.some(p => p?.type === "tool")) return "tool_call"
     if (parts.some(p => p?.type === "step-finish")) return "step_finish"
     if (parts.some(p => p?.type === "retry")) return "error"
+    if (parts.some(p => p?.type === "thinking" || p?.type === "reasoning")) return "thinking"
+    if (parts.some(p => p?.type === "user" || p?.type === "user_prompt")) return "user_prompt"
+    if (parts.some(p => p?.type === "assistant" || p?.type === "assistant_response")) return "assistant_response"
     if (parts.some(p => p?.state?.status === "error")) return "error"
     return "text"
   }
@@ -348,16 +607,39 @@ export class MessageLogger {
             error: part.error,
           }
           break
+        case "thinking":
+        case "reasoning":
+          content.thinking = content.thinking ?? []
+          content.thinking.push(part.thinking ?? part.content ?? part.reasoning ?? '')
+          content.reasoning = content.reasoning ?? []
+          content.reasoning.push(part.reasoning ?? part.thinking ?? '')
+          break
+        case "user":
+        case "user_prompt":
+          content.text = content.text ?? []
+          content.text.push(part.text ?? part.content ?? '')
+          content.isUserPrompt = true
+          break
+        case "assistant":
+        case "assistant_response":
+          content.text = content.text ?? []
+          content.text.push(part.text ?? part.content ?? '')
+          content.isAssistantResponse = true
+          break
         default:
-          // Store unknown parts as-is
           content.other = content.other ?? []
           content.other.push(part)
       }
     }
 
-    // Convert text array to single string if only one text part
     if (Array.isArray(content.text) && content.text.length === 1) {
       content.text = content.text[0]
+    }
+    if (Array.isArray(content.thinking) && content.thinking.length === 1) {
+      content.thinking = content.thinking[0]
+    }
+    if (Array.isArray(content.reasoning) && content.reasoning.length === 1) {
+      content.reasoning = content.reasoning[0]
     }
 
     return content

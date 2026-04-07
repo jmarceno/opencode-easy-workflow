@@ -1597,23 +1597,29 @@ export class KanbanServer {
     const { type, payload } = body
 
     if (type === "chat.message") {
-      // Handle workflow activation
       await this.handleWorkflowActivation(payload)
     } else if (type === "event") {
-      // Handle OpenCode events (permission.asked, session.idle)
       await this.handleOpencodeEvent(payload.event)
     } else if (type === "message.updated") {
-      // Handle message events for logging
       await this.handleMessageEvent(payload)
     } else if (type === "tool.execute.after") {
-      // Handle tool execution events for logging
       await this.handleToolExecuteEvent(payload)
     } else if (type === "session.updated") {
-      // Handle session update events for logging
       await this.handleSessionUpdateEvent(payload)
     } else if (type === "session.idle") {
-      // Handle session idle events for logging
       await this.handleSessionIdleEvent(payload)
+    } else if (type === "message.part.added") {
+      await this.handleMessagePartAddedEvent(payload)
+    } else if (type === "message.part.updated") {
+      await this.handleMessagePartUpdatedEvent(payload)
+    } else if (type === "session.created") {
+      await this.handleSessionCreatedEvent(payload)
+    } else if (type === "session.error") {
+      await this.handleSessionErrorEvent(payload)
+    } else if (type === "permission.asked") {
+      await this.handlePermissionAskedEvent(payload)
+    } else if (type === "permission.replied") {
+      await this.handlePermissionRepliedEvent(payload)
     }
   }
 
@@ -1810,6 +1816,78 @@ export class KanbanServer {
       this.messageLoggers.delete(sessionId)
     } catch (err) {
       console.error("[message-logger] Error handling session idle event:", err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  private async handleMessagePartAddedEvent(payload: any): Promise<void> {
+    try {
+      const sessionId = payload?.sessionId
+      if (!sessionId) return
+
+      const logger = this.getOrCreateMessageLogger(sessionId)
+      await logger.logMessagePartAdded(payload?.input, payload?.output)
+    } catch (err) {
+      console.error("[message-logger] Error handling message part added event:", err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  private async handleMessagePartUpdatedEvent(payload: any): Promise<void> {
+    try {
+      const sessionId = payload?.sessionId
+      if (!sessionId) return
+
+      const logger = this.getOrCreateMessageLogger(sessionId)
+      await logger.logMessagePartUpdated(payload?.input, payload?.output)
+    } catch (err) {
+      console.error("[message-logger] Error handling message part updated event:", err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  private async handleSessionCreatedEvent(payload: any): Promise<void> {
+    try {
+      const sessionId = this.extractSessionIdFromEvent(payload)
+      if (!sessionId) return
+
+      const logger = this.getOrCreateMessageLogger(sessionId)
+      await logger.logSessionCreated(payload)
+    } catch (err) {
+      console.error("[message-logger] Error handling session created event:", err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  private async handleSessionErrorEvent(payload: any): Promise<void> {
+    try {
+      const sessionId = this.extractSessionIdFromEvent(payload)
+      if (!sessionId) return
+
+      const logger = this.getOrCreateMessageLogger(sessionId)
+      await logger.logSessionError(payload)
+    } catch (err) {
+      console.error("[message-logger] Error handling session error event:", err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  private async handlePermissionAskedEvent(payload: any): Promise<void> {
+    try {
+      const sessionId = this.extractSessionIdFromEvent(payload)
+      if (!sessionId) return
+
+      const logger = this.getOrCreateMessageLogger(sessionId)
+      await logger.logPermissionEvent(payload, 'asked')
+    } catch (err) {
+      console.error("[message-logger] Error handling permission asked event:", err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  private async handlePermissionRepliedEvent(payload: any): Promise<void> {
+    try {
+      const sessionId = this.extractSessionIdFromEvent(payload)
+      if (!sessionId) return
+
+      const logger = this.getOrCreateMessageLogger(sessionId)
+      await logger.logPermissionEvent(payload, 'replied')
+    } catch (err) {
+      console.error("[message-logger] Error handling permission replied event:", err instanceof Error ? err.message : String(err))
     }
   }
 
