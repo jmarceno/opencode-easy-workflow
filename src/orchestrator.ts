@@ -1175,7 +1175,7 @@ export class Orchestrator {
             if (mainBranch) {
               try {
                 execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${mainBranch}`], {
-                  cwd: worktreeInfo.directory,
+                  cwd: this.ownerDirectory,
                   stdio: "ignore",
                 })
                 hasTargetBranch = true
@@ -1192,7 +1192,7 @@ export class Orchestrator {
             if (!hasTargetBranch) {
               try {
                 const defaultBranch = execFileSync("git", ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], {
-                  cwd: worktreeInfo.directory,
+                  cwd: this.ownerDirectory,
                   encoding: "utf-8",
                   stdio: "pipe",
                 }).trim()
@@ -1211,7 +1211,7 @@ export class Orchestrator {
               if (!mainBranch) {
                 try {
                   mainBranch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-                    cwd: worktreeInfo.directory,
+                    cwd: this.ownerDirectory,
                     encoding: "utf-8",
                     stdio: "pipe",
                   }).trim()
@@ -1223,7 +1223,7 @@ export class Orchestrator {
 
             try {
               execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${mainBranch}`], {
-                cwd: worktreeInfo.directory,
+                cwd: this.ownerDirectory,
                 stdio: "ignore",
               })
             } catch (e) {
@@ -1232,20 +1232,19 @@ export class Orchestrator {
 
             appendDebugLog("info", "merge target branch selected", { taskId: task.id, mainBranch })
             try {
-              execFileSync("git", ["checkout", mainBranch], { cwd: worktreeInfo.directory, stdio: "ignore" })
+              execFileSync("git", ["checkout", mainBranch], { cwd: this.ownerDirectory, stdio: "ignore" })
             } catch (checkoutErr) {
-              appendDebugLog("warn", "branch checkout skipped before merge", {
+              appendDebugLog("warn", "branch checkout failed or skipped in main repository", {
                 taskId: task.id,
                 branch: mainBranch,
-              error: checkoutErr instanceof Error ? checkoutErr.message : String(checkoutErr),
+                error: checkoutErr instanceof Error ? checkoutErr.message : String(checkoutErr),
+              })
+            }
+            execFileSync("git", ["merge", worktreeInfo.branch, "--no-edit"], {
+              cwd: this.ownerDirectory,
+              encoding: "utf-8",
+              stdio: "pipe",
             })
-            // Branch may be checked out in another worktree.
-          }
-          execFileSync("git", ["merge", worktreeInfo.branch, "--no-edit"], {
-            cwd: worktreeInfo.directory,
-            encoding: "utf-8",
-            stdio: "pipe",
-          })
           }
         } catch (mergeErr) {
           const msg = `Merge failed: ${mergeErr instanceof Error ? mergeErr.message : String(mergeErr)}`
@@ -2194,7 +2193,7 @@ RECOMMENDED_PROMPT:
 
           try {
             execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${mainBranch}`], {
-              cwd: worktreeInfo.directory,
+              cwd: this.ownerDirectory,
               stdio: "ignore",
             })
           } catch (branchErr) {
@@ -2208,9 +2207,9 @@ RECOMMENDED_PROMPT:
           }
 
           try {
-            execFileSync("git", ["checkout", mainBranch], { cwd: worktreeInfo.directory, stdio: "ignore" })
+            execFileSync("git", ["checkout", mainBranch], { cwd: this.ownerDirectory, stdio: "ignore" })
           } catch (checkoutErr) {
-            appendDebugLog("warn", "final applier branch checkout skipped", {
+            appendDebugLog("warn", "final applier branch checkout failed or skipped in main repository", {
               taskId: task.id,
               branch: mainBranch,
               error: checkoutErr instanceof Error ? checkoutErr.message : String(checkoutErr),
@@ -2218,7 +2217,7 @@ RECOMMENDED_PROMPT:
           }
 
           execFileSync("git", ["merge", worktreeInfo.branch, "--no-edit"], {
-            cwd: worktreeInfo.directory,
+            cwd: this.ownerDirectory,
             encoding: "utf-8",
             stdio: "pipe",
           })
