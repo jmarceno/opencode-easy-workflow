@@ -385,6 +385,49 @@ export class KanbanServer {
     }
   }
 
+  private async fetchSessionMessages(client: ReturnType<typeof createV2Client>, sessionId: string | null): Promise<string[]> {
+    if (!sessionId) return []
+    try {
+      const messagesResponse = await client.session.messages({ path: { id: sessionId } })
+      const messagesData = messagesResponse?.data ?? messagesResponse
+      const messages = Array.isArray(messagesData) ? messagesData : (messagesData?.info ? [messagesData] : [])
+      return messages.map((m: any) => {
+        const role = m?.info?.role || "unknown"
+        const content = m?.parts?.map((p: any) => p?.type === "text" ? p.text : "").join("") || "(no content)"
+        const truncated = content.length > 500 ? content.slice(0, 500) + "..." : content
+        return `[${role}] ${truncated}`
+      })
+    } catch {
+      return []
+    }
+  }
+
+  private async getWorktreeGitInfo(worktreeDir: string | null): Promise<{ status: string; diff: string } | null> {
+    if (!worktreeDir) return null
+    try {
+      const statusOutput = execFileSync("git", ["status", "--porcelain"], {
+        cwd: worktreeDir,
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "pipe"],
+      })
+      const status = statusOutput.trim() || "(clean - no changes)"
+      let diff = ""
+      try {
+        const diffOutput = execFileSync("git", ["diff", "--stat"], {
+          cwd: worktreeDir,
+          encoding: "utf-8",
+          stdio: ["ignore", "pipe", "pipe"],
+        })
+        diff = diffOutput.trim()
+      } catch {
+        // no diff available
+      }
+      return { status, diff }
+    } catch {
+      return null
+    }
+  }
+
   private async runSmartRepair(taskId: string): Promise<{ action: TaskRepairAction; reason: string; errorMessage?: string }> {
     const task = this.db.getTask(taskId)
     if (!task) {
@@ -405,33 +448,100 @@ export class KanbanServer {
     const effectiveMaxReviewRuns = task.maxReviewRunsOverride ?? defaultMaxReviewRuns
     const reviewLimitExceeded = task.reviewCount >= effectiveMaxReviewRuns
 
-    const promptParts = [
-      "You repair workflow task states.",
+    // Gather rich context for smart repair decision
+    const [sessionMessages, worktreeStatus, workflowSessions, taskRuns] = await Promise.all([
+      this.fetchSessionMessages(client, task.sessionId),
+      this.getWorktreeGitInfo(task.worktreeDir),
+      Promise.resolve(this.db.getWorkflowSessionsByTask(taskId)),
+      Promise.resolve(task.planmode ? this.db.getTaskRuns(taskId) : []),
+    ])
+
+    const promptParts: string[] = [
+      "You repair workflow task states. Your job is to understand what ACTUALLY happened and choose the right repair action.",
       "Choose exactly one action from this list and return JSON only:",
       "queue_implementation, restore_plan_approval, reset_backlog, mark_done, fail_task, continue_with_more_reviews",
-      "Prefer queue_implementation when a usable [plan] exists and the task should keep moving.",
-      "Prefer mark_done only when the task output indicates the work is already complete or should be closed manually.",
-      "Use restore_plan_approval only when the task should remain in explicit human plan approval.",
-      "Use reset_backlog when the task should rerun from scratch.",
+      "",
+      "## Decision Guidelines",
+      "Prefer queue_implementation when a usable [plan] exists AND the worktree shows real code changes (files modified). This means implementation actually happened.",
+      "Prefer mark_done only when the task output AND worktree both confirm the work is complete. An empty worktree with just a 'done' plan is NOT sufficient.",
+      "Use restore_plan_approval when the task should go back for human plan review.",
+      "Use reset_backlog when the worktree has no meaningful changes and the task should start fresh.",
       "Use fail_task when the state is invalid and should stay visible with an actionable error.",
-      "Use continue_with_more_reviews when the task is stuck due to review limits (reviewCount >= maxReviewRuns) but the gaps appear fixable with another attempt. This will reset the review counter and allow more review cycles.",
+      "Use continue_with_more_reviews when stuck due to review limits but the gaps appear fixable.",
+      "",
+      "## Critical Verification Steps",
+      "You MUST check the following BEFORE deciding:",
+      "1. Look at 'Worktree git status' - if empty (no files modified), the task likely did nothing",
+      "2. Look at 'OpenCode session messages' - understand where the session stopped and what it was doing",
+      "3. Look at 'Workflow session history' - see the pattern of sessions for this task",
+      "4. Compare 'Latest captured output' with worktree changes - do they match what was promised?",
+      "",
       `Current review status: reviewCount=${task.reviewCount}, maxReviewRuns=${effectiveMaxReviewRuns}${reviewLimitExceeded ? " (LIMIT EXCEEDED)" : ""}`,
-      "IMPORTANT: If choosing mark_done and task.autoCommit is true, you MUST also merge the worktree into the target branch and commit the work.",
-      "  - Use the commit prompt template to drive the commit: stage changes, commit in worktree, cherry-pick to base branch, delete worktree.",
-      "  - Use {{base_ref}} as the placeholder in the commit prompt (will be replaced at runtime).",
-      "  - Include the full commit result (hash, message, stash/conflict status) in the errorMessage field if merge/commit succeeds, or the error reason if it fails.",
-      "Return strict JSON with keys action, reason, and optional errorMessage.",
-      `Task:\n${JSON.stringify(task, null, 2)}`,
-      `Latest captured plan:\n${getLatestTaggedOutput(task.agentOutput, "plan") || "<none>"}`,
-      `Latest revision request:\n${getLatestTaggedOutput(task.agentOutput, "user-revision-request") || "<none>"}`,
-      `Latest execution output:\n${getLatestTaggedOutput(task.agentOutput, "exec") || "<none>"}`,
     ]
+
+    if (task.worktreeDir) {
+      promptParts.push("", `Worktree directory: ${task.worktreeDir}`)
+    }
+
+    if (worktreeStatus) {
+      promptParts.push("", `## Worktree git status\n${worktreeStatus.status}`)
+      if (worktreeStatus.diff) {
+        promptParts.push("", `## Worktree git diff (changed files summary)\n${worktreeStatus.diff}`)
+      }
+    } else {
+      promptParts.push("", "## Worktree git status\n<no worktree directory on record>")
+    }
+
+    if (sessionMessages.length > 0) {
+      const lastFew = sessionMessages.slice(-5)
+      promptParts.push("", `## OpenCode session history (last ${lastFew.length} messages from task session)\n${lastFew.join("\n---\n")}`)
+      if (sessionMessages.length > 5) {
+        promptParts.push(`...(${sessionMessages.length - 5} more messages in session)`)
+      }
+    } else {
+      promptParts.push("", "## OpenCode session history\n<no session messages found>")
+    }
+
+    if (workflowSessions.length > 0) {
+      const sessionSummary = workflowSessions.map(s => {
+        const created = new Date(s.createdAt * 1000).toISOString()
+        return `[${s.sessionKind}] ${s.status} - created ${created} (session: ${s.sessionId.slice(0, 12)}...)`
+      }).join("\n")
+      promptParts.push("", `## Workflow session history for this task\n${sessionSummary}`)
+    }
+
+    if (taskRuns.length > 0) {
+      const runsSummary = taskRuns.map(r => {
+        return `[${r.phase}] slot=${r.slotIndex} attempt=${r.attemptIndex} status=${r.status} model=${r.model} session=${r.sessionId?.slice(0, 12) ?? "none"}...`
+      }).join("\n")
+      promptParts.push("", `## Task runs (best-of-n)\n${runsSummary}`)
+    }
+
+    promptParts.push(
+      "",
+      `## Latest captured plan (from agentOutput)\n${getLatestTaggedOutput(task.agentOutput, "plan") || "<none>"}`,
+      "",
+      `## Latest revision request (from agentOutput)\n${getLatestTaggedOutput(task.agentOutput, "user-revision-request") || "<none>"}`,
+      "",
+      `## Latest execution output (from agentOutput)\n${getLatestTaggedOutput(task.agentOutput, "exec") || "<none>"}`,
+      "",
+      `## Full task state\n${JSON.stringify(task, null, 2)}`,
+    )
 
     if (task.smartRepairHints) {
       promptParts.push("", `★★★ HIGH PRIORITY - Additional user instructions (MUST prioritize these):\n${task.smartRepairHints}`)
     }
 
-    const prompt = promptParts.join("\n\n")
+    promptParts.push(
+      "",
+      "IMPORTANT: If choosing mark_done and task.autoCommit is true, you MUST also merge the worktree into the target branch and commit the work.",
+      "  - Use the commit prompt template to drive the commit: stage changes, commit in worktree, cherry-pick to base branch, delete worktree.",
+      "  - Use {{base_ref}} as the placeholder in the commit prompt (will be replaced at runtime).",
+      "  - Include the full commit result (hash, message, stash/conflict status) in the errorMessage field if merge/commit succeeds, or the error reason if it fails.",
+      "Return strict JSON with keys action, reason, and optional errorMessage.",
+    )
+
+    const prompt = promptParts.join("\n")
 
     const sessionResponse = await client.session.create({
       title: `Repair task state: ${task.name}`,
