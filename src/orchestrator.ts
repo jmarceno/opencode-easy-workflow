@@ -37,77 +37,6 @@ export const AUTONOMY_INSTRUCTION = "EXECUTE END-TO-END. Do not ask follow-up qu
 
 export const PLANNING_ONLY_INSTRUCTION = "PREPARE PLAN ONLY. Do not ask follow-up questions. Make reasonable assumptions from the codebase. Output only the plan — do not proceed to implementation."
 
-// ---- Structured Output Schemas ----
-
-/**
- * JSON Schema for standard review output (used in runReviewLoop)
- * Enforced via the SDK's format parameter for structured JSON output
- */
-export const REVIEW_RESULT_SCHEMA = {
-  type: "object",
-  properties: {
-    status: {
-      type: "string",
-      enum: ["pass", "gaps_found", "blocked"],
-      description: "Review outcome: pass if all goals met, gaps_found if issues exist, blocked if review cannot complete"
-    },
-    summary: {
-      type: "string",
-      description: "Brief summary of review findings"
-    },
-    gaps: {
-      type: "array",
-      items: { type: "string" },
-      description: "List of specific gaps found (empty array if status is pass)"
-    },
-    recommendedPrompt: {
-      type: "string",
-      description: "Specific prompt to address gaps, or empty string if no gaps"
-    }
-  },
-  required: ["status", "summary", "gaps", "recommendedPrompt"]
-} as const
-
-/**
- * JSON Schema for best-of-n reviewer output (used in runBestOfNReviewers)
- * Enforced via the SDK's format parameter for structured JSON output
- */
-export const REVIEWER_OUTPUT_SCHEMA = {
-  type: "object",
-  properties: {
-    status: {
-      type: "string",
-      enum: ["pass", "needs_manual_review"],
-      description: "Review outcome: pass if acceptable, needs_manual_review if issues found"
-    },
-    summary: {
-      type: "string",
-      description: "Short evaluation summary"
-    },
-    bestCandidateIds: {
-      type: "array",
-      items: { type: "string" },
-      description: "List of top candidate IDs in order of preference"
-    },
-    gaps: {
-      type: "array",
-      items: { type: "string" },
-      description: "Issues or risks found with candidates"
-    },
-    recommendedFinalStrategy: {
-      type: "string",
-      enum: ["pick_best", "synthesize", "pick_or_synthesize"],
-      description: "Recommended approach for final implementation"
-    },
-    recommendedPrompt: {
-      type: "string",
-      nullable: true,
-      description: "Optional instructions for the final applier"
-    }
-  },
-  required: ["status", "summary", "bestCandidateIds", "gaps", "recommendedFinalStrategy"]
-} as const
-
 // ---- SDK v2 client wrapper ----
 
 function createV2Client(baseUrl: string, directory?: string) {
@@ -2000,10 +1929,6 @@ ${taskSuffix}`
           sessionID: sessionId,
           model,
           parts: [{ type: "text", text: reviewerPrompt }],
-          format: {
-            type: "json_schema",
-            schema: REVIEWER_OUTPUT_SCHEMA,
-          },
         })
         const result = unwrapResponseDataOrThrow<any>(response, "Reviewer prompt")
         const failure = this.extractExecutionFailure(result)
@@ -2079,16 +2004,14 @@ Changed files: ${c.changedFilesJson.join(", ") || "None"}
 Verification: ${this.stringifyVerificationSummary(c.verificationJson)}
 `).join("\n")}
 
-Your response must be a valid JSON object matching this schema:
+Your response must be a valid JSON with the following fields:
 
-{
-  "status": "pass|needs_manual_review",
-  "summary": "<short summary of your evaluation>",
-  "bestCandidateIds": ["<candidate-id-1>", "<candidate-id-2>"],
-  "gaps": ["<issue 1>", "<issue 2>"],
-  "recommendedFinalStrategy": "pick_best|synthesize|pick_or_synthesize",
-  "recommendedPrompt": "<optional instructions for the final applier, or null>"
-}
+"status": "pass|needs_manual_review",
+"summary": "<short evaluation summary>",
+"bestCandidateIds": ["<candidate-id-1>", "<candidate-id-2>"],
+"gaps": ["<issue 1>", "<issue 2>"],
+"recommendedFinalStrategy": "pick_best|synthesize|pick_or_synthesize",
+"recommendedPrompt": "<optional instructions for the final applier, or null>"
 `
     if (taskSuffix?.trim()) {
       prompt += `\nAdditional instructions for this reviewer:\n${taskSuffix.trim()}\n`
@@ -2096,20 +2019,8 @@ Your response must be a valid JSON object matching this schema:
     return prompt
   }
 
-  private extractStructuredOutput(result: any): Record<string, unknown> {
-    // Try SDK wrapper path first
-    const sdkStructuredOutput = result?.data?.info?.structured_output
-    if (sdkStructuredOutput && typeof sdkStructuredOutput === "object") {
-      return sdkStructuredOutput
-    }
-
-    // Check for SDK-level structured output error
-    const structuredError = result?.data?.info?.error
-    if (structuredError?.name === "StructuredOutputError") {
-      throw new Error(`Structured output is not supported by the configured model/provider: ${structuredError.message}. Use a model that supports JSON schema constrained output.`)
-    }
-
-    // Fallback: try parsing the model's text output as JSON
+  private extractJsonOutput(result: any): Record<string, unknown> {
+    // Extract JSON from the model's text output
     const textOutput = this.extractTextOutput(result)
     if (textOutput.trim()) {
       try {
@@ -2122,20 +2033,20 @@ Your response must be a valid JSON object matching this schema:
       }
     }
 
-    throw new Error("Review response missing structured output. The model or provider may not support JSON schema constrained output.")
+    throw new Error("Review response missing valid JSON output. The model did not return a valid JSON response.")
   }
 
   private parseReviewerOutput(result: any): ReviewerOutput {
-    const structuredOutput = this.extractStructuredOutput(result)
+    const jsonOutput = this.extractJsonOutput(result)
 
-    this.appendDebugLog("info", "using structured output for reviewer result", { taskId: undefined })
+    this.appendDebugLog("info", "parsed reviewer JSON output", { taskId: undefined })
     return {
-      status: structuredOutput.status as ReviewerOutput["status"] || "needs_manual_review",
-      summary: structuredOutput.summary as string || "No summary provided",
-      bestCandidateIds: Array.isArray(structuredOutput.bestCandidateIds) ? structuredOutput.bestCandidateIds : [],
-      gaps: Array.isArray(structuredOutput.gaps) ? structuredOutput.gaps : [],
-      recommendedFinalStrategy: structuredOutput.recommendedFinalStrategy as SelectionMode || "synthesize",
-      recommendedPrompt: structuredOutput.recommendedPrompt ?? null,
+      status: jsonOutput.status as ReviewerOutput["status"] || "needs_manual_review",
+      summary: jsonOutput.summary as string || "No summary provided",
+      bestCandidateIds: Array.isArray(jsonOutput.bestCandidateIds) ? jsonOutput.bestCandidateIds : [],
+      gaps: Array.isArray(jsonOutput.gaps) ? jsonOutput.gaps : [],
+      recommendedFinalStrategy: jsonOutput.recommendedFinalStrategy as SelectionMode || "synthesize",
+      recommendedPrompt: jsonOutput.recommendedPrompt ?? null,
     }
   }
 
@@ -2546,19 +2457,13 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
             "Do not rely on prior session history.",
             "Inspect the current codebase and branch state.",
             "Lack of commit in this phase is not an issue",
-            "Your response must be a valid JSON object matching this schema",
-            "```json",
-            "{",
-            "  \"status\": \"pass|gaps_found|blocked\",",
-            "  \"summary\": \"<brief summary of review findings>\"",
-            "  \"gaps\": [\"<first gap if any>\", \"<second gap if any>\"]",
-            "  \"recommendedPrompt\": \"<specific prompt to address gaps, or empty string if no gaps>\"",
-            "}",
-            "```",
-            "- **status**: \"pass\" if all goals are met, \"gaps_found\" if issues exist, \"blocked\" if review cannot complete",
-            "- **summary**: Brief summary of what you found",
-            "- **recommendedPrompt**: Specific prompt to address the gaps, or empty string if no gaps            ",
-            "- **gaps**: Array of specific gaps found (empty array if status is \"pass\")",
+            "",
+            "Your response must be a valid JSON with the following fields:",
+            "",
+            "\"status\": \"pass|gaps_found|blocked\",",
+            "\"summary\": \"<brief summary of review findings>\",",
+            "\"gaps\": [\"<first gap if any>\", \"<second gap if any>\"],",
+            "\"recommendedPrompt\": \"<specific prompt to address gaps, or empty string if no gaps>\"",
           ].join("\n")
 
           const modelSelection = options.reviewModel !== "default" ? parseModelSelection(options.reviewModel) : null
@@ -2571,10 +2476,6 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
               agent: reviewAgentName,
               ...(modelSelection ? { model: modelSelection } : {}),
               parts: [{ type: "text", text: promptText }],
-              format: {
-                type: "json_schema",
-                schema: REVIEW_RESULT_SCHEMA,
-              },
             })
           } catch (promptErr) {
             // SDK throws raw response objects with {data, error, success} on error
@@ -2696,14 +2597,14 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
   }
 
   private parseReviewResponse(result: any): ReviewResult {
-    const structuredOutput = this.extractStructuredOutput(result)
+    const jsonOutput = this.extractJsonOutput(result)
 
-    this.appendDebugLog("info", "using structured output for review result", { taskId: undefined })
+    this.appendDebugLog("info", "parsed review JSON output", { taskId: undefined })
     return {
-      status: structuredOutput.status as ReviewResult["status"] || "blocked",
-      summary: structuredOutput.summary as string || "No summary provided",
-      gaps: Array.isArray(structuredOutput.gaps) ? structuredOutput.gaps : [],
-      recommendedPrompt: (structuredOutput.recommendedPrompt as string) || "",
+      status: jsonOutput.status as ReviewResult["status"] || "blocked",
+      summary: jsonOutput.summary as string || "No summary provided",
+      gaps: Array.isArray(jsonOutput.gaps) ? jsonOutput.gaps : [],
+      recommendedPrompt: (jsonOutput.recommendedPrompt as string) || "",
     }
   }
 }

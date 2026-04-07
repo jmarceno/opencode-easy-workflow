@@ -17,18 +17,9 @@ Do not make code changes.
 
 ## Response Format
 
-Your response must be a valid JSON object matching this schema:
+Your response must be a valid JSON with the following fields:
 
-```json
-{
-  "status": "pass|gaps_found|blocked",
-  "summary": "<brief summary of review findings>",
-  "gaps": ["<first gap if any>", "<second gap if any>"],
-  "recommendedPrompt": "<specific prompt to address gaps, or empty string if no gaps>"
-}
-```
-
-- **status**: "pass" if all goals are met, "gaps_found" if issues exist, "blocked" if review cannot complete
-- **summary**: Brief summary of what you found
-- **gaps**: Array of specific gaps found (empty array if status is "pass")
-- **recommendedPrompt**: Specific prompt to address the gaps, or empty string if no gaps
+"status": "pass|gaps_found|blocked",
+"summary": "<brief summary of review findings>",
+"gaps": ["<first gap if any>", "<second gap if any>"],
+"recommendedPrompt": "<specific prompt to address gaps, or empty string if no gaps>"
