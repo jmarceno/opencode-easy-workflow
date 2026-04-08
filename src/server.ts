@@ -1740,10 +1740,26 @@ export class KanbanServer {
 
   // ---- Message Logging Handlers ----
 
-  private getOrCreateMessageLogger(sessionId: string): MessageLogger {
+  private getOrCreateMessageLogger(sessionId: string, directory?: string): MessageLogger {
     if (!this.messageLoggers.has(sessionId)) {
       // Look up task info from workflow_sessions
-      const workflowSession = this.db.getWorkflowSession(sessionId)
+      let workflowSession = this.db.getWorkflowSession(sessionId)
+      
+      // Auto-create workflow session if it doesn't exist (for events from bridge)
+      if (!workflowSession) {
+        try {
+          workflowSession = this.db.registerWorkflowSession({
+            sessionId,
+            taskId: "unknown", // Will be updated when we know the actual task
+            sessionKind: "task",
+            ownerDirectory: directory ?? process.cwd(),
+            skipPermissionAsking: true,
+          })
+          console.log(`[message-logger] Auto-created workflow session: ${sessionId}`)
+        } catch (err) {
+          console.error(`[message-logger] Failed to auto-create workflow session: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
       
       const logger = createMessageLogger({
         db: this.db,
@@ -1824,8 +1840,8 @@ export class KanbanServer {
       const sessionId = payload?.sessionId
       if (!sessionId) return
 
-      const logger = this.getOrCreateMessageLogger(sessionId)
-      await logger.logMessagePartAdded(payload?.input, payload?.output)
+      const logger = this.getOrCreateMessageLogger(sessionId, payload?.directory)
+      await logger.logMessagePartAdded(payload?.input, payload?.output, sessionId)
     } catch (err) {
       console.error("[message-logger] Error handling message part added event:", err instanceof Error ? err.message : String(err))
     }
@@ -1837,7 +1853,7 @@ export class KanbanServer {
       if (!sessionId) return
 
       const logger = this.getOrCreateMessageLogger(sessionId)
-      await logger.logMessagePartUpdated(payload?.input, payload?.output)
+      await logger.logMessagePartUpdated(payload?.input, payload?.output, sessionId)
     } catch (err) {
       console.error("[message-logger] Error handling message part updated event:", err instanceof Error ? err.message : String(err))
     }

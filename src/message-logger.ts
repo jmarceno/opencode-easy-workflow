@@ -161,8 +161,8 @@ export class MessageLogger {
     await this.storeMessage(message, event)
   }
 
-  async logMessagePartAdded(input: any, output: any): Promise<void> {
-    const sessionId = this.extractSessionId(input, output)
+  async logMessagePartAdded(input: any, output: any, sessionIdHint?: string): Promise<void> {
+    const sessionId = sessionIdHint || this.extractSessionId(input, output)
     if (!sessionId) return
 
     const part = output?.part ?? input?.part
@@ -177,8 +177,8 @@ export class MessageLogger {
     await this.storeMessage(parsed, { input, output, part })
   }
 
-  async logMessagePartUpdated(input: any, output: any): Promise<void> {
-    const sessionId = this.extractSessionId(input, output)
+  async logMessagePartUpdated(input: any, output: any, sessionIdHint?: string): Promise<void> {
+    const sessionId = sessionIdHint || this.extractSessionId(input, output)
     if (!sessionId) return
 
     const part = output?.part ?? input?.part

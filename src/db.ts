@@ -255,7 +255,7 @@ export class KanbanDB {
 
       CREATE TABLE IF NOT EXISTS workflow_sessions (
         session_id TEXT PRIMARY KEY,
-        task_id TEXT NOT NULL,
+        task_id TEXT,
         task_run_id TEXT,
         session_kind TEXT NOT NULL,
         owner_directory TEXT NOT NULL,
@@ -471,10 +471,7 @@ export class KanbanDB {
           edit_file_path TEXT,
           session_status TEXT,
           workflow_phase TEXT,
-          raw_event_json TEXT,
-          FOREIGN KEY(session_id) REFERENCES workflow_sessions(session_id),
-          FOREIGN KEY(task_id) REFERENCES tasks(id),
-          FOREIGN KEY(task_run_id) REFERENCES task_runs(id)
+          raw_event_json TEXT
         );
         CREATE INDEX idx_session_messages_session_id ON session_messages(session_id);
         CREATE INDEX idx_session_messages_task_id ON session_messages(task_id);
@@ -482,6 +479,51 @@ export class KanbanDB {
         CREATE INDEX idx_session_messages_role ON session_messages(role);
         CREATE INDEX idx_session_messages_session_timestamp ON session_messages(session_id, timestamp);
       `)
+    } else {
+      // Migration: Remove foreign key constraints if they exist (for backward compatibility)
+      // Check if the table has foreign keys by looking at the schema
+      const tableInfo = this.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='session_messages'").get() as any
+      if (tableInfo?.sql?.includes('FOREIGN KEY')) {
+        console.log("[db] Migrating session_messages table to remove foreign key constraints...")
+        // Recreate table without foreign keys
+        this.db.exec(`
+          CREATE TABLE session_messages_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_id TEXT,
+            session_id TEXT NOT NULL,
+            task_id TEXT,
+            task_run_id TEXT,
+            timestamp INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            message_type TEXT NOT NULL,
+            content_json TEXT NOT NULL,
+            model_provider TEXT,
+            model_id TEXT,
+            agent_name TEXT,
+            prompt_tokens INTEGER,
+            completion_tokens INTEGER,
+            total_tokens INTEGER,
+            tool_name TEXT,
+            tool_args_json TEXT,
+            tool_result_json TEXT,
+            tool_status TEXT,
+            edit_diff TEXT,
+            edit_file_path TEXT,
+            session_status TEXT,
+            workflow_phase TEXT,
+            raw_event_json TEXT
+          );
+          INSERT INTO session_messages_new SELECT * FROM session_messages;
+          DROP TABLE session_messages;
+          ALTER TABLE session_messages_new RENAME TO session_messages;
+          CREATE INDEX idx_session_messages_session_id ON session_messages(session_id);
+          CREATE INDEX idx_session_messages_task_id ON session_messages(task_id);
+          CREATE INDEX idx_session_messages_timestamp ON session_messages(timestamp);
+          CREATE INDEX idx_session_messages_role ON session_messages(role);
+          CREATE INDEX idx_session_messages_session_timestamp ON session_messages(session_id, timestamp);
+        `)
+        console.log("[db] Migration complete: foreign key constraints removed")
+      }
     }
   }
 
@@ -1182,7 +1224,7 @@ export class KanbanDB {
 
   registerWorkflowSession(data: {
     sessionId: string
-    taskId: string
+    taskId?: string | null
     taskRunId?: string | null
     sessionKind: WorkflowSessionKind
     ownerDirectory: string
