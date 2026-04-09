@@ -5,6 +5,28 @@ import type { Task, TaskStatus, Options, ThinkingLevel, ExecutionPhase, Executio
 import { DEFAULT_COMMIT_PROMPT } from "./types"
 import { hasCapturedPlanOutput, hasCapturedRevisionRequest } from "./task-state"
 
+// Color palette for workflow runs - distinct colors that work well with dark theme
+const RUN_COLORS = [
+  "#ff6b6b", // Red
+  "#4ecdc4", // Teal
+  "#45b7d1", // Blue
+  "#96ceb4", // Green
+  "#feca57", // Yellow
+  "#ff9ff3", // Pink
+  "#54a0ff", // Light Blue
+  "#48dbfb", // Cyan
+  "#1dd1a1", // Mint
+  "#ffc048", // Orange
+  "#5f27cd", // Purple
+  "#00d2d3", // Turquoise
+]
+
+function pickRunColor(usedColors: string[]): string {
+  const available = RUN_COLORS.filter(c => !usedColors.includes(c))
+  if (available.length === 0) return RUN_COLORS[Math.floor(Math.random() * RUN_COLORS.length)]
+  return available[0]
+}
+
 const DEFAULT_OPTIONS: Options = {
   commitPrompt: DEFAULT_COMMIT_PROMPT,
   extraPrompt: "",
@@ -103,6 +125,7 @@ function rowToWorkflowRun(row: any): WorkflowRun {
     finishedAt: row.finished_at ?? null,
     isArchived: row.is_archived === 1,
     archivedAt: row.archived_at ?? null,
+    color: row.color ?? "#888888",
   }
 }
 
@@ -285,7 +308,8 @@ export class KanbanDB {
         updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
         finished_at INTEGER,
         is_archived INTEGER NOT NULL DEFAULT 0,
-        archived_at INTEGER
+        archived_at INTEGER,
+        color TEXT NOT NULL DEFAULT '#888888'
       );
 
       CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
@@ -590,7 +614,8 @@ export class KanbanDB {
           updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
           finished_at INTEGER,
           is_archived INTEGER NOT NULL DEFAULT 0,
-          archived_at INTEGER
+          archived_at INTEGER,
+          color TEXT NOT NULL DEFAULT '#888888'
         );
         CREATE INDEX idx_workflow_runs_status ON workflow_runs(status);
         CREATE INDEX idx_workflow_runs_current_task_id ON workflow_runs(current_task_id);
@@ -605,6 +630,10 @@ export class KanbanDB {
     const hasWorkflowRunArchivedAt = workflowRunColumns.some((col: any) => col.name === "archived_at")
     if (!hasWorkflowRunArchivedAt) {
       this.db.exec("ALTER TABLE workflow_runs ADD COLUMN archived_at INTEGER")
+    }
+    const hasWorkflowRunColor = workflowRunColumns.some((col: any) => col.name === "color")
+    if (!hasWorkflowRunColor) {
+      this.db.exec("ALTER TABLE workflow_runs ADD COLUMN color TEXT NOT NULL DEFAULT '#888888'")
     }
   }
 
@@ -1135,6 +1164,12 @@ export class KanbanDB {
     ).run()
   }
 
+  getNextRunColor(): string {
+    const activeRuns = this.getActiveWorkflowRuns()
+    const usedColors = activeRuns.map(run => run.color).filter(c => c && c !== "#888888")
+    return pickRunColor(usedColors)
+  }
+
   createWorkflowRun(data: {
     kind: WorkflowRunKind
     displayName: string
@@ -1147,6 +1182,7 @@ export class KanbanDB {
     stopRequested?: boolean
     errorMessage?: string | null
     finishedAt?: number | null
+    color?: string
   }): WorkflowRun {
     const id = Math.random().toString(36).substring(2, 10)
     const now = Math.floor(Date.now() / 1000)
@@ -1154,8 +1190,8 @@ export class KanbanDB {
       INSERT INTO workflow_runs (
         id, kind, status, display_name, target_task_id, task_order_json,
         current_task_id, current_task_index, pause_requested, stop_requested,
-        error_message, created_at, started_at, updated_at, finished_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        error_message, created_at, started_at, updated_at, finished_at, color
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       data.kind,
@@ -1172,6 +1208,7 @@ export class KanbanDB {
       now,
       now,
       data.finishedAt ?? null,
+      data.color ?? "#888888",
     )
     return this.getWorkflowRun(id)!
   }

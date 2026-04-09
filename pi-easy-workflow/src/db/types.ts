@@ -210,6 +210,7 @@ export interface CreateWorkflowRunInput {
   createdAt?: number
   startedAt?: number
   finishedAt?: number | null
+  color?: string
 }
 
 export interface UpdateWorkflowRunInput {

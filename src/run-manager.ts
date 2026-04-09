@@ -60,6 +60,7 @@ export class WorkflowRunManager {
       kind: "all_tasks",
       displayName: `Workflow run (${taskIds.length} task${taskIds.length === 1 ? "" : "s"})`,
       taskOrder: taskIds,
+      color: this.db.getNextRunColor(),
     })
     this.server.broadcast({ type: "run_created", payload: run })
     void this.ensureRunProcessing(run.id)
@@ -74,6 +75,7 @@ export class WorkflowRunManager {
       displayName: targetTask ? `Task run: ${targetTask.name}` : `Task run: ${taskId}`,
       targetTaskId: taskId,
       taskOrder: taskIds,
+      color: this.db.getNextRunColor(),
     })
     this.server.broadcast({ type: "run_created", payload: run })
     void this.ensureRunProcessing(run.id)

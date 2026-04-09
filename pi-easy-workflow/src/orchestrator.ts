@@ -74,6 +74,7 @@ export class PiOrchestrator {
       taskOrder: tasks.map((task) => task.id),
       currentTaskId: tasks[0]?.id ?? null,
       currentTaskIndex: 0,
+      color: this.db.getNextRunColor(),
     })
 
     this.currentRunId = run.id
@@ -102,6 +103,7 @@ export class PiOrchestrator {
       taskOrder: chain.map((task) => task.id),
       currentTaskId: chain[0]?.id ?? null,
       currentTaskIndex: 0,
+      color: this.db.getNextRunColor(),
     })
 
     this.currentRunId = run.id

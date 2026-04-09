@@ -101,6 +101,7 @@ export interface WorkflowRun {
   finishedAt: number | null
   isArchived: boolean
   archivedAt: number | null
+  color: string
 }
 
 export interface TaskRun {

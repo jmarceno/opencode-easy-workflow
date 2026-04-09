@@ -181,6 +181,9 @@ body::-webkit-scrollbar-thumb:hover,
 .run-status.paused { color: #79c0ff; }
 .run-status.failed { color: var(--red); }
 .run-status.completed { color: var(--text-dim); }
+.run-color-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+.card.run-highlight { border-left: 3px solid; padding-left: 9px; }
+.card.run-highlight-left { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; border-radius: var(--radius) 0 0 var(--radius); }
 .btn { padding: 6px 16px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface2); color: var(--text); cursor: pointer; font-size: 13px; font-weight: 500; transition: all .15s; }
 .btn:hover { border-color: var(--text-dim); }
 .btn-primary { background: var(--green); border-color: var(--green); color: #fff; }
@@ -1319,7 +1322,8 @@ function renderRunPanel() {
     const meta = document.createElement('div')
     meta.className = 'run-item-meta'
     const currentTask = run.currentTaskId ? `Current: ${getTaskName(run.currentTaskId)}` : 'Current: idle'
-    meta.innerHTML = `<span class="run-status ${run.status}">${run.status}</span><span>${run.kind}</span><span>${getRunProgressLabel(run)}</span><span>${currentTask}</span>`
+    const runColor = run.color || '#888888'
+    meta.innerHTML = `<span class="run-status ${run.status}"><span class="run-color-dot" style="background-color: ${runColor}"></span>${run.status}</span><span>${run.kind}</span><span>${getRunProgressLabel(run)}</span><span>${currentTask}</span>`
     main.appendChild(meta)
 
     if (run.errorMessage) {
@@ -1933,10 +1937,28 @@ function renderBoard() {
   }
 }
 
+function getTaskRunColor(taskId) {
+  for (const run of allRuns) {
+    if (run.status === 'running' || run.status === 'stopping' || run.status === 'paused') {
+      if (run.taskOrder && run.taskOrder.includes(taskId)) {
+        return run.color || '#888888'
+      }
+    }
+  }
+  return null
+}
+
 function renderCard(task, colStatus) {
   const card = document.createElement('div')
   card.className = 'card'
   card.dataset.id = task.id
+
+  // Check if task is part of an active workflow run and add color highlight
+  const runColor = getTaskRunColor(task.id)
+  if (runColor) {
+    card.style.borderLeft = `3px solid ${runColor}`
+    card.style.paddingLeft = '9px'
+  }
 
   if (colStatus === 'backlog') {
     card.draggable = !isTaskMutationLocked(task)

@@ -52,6 +52,28 @@ import type {
 import { renderTemplate } from "./prompts/renderer.ts"
 import { projectPiEventToSessionMessage } from "./runtime/message-projection.ts"
 
+// Color palette for workflow runs - distinct colors that work well with dark theme
+const RUN_COLORS = [
+  "#ff6b6b", // Red
+  "#4ecdc4", // Teal
+  "#45b7d1", // Blue
+  "#96ceb4", // Green
+  "#feca57", // Yellow
+  "#ff9ff3", // Pink
+  "#54a0ff", // Light Blue
+  "#48dbfb", // Cyan
+  "#1dd1a1", // Mint
+  "#ffc048", // Orange
+  "#5f27cd", // Purple
+  "#00d2d3", // Turquoise
+]
+
+function pickRunColor(usedColors: string[]): string {
+  const available = RUN_COLORS.filter(c => !usedColors.includes(c))
+  if (available.length === 0) return RUN_COLORS[Math.floor(Math.random() * RUN_COLORS.length)]
+  return available[0]
+}
+
 const DEFAULT_OPTIONS: Options = {
   commitPrompt: DEFAULT_COMMIT_PROMPT,
   extraPrompt: "",
@@ -579,6 +601,7 @@ function rowToWorkflowRun(row: Record<string, unknown>): WorkflowRun {
     finishedAt: row.finished_at === null || row.finished_at === undefined ? null : Number(row.finished_at),
     isArchived: Number(row.is_archived ?? 0) === 1,
     archivedAt: row.archived_at === null || row.archived_at === undefined ? null : Number(row.archived_at),
+    color: row.color ? String(row.color) : "#888888",
   }
 }
 
@@ -747,7 +770,8 @@ const MIGRATIONS: Migration[] = [
         updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
         finished_at INTEGER,
         is_archived INTEGER NOT NULL DEFAULT 0,
-        archived_at INTEGER
+        archived_at INTEGER,
+        color TEXT NOT NULL DEFAULT '#888888'
       );
       `,
       `CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status);`,
@@ -1063,6 +1087,10 @@ export class PiKanbanDB {
     const hasArchivedAt = columns.some((column) => column.name === "archived_at")
     if (!hasArchivedAt) {
       this.db.exec("ALTER TABLE workflow_runs ADD COLUMN archived_at INTEGER")
+    }
+    const hasColor = columns.some((column) => column.name === "color")
+    if (!hasColor) {
+      this.db.exec("ALTER TABLE workflow_runs ADD COLUMN color TEXT NOT NULL DEFAULT '#888888'")
     }
   }
 
@@ -1628,6 +1656,12 @@ export class PiKanbanDB {
 
   // ---- workflow runs ----
 
+  getNextRunColor(): string {
+    const rows = this.db.prepare("SELECT color FROM workflow_runs WHERE is_archived = 0 AND status IN ('running', 'stopping', 'paused')").all() as Record<string, unknown>[]
+    const usedColors = rows.map((row) => row.color).filter((c): c is string => typeof c === "string" && c !== "#888888")
+    return pickRunColor(usedColors)
+  }
+
   createWorkflowRun(input: CreateWorkflowRunInput): WorkflowRun {
     const now = nowUnix()
     const createdAt = input.createdAt ?? now
@@ -1638,8 +1672,8 @@ export class PiKanbanDB {
         INSERT INTO workflow_runs (
           id, kind, status, display_name, target_task_id, task_order_json,
           current_task_id, current_task_index, pause_requested, stop_requested,
-          error_message, created_at, started_at, updated_at, finished_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          error_message, created_at, started_at, updated_at, finished_at, color
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         input.id,
@@ -1657,6 +1691,7 @@ export class PiKanbanDB {
         startedAt,
         now,
         input.finishedAt ?? null,
+        input.color ?? "#888888",
       )
 
     return this.getWorkflowRun(input.id) as WorkflowRun
