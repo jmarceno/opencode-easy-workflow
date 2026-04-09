@@ -28,9 +28,7 @@ function initGitRepo(root: string): void {
 
 function createMockPiBinary(root: string): string {
   const filePath = join(root, "mock-pi-best-of-n.js")
-  writeFileSync(
-    filePath,
-    `#!/usr/bin/env bun
+  const mockScript = `#!/usr/bin/env bun
 import { createInterface } from "readline"
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
@@ -39,16 +37,15 @@ rl.on("line", (line) => {
   try { request = JSON.parse(line) } catch { return }
 
   const id = request?.id
-  const method = request?.method
-  const params = request?.params || {}
+  const type = request?.type
 
-  if (method === "initialize") {
-    console.log(JSON.stringify({ id, result: { sessionId: "pi-session-" + id, sessionFile: "/tmp/mock" } }))
+  if (type === "set_model" || type === "set_thinking_level") {
+    console.log(JSON.stringify({ id, type: "response", command: type, success: true }))
     return
   }
 
-  if (method === "prompt") {
-    const prompt = String(params.prompt || "")
+  if (type === "prompt") {
+    const prompt = String(request?.message || "")
 
     if (prompt.includes("reviewer in a best-of-n workflow")) {
       if (prompt.includes("force-manual")) {
@@ -61,8 +58,9 @@ rl.on("line", (line) => {
           recommendedPrompt: "Stop for manual review"
         }
         const text = JSON.stringify(manual)
-        console.log(JSON.stringify({ method: "assistant_message", params: { role: "assistant", text } }))
-        console.log(JSON.stringify({ id, result: { text } }))
+        console.log(JSON.stringify({ id, type: "response", command: "prompt", success: true, data: { text } }))
+        console.log(JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_complete", text } }))
+        console.log(JSON.stringify({ type: "agent_end" }))
         return
       }
 
@@ -75,8 +73,9 @@ rl.on("line", (line) => {
         recommendedPrompt: "Prefer candidate-1 approach"
       }
       const text = JSON.stringify(result)
-      console.log(JSON.stringify({ method: "assistant_message", params: { role: "assistant", text } }))
-      console.log(JSON.stringify({ id, result: { text } }))
+      console.log(JSON.stringify({ id, type: "response", command: "prompt", success: true, data: { text } }))
+      console.log(JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_complete", text } }))
+      console.log(JSON.stringify({ type: "agent_end" }))
       return
     }
 
@@ -84,21 +83,21 @@ rl.on("line", (line) => {
     if (prompt.includes("final applier in a best-of-n workflow")) {
       text = "Final applier completed integration"
     }
-    console.log(JSON.stringify({ method: "assistant_message", params: { role: "assistant", text } }))
-    console.log(JSON.stringify({ id, result: { text } }))
+    console.log(JSON.stringify({ id, type: "response", command: "prompt", success: true, data: { text } }))
+    console.log(JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_complete", text } }))
+    console.log(JSON.stringify({ type: "agent_end" }))
     return
   }
 
-  if (method === "get_messages") {
-    console.log(JSON.stringify({ id, result: { messages: [{ text: "snapshot" }] } }))
+  if (type === "get_messages") {
+    console.log(JSON.stringify({ id, type: "response", command: "get_messages", success: true, data: { messages: [{ text: "snapshot" }] } }))
     return
   }
 
-  console.log(JSON.stringify({ id, result: { ok: true } }))
+  console.log(JSON.stringify({ id, type: "response", command: type, success: true, data: { ok: true } }))
 })
-`,
-    "utf-8",
-  )
+`
+  writeFileSync(filePath, mockScript, "utf-8")
   chmodSync(filePath, 0o755)
   return filePath
 }

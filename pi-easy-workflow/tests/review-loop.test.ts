@@ -29,9 +29,8 @@ function initGitRepo(root: string): void {
 function createMockPiBinary(root: string, mode: "one_gap_then_pass" | "malformed" | "always_gaps"): string {
   const filePath = join(root, "mock-pi-review.js")
   const counterPath = join(root, "review-counter.txt")
-  writeFileSync(
-    filePath,
-    `#!/usr/bin/env bun
+
+  const mockScript = `#!/usr/bin/env bun
 import { createInterface } from "readline"
 import { readFileSync, writeFileSync } from "fs"
 const mode = ${JSON.stringify(mode)}
@@ -43,47 +42,64 @@ rl.on("line", (line) => {
     return
   }
   const id = request?.id
-  const method = request?.method
-  const prompt = String(request?.params?.prompt || "")
-  if (method === "initialize") {
-    console.log(JSON.stringify({ id, result: { sessionId: "review-session-" + id, sessionFile: "/tmp/mock-review-session" } }))
+  const type = request?.type
+  const message = String(request?.message || "")
+
+  // Handle set_model and set_thinking_level
+  if (type === "set_model" || type === "set_thinking_level") {
+    console.log(JSON.stringify({ id, type: "response", command: type, success: true }))
     return
   }
-  if (method === "prompt") {
-    if (prompt.includes("Review the current repository state") || prompt.includes("Review the task review file at:")) {
+
+  // Handle prompt command
+  if (type === "prompt") {
+    // Send success response first
+    console.log(JSON.stringify({ id, type: "response", command: "prompt", success: true }))
+
+    // Then send message_update events and agent_end
+    if (message.includes("Review the current repository state") || message.includes("Review the task review file at:")) {
       let reviewCount = 0
       try { reviewCount = Number(readFileSync(counterPath, "utf-8")) || 0 } catch {}
       reviewCount += 1
       writeFileSync(counterPath, String(reviewCount), "utf-8")
+
+      let textContent = ""
       if (mode === "malformed") {
-        console.log(JSON.stringify({ id, result: { text: "not-json-response" } }))
-        return
+        textContent = "not-json-response"
+      } else if (mode === "always_gaps") {
+        textContent = JSON.stringify({ status: "gaps_found", summary: "Still missing pieces", gaps: ["Gap A"], recommendedPrompt: "Fix Gap A" })
+      } else {
+        const payload = reviewCount === 1
+          ? { status: "gaps_found", summary: "Need one fix", gaps: ["Missing guard"], recommendedPrompt: "Add the missing guard and tests" }
+          : { status: "pass", summary: "Looks good", gaps: [], recommendedPrompt: "" }
+        textContent = JSON.stringify(payload)
       }
-      if (mode === "always_gaps") {
-        console.log(JSON.stringify({ id, result: { text: JSON.stringify({ status: "gaps_found", summary: "Still missing pieces", gaps: ["Gap A"], recommendedPrompt: "Fix Gap A" }) } }))
-        return
-      }
-      const payload = reviewCount === 1
-        ? { status: "gaps_found", summary: "Need one fix", gaps: ["Missing guard"], recommendedPrompt: "Add the missing guard and tests" }
-        : { status: "pass", summary: "Looks good", gaps: [], recommendedPrompt: "" }
-      console.log(JSON.stringify({ id, result: { text: JSON.stringify(payload) } }))
+
+      console.log(JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_complete", text: textContent } }))
+      console.log(JSON.stringify({ type: "agent_end" }))
       return
     }
-    if (prompt.includes("Address the issues found during review")) {
-      console.log(JSON.stringify({ id, result: { text: "Applied review fixes" } }))
+    if (message.includes("Address the issues found during review")) {
+      console.log(JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_complete", text: "Applied review fixes" } }))
+      console.log(JSON.stringify({ type: "agent_end" }))
       return
     }
-    console.log(JSON.stringify({ id, result: { text: "Implemented baseline task" } }))
+    console.log(JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_complete", text: "Implemented baseline task" } }))
+    console.log(JSON.stringify({ type: "agent_end" }))
     return
   }
-  if (method === "get_messages") {
-    console.log(JSON.stringify({ id, result: { messages: [{ text: "snapshot" }] } }))
+
+  // Handle get_messages
+  if (type === "get_messages") {
+    console.log(JSON.stringify({ id, type: "response", command: "get_messages", success: true, data: { messages: [{ text: "snapshot" }] } }))
     return
   }
-  console.log(JSON.stringify({ id, result: { ok: true } }))
-})\n`,
-    "utf-8",
-  )
+
+  // Default response for unknown commands
+  console.log(JSON.stringify({ id, type: "response", command: type, success: true }))
+})`
+
+  writeFileSync(filePath, mockScript, "utf-8")
   chmodSync(filePath, 0o755)
   return filePath
 }

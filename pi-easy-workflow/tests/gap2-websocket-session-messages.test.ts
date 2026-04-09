@@ -31,9 +31,7 @@ function initGitRepo(root: string): void {
 
 function createMockPiBinary(root: string): string {
   const filePath = join(root, "mock-pi.js")
-  writeFileSync(
-    filePath,
-    `#!/usr/bin/env bun
+  const mockScript = `#!/usr/bin/env bun
 import { createInterface } from "readline"
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
 rl.on("line", (line) => {
@@ -42,35 +40,52 @@ rl.on("line", (line) => {
     return
   }
   const id = request?.id
-  const method = request?.method
+  const type = request?.type
   const params = request?.params || {}
-  if (method === "initialize") {
-    console.log(JSON.stringify({ id, result: { sessionId: "pi-session-" + id, sessionFile: "/tmp/mock-session" } }))
+
+  if (type === "initialize") {
+    console.log(JSON.stringify({ id, type: "response", command: "initialize", success: true, data: { sessionId: "pi-session-" + id, sessionFile: "/tmp/mock-session" } }))
     return
   }
-  if (method === "prompt") {
-    // Simulate assistant message event (will create a session message)
-    console.log(JSON.stringify({ 
-      method: "assistant_message", 
-      params: { 
-        role: "assistant", 
+
+  if (type === "set_model") {
+    console.log(JSON.stringify({ id, type: "response", command: "set_model", success: true }))
+    return
+  }
+
+  if (type === "set_thinking_level") {
+    console.log(JSON.stringify({ id, type: "response", command: "set_thinking_level", success: true }))
+    return
+  }
+
+  if (type === "prompt") {
+    // First send success response
+    console.log(JSON.stringify({ id, type: "response", command: "prompt", success: true }))
+    // Then send message_update events (will create session messages)
+    const messageId = "msg-" + Date.now()
+    console.log(JSON.stringify({
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "text_complete",
         text: "Mock response from Pi",
-        messageId: "msg-" + Date.now()
-      } 
+        messageId: messageId
+      }
     }))
-    // Then send the RPC response
-    console.log(JSON.stringify({ id, result: { text: "Mock response from Pi" } }))
+    // Finally send agent_end marker
+    console.log(JSON.stringify({ type: "agent_end" }))
     return
   }
-  if (method === "get_messages") {
-    console.log(JSON.stringify({ id, result: { messages: [{ text: "snapshot" }] } }))
+
+  if (type === "get_messages") {
+    console.log(JSON.stringify({ id, type: "response", command: "get_messages", success: true, data: { messages: [{ text: "snapshot" }] } }))
     return
   }
-  console.log(JSON.stringify({ id, result: { ok: true } }))
+
+  // Default response for unknown commands
+  console.log(JSON.stringify({ id, type: "response", command: type || "unknown", success: true }))
 })
-`,
-    "utf-8",
-  )
+`
+  writeFileSync(filePath, mockScript, "utf-8")
   chmodSync(filePath, 0o755)
   return filePath
 }
@@ -145,10 +160,10 @@ describe("GAP 2: WebSocket Session Message Broadcasting", () => {
       process_.start()
 
       // Send initialize command
-      await process_.send("initialize", { cwd: root }, 5000)
+      await process_.send({ type: "initialize", cwd: root }, 5000)
 
       // Send prompt command (this should generate a session message)
-      await process_.send("prompt", { prompt: "Test prompt" }, 5000)
+      await process_.send({ type: "prompt", message: "Test prompt" }, 5000)
 
       await process_.close()
 
@@ -166,35 +181,56 @@ describe("GAP 2: WebSocket Session Message Broadcasting", () => {
 
       // Create a mock that sends events without content (should not create session messages)
       const mockPi = join(root, "mock-pi-empty.js")
-      writeFileSync(
-        mockPi,
-        `#!/usr/bin/env bun
+      const mockScript = `#!/usr/bin/env bun
 import { createInterface } from "readline"
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
 rl.on("line", (line) => {
   let request = null
   try { request = JSON.parse(line) } catch { return }
   const id = request?.id
-  const method = request?.method
-  
-  if (method === "initialize") {
-    console.log(JSON.stringify({ id, result: { sessionId: "test", sessionFile: "/tmp/test" } }))
+  const type = request?.type
+
+  if (type === "initialize") {
+    console.log(JSON.stringify({ id, type: "response", command: "initialize", success: true, data: { sessionId: "test", sessionFile: "/tmp/test" } }))
     return
   }
-  if (method === "prompt") {
-    // Send a message without proper content structure (no messageId)
-    console.log(JSON.stringify({ 
-      method: "assistant_message", 
-      params: { role: "assistant" }  // No text, no messageId
+
+  if (type === "set_model") {
+    console.log(JSON.stringify({ id, type: "response", command: "set_model", success: true }))
+    return
+  }
+
+  if (type === "set_thinking_level") {
+    console.log(JSON.stringify({ id, type: "response", command: "set_thinking_level", success: true }))
+    return
+  }
+
+  if (type === "prompt") {
+    // Send success response first
+    console.log(JSON.stringify({ id, type: "response", command: "prompt", success: true }))
+    // Send a message without proper content structure (no messageId in assistantMessageEvent)
+    console.log(JSON.stringify({
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "text_complete",
+        role: "assistant"
+        // No text, no messageId - should not create session messages
+      }
     }))
-    console.log(JSON.stringify({ id, result: { text: "" } }))
+    // End marker
+    console.log(JSON.stringify({ type: "agent_end" }))
     return
   }
-  console.log(JSON.stringify({ id, result: { ok: true } }))
+
+  if (type === "get_messages") {
+    console.log(JSON.stringify({ id, type: "response", command: "get_messages", success: true, data: { messages: [] } }))
+    return
+  }
+
+  console.log(JSON.stringify({ id, type: "response", command: type || "unknown", success: true }))
 })
-`,
-        "utf-8",
-      )
+`
+      writeFileSync(mockPi, mockScript, "utf-8")
       chmodSync(mockPi, 0o755)
 
       process.env.PI_EASY_WORKFLOW_PI_BIN = mockPi
@@ -236,8 +272,8 @@ rl.on("line", (line) => {
       })
 
       process_.start()
-      await process_.send("initialize", { cwd: root }, 5000)
-      await process_.send("prompt", { prompt: "Test" }, 5000)
+      await process_.send({ type: "initialize", cwd: root }, 5000)
+      await process_.send({ type: "prompt", message: "Test" }, 5000)
       await process_.close()
 
       // The session message creation depends on contentJson having keys
