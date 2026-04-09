@@ -7,7 +7,11 @@
     "start": "bun run src/index.ts",
     "dev": "bun run --watch src/index.ts",
     "build": "bun build --target=bun src/index.ts --outdir dist",
-    "test": "bun test"
+    "test": "bun test",
+    "skills:sync": "bun run scripts/sync-skills.ts",
+    "skills:install": "bun run scripts/sync-skills.ts --clean",
+    "skills:verify": "bun run scripts/verify-setup.ts",
+    "setup": "bun run skills:install && bun run skills:verify"
   },
   "devDependencies": {
     "@types/bun": "latest"

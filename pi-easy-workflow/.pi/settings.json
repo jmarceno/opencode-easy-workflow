@@ -1,0 +1,11 @@
+{
+  "skills": {
+    "localPath": "./skills",
+    "autoLoad": true,
+    "allowGlobal": false
+  },
+  "project": {
+    "name": "pi-easy-workflow",
+    "type": "workflow"
+  }
+}
