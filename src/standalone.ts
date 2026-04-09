@@ -11,7 +11,7 @@ import { join, resolve } from "path"
 import { createInterface } from "readline"
 import { KanbanDB } from "./db"
 import { KanbanServer } from "./server"
-import { Orchestrator } from "./orchestrator"
+import { WorkflowRunManager } from "./run-manager"
 
 const WORKFLOW_DIR = join(process.cwd(), ".opencode", "easy-workflow")
 const CONFIG_PATH = join(WORKFLOW_DIR, "config.json")
@@ -148,41 +148,42 @@ async function main() {
     return config!.opencodeServerUrl
   }
 
-  // Initialize orchestrator (created before server to pass to it)
-  let orchestrator: Orchestrator | null = null
+  let runManager: WorkflowRunManager | null = null
 
   // Initialize kanban server
   const kanbanServer = new KanbanServer(db, {
     onStart: async () => {
-      if (orchestrator) await orchestrator.start()
+      if (!runManager) throw new Error("Run manager not initialized")
+      return runManager.startAll()
     },
     onStartSingle: async (taskId: string) => {
-      if (orchestrator) await orchestrator.startSingle(taskId)
+      if (!runManager) throw new Error("Run manager not initialized")
+      return runManager.startSingle(taskId)
     },
-    onStop: () => {
-      if (orchestrator) orchestrator.stop()
+    onStop: async () => {
+      if (runManager) await runManager.stopAllActiveRuns()
     },
-    getExecuting: () => orchestrator?.isExecuting() ?? false,
+    onPauseRun: async (runId: string) => {
+      if (!runManager) throw new Error("Run manager not initialized")
+      return runManager.pauseRun(runId)
+    },
+    onResumeRun: async (runId: string) => {
+      if (!runManager) throw new Error("Run manager not initialized")
+      return runManager.resumeRun(runId)
+    },
+    onStopRun: async (runId: string) => {
+      if (!runManager) throw new Error("Run manager not initialized")
+      return runManager.stopRun(runId)
+    },
+    getExecuting: () => runManager?.hasRunningRuns() ?? false,
     getStartError: (taskId?: string) => {
-      return orchestrator ? orchestrator.preflightStartError(taskId) : "Orchestrator not initialized"
+      return runManager ? runManager.getRunStartError(taskId) : "Run manager not initialized"
     },
     getServerUrl,
     ownerDirectory: config.projectDirectory,
   })
 
-  // Initialize orchestrator
-  orchestrator = new Orchestrator(
-    db,
-    kanbanServer,
-    getServerUrl,
-    config.projectDirectory,
-    config.projectDirectory,
-  )
-
-  // Set up workflow completion notification callback
-  orchestrator.setOnWorkflowCompleteCallback(() => {
-    kanbanServer.handleWorkflowComplete()
-  })
+  runManager = new WorkflowRunManager(db, kanbanServer, getServerUrl, config.projectDirectory)
 
   // Start server
   const port = kanbanServer.start()
@@ -193,6 +194,16 @@ async function main() {
     kanbanPort: port,
   }
   saveConfig(configWithPort)
+
+  const staleRuns = await runManager.recoverStaleRuns(async (taskId: string) => {
+    await kanbanServer.repairTaskState(
+      taskId,
+      "Startup stale run recovery: inspect the interrupted task and choose the safest resume/reset/done/fail outcome.",
+    )
+  })
+  if (staleRuns.length > 0) {
+    console.log(`[server] Recovered ${staleRuns.length} stale workflow run(s)`) 
+  }
   
   console.log("============================================")
   console.log("  Server Started Successfully!")

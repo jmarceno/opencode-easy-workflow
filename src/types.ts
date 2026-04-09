@@ -20,6 +20,10 @@ export type RunStatus = "pending" | "running" | "done" | "failed" | "skipped"
 
 export type SelectionMode = "pick_best" | "synthesize" | "pick_or_synthesize"
 
+export type WorkflowRunKind = "all_tasks" | "single_task" | "workflow_review"
+
+export type WorkflowRunStatus = "running" | "paused" | "stopping" | "completed" | "failed"
+
 export interface BestOfNSlot {
   model: string
   count: number
@@ -77,6 +81,24 @@ export interface Task {
   reviewActivity: "idle" | "running"
   isArchived: boolean
   archivedAt: number | null
+}
+
+export interface WorkflowRun {
+  id: string
+  kind: WorkflowRunKind
+  status: WorkflowRunStatus
+  displayName: string
+  targetTaskId: string | null
+  taskOrder: string[]
+  currentTaskId: string | null
+  currentTaskIndex: number
+  pauseRequested: boolean
+  stopRequested: boolean
+  errorMessage: string | null
+  createdAt: number
+  startedAt: number
+  updatedAt: number
+  finishedAt: number | null
 }
 
 export interface TaskRun {
@@ -190,6 +212,8 @@ export type WSMessageType =
   | "execution_started"
   | "execution_stopped"
   | "execution_complete"
+  | "run_created"
+  | "run_updated"
   | "agent_output"
   | "error"
   | "task_run_created"

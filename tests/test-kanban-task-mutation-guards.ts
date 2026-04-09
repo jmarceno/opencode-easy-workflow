@@ -41,7 +41,7 @@ async function createServerWithExecutionLock() {
     onStart: async () => {},
     onStartSingle: async () => {},
     onStop: () => {},
-    getExecuting: () => true,
+    getExecuting: () => false,
     getStartError: () => null,
     getServerUrl: () => "http://127.0.0.1:4096",
   })
@@ -50,13 +50,21 @@ async function createServerWithExecutionLock() {
   return { tempDir, db, server, port }
 }
 
-async function testServerBlocksMutationsWhileExecuting() {
+async function testServerBlocksOnlyActiveTaskMutations() {
   const { tempDir, db, server, port } = await createServerWithExecutionLock()
 
   try {
-    const task = db.createTask({
+    const activeTask = db.createTask({
       name: "Locked task",
       prompt: "No-op",
+      planmode: false,
+      review: false,
+      autoCommit: false,
+      status: "executing",
+    })
+    const editableTask = db.createTask({
+      name: "Editable task",
+      prompt: "Still editable while another task runs",
       planmode: false,
       review: false,
       autoCommit: false,
@@ -71,25 +79,41 @@ async function testServerBlocksMutationsWhileExecuting() {
       executionPhase: "plan_complete_waiting_approval",
       awaitingPlanApproval: true,
     })
+    db.createWorkflowRun({
+      kind: "single_task",
+      displayName: "Running lock test",
+      taskOrder: [activeTask.id],
+      targetTaskId: activeTask.id,
+      currentTaskId: activeTask.id,
+      currentTaskIndex: 0,
+      status: "running",
+    })
 
-    const patchResp = await fetch(`http://127.0.0.1:${port}/api/tasks/${task.id}`, {
+    const patchResp = await fetch(`http://127.0.0.1:${port}/api/tasks/${activeTask.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status: "done" }),
     })
-    assert(patchResp.status === 409, `Expected PATCH to be blocked with 409, got ${patchResp.status}`)
+    assert(patchResp.status === 409, `Expected active task PATCH to be blocked with 409, got ${patchResp.status}`)
 
-    const deleteResp = await fetch(`http://127.0.0.1:${port}/api/tasks/${task.id}`, {
+    const deleteResp = await fetch(`http://127.0.0.1:${port}/api/tasks/${activeTask.id}`, {
       method: "DELETE",
     })
-    assert(deleteResp.status === 409, `Expected DELETE to be blocked with 409, got ${deleteResp.status}`)
+    assert(deleteResp.status === 409, `Expected active task DELETE to be blocked with 409, got ${deleteResp.status}`)
+
+    const editablePatchResp = await fetch(`http://127.0.0.1:${port}/api/tasks/${editableTask.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Editable task updated" }),
+    })
+    assert(editablePatchResp.status !== 409, `Expected unrelated task PATCH to remain allowed, got ${editablePatchResp.status}`)
 
     const reorderResp = await fetch(`http://127.0.0.1:${port}/api/tasks/reorder`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: task.id, newIdx: 0 }),
+      body: JSON.stringify({ id: editableTask.id, newIdx: 0 }),
     })
-    assert(reorderResp.status === 409, `Expected reorder to be blocked with 409, got ${reorderResp.status}`)
+    assert(reorderResp.status !== 409, `Expected reorder to remain allowed during unrelated execution, got ${reorderResp.status}`)
 
     const approveResp = await fetch(`http://127.0.0.1:${port}/api/tasks/${planTask.id}/approve-plan`, {
       method: "POST",
@@ -103,7 +127,7 @@ async function testServerBlocksMutationsWhileExecuting() {
     })
     assert(reviewPatchResp.status !== 409, `Expected review task PATCH to remain actionable, got ${reviewPatchResp.status}`)
 
-    console.log("✓ server blocks task mutations while execution is running")
+    console.log("✓ server only blocks mutations for the actively executing task")
   } finally {
     server.stop()
     db.close()
@@ -163,7 +187,7 @@ async function testOrchestratorReportsDeletedTaskCleanly() {
 }
 
 async function main() {
-  await testServerBlocksMutationsWhileExecuting()
+  await testServerBlocksOnlyActiveTaskMutations()
   await testOrchestratorReportsDeletedTaskCleanly()
   console.log("\nAll mutation guard tests passed")
 }

@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite"
 import { mkdirSync } from "fs"
 import { dirname } from "path"
-import type { Task, TaskStatus, Options, ThinkingLevel, ExecutionPhase, ExecutionStrategy, BestOfNConfig, BestOfNSubstage, TaskRun, TaskCandidate, RunPhase, RunStatus, SessionMessage, CreateSessionMessageInput } from "./types"
+import type { Task, TaskStatus, Options, ThinkingLevel, ExecutionPhase, ExecutionStrategy, BestOfNConfig, BestOfNSubstage, TaskRun, TaskCandidate, RunPhase, RunStatus, SessionMessage, CreateSessionMessageInput, WorkflowRun, WorkflowRunKind, WorkflowRunStatus } from "./types"
 import { DEFAULT_COMMIT_PROMPT } from "./types"
 import { hasCapturedPlanOutput, hasCapturedRevisionRequest } from "./task-state"
 
@@ -81,6 +81,26 @@ function rowToTask(row: any): Task {
     reviewActivity: normalizeReviewActivity(row.review_activity),
     isArchived: row.is_archived === 1,
     archivedAt: row.archived_at ?? null,
+  }
+}
+
+function rowToWorkflowRun(row: any): WorkflowRun {
+  return {
+    id: row.id,
+    kind: row.kind as WorkflowRunKind,
+    status: row.status as WorkflowRunStatus,
+    displayName: row.display_name,
+    targetTaskId: row.target_task_id ?? null,
+    taskOrder: JSON.parse(row.task_order_json || "[]"),
+    currentTaskId: row.current_task_id ?? null,
+    currentTaskIndex: row.current_task_index ?? 0,
+    pauseRequested: row.pause_requested === 1,
+    stopRequested: row.stop_requested === 1,
+    errorMessage: row.error_message ?? null,
+    createdAt: row.created_at,
+    startedAt: row.started_at,
+    updatedAt: row.updated_at,
+    finishedAt: row.finished_at ?? null,
   }
 }
 
@@ -246,12 +266,32 @@ export class KanbanDB {
         value TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS workflow_runs (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'running',
+        display_name TEXT NOT NULL DEFAULT '',
+        target_task_id TEXT,
+        task_order_json TEXT NOT NULL DEFAULT '[]',
+        current_task_id TEXT,
+        current_task_index INTEGER NOT NULL DEFAULT 0,
+        pause_requested INTEGER NOT NULL DEFAULT 0,
+        stop_requested INTEGER NOT NULL DEFAULT 0,
+        error_message TEXT,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        started_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        finished_at INTEGER
+      );
+
       CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
       CREATE INDEX IF NOT EXISTS idx_tasks_idx ON tasks(idx);
       CREATE INDEX IF NOT EXISTS idx_task_runs_task_id ON task_runs(task_id);
       CREATE INDEX IF NOT EXISTS idx_task_runs_phase ON task_runs(phase);
       CREATE INDEX IF NOT EXISTS idx_task_runs_status ON task_runs(status);
       CREATE INDEX IF NOT EXISTS idx_task_candidates_task_id ON task_candidates(task_id);
+      CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status);
+      CREATE INDEX IF NOT EXISTS idx_workflow_runs_current_task_id ON workflow_runs(current_task_id);
 
       CREATE TABLE IF NOT EXISTS workflow_sessions (
         session_id TEXT PRIMARY KEY,
@@ -524,6 +564,31 @@ export class KanbanDB {
         `)
         console.log("[db] Migration complete: foreign key constraints removed")
       }
+    }
+
+    const hasWorkflowRunsTable = this.db.prepare("SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name='workflow_runs'").get() as any
+    if (hasWorkflowRunsTable.cnt === 0) {
+      this.db.exec(`
+        CREATE TABLE workflow_runs (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'running',
+          display_name TEXT NOT NULL DEFAULT '',
+          target_task_id TEXT,
+          task_order_json TEXT NOT NULL DEFAULT '[]',
+          current_task_id TEXT,
+          current_task_index INTEGER NOT NULL DEFAULT 0,
+          pause_requested INTEGER NOT NULL DEFAULT 0,
+          stop_requested INTEGER NOT NULL DEFAULT 0,
+          error_message TEXT,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          started_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          finished_at INTEGER
+        );
+        CREATE INDEX idx_workflow_runs_status ON workflow_runs(status);
+        CREATE INDEX idx_workflow_runs_current_task_id ON workflow_runs(current_task_id);
+      `)
     }
   }
 
@@ -1054,6 +1119,130 @@ export class KanbanDB {
     ).run()
   }
 
+  createWorkflowRun(data: {
+    kind: WorkflowRunKind
+    displayName: string
+    taskOrder: string[]
+    targetTaskId?: string | null
+    status?: WorkflowRunStatus
+    currentTaskId?: string | null
+    currentTaskIndex?: number
+    pauseRequested?: boolean
+    stopRequested?: boolean
+    errorMessage?: string | null
+    finishedAt?: number | null
+  }): WorkflowRun {
+    const id = Math.random().toString(36).substring(2, 10)
+    const now = Math.floor(Date.now() / 1000)
+    this.db.prepare(`
+      INSERT INTO workflow_runs (
+        id, kind, status, display_name, target_task_id, task_order_json,
+        current_task_id, current_task_index, pause_requested, stop_requested,
+        error_message, created_at, started_at, updated_at, finished_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      data.kind,
+      data.status ?? "running",
+      data.displayName,
+      data.targetTaskId ?? null,
+      JSON.stringify(data.taskOrder),
+      data.currentTaskId ?? null,
+      data.currentTaskIndex ?? 0,
+      data.pauseRequested ? 1 : 0,
+      data.stopRequested ? 1 : 0,
+      data.errorMessage ?? null,
+      now,
+      now,
+      now,
+      data.finishedAt ?? null,
+    )
+    return this.getWorkflowRun(id)!
+  }
+
+  getWorkflowRun(id: string): WorkflowRun | null {
+    const row = this.db.prepare("SELECT * FROM workflow_runs WHERE id = ?").get(id) as any
+    return row ? rowToWorkflowRun(row) : null
+  }
+
+  getWorkflowRuns(): WorkflowRun[] {
+    const rows = this.db.prepare("SELECT * FROM workflow_runs ORDER BY started_at DESC, created_at DESC").all() as any[]
+    return rows.map(rowToWorkflowRun)
+  }
+
+  getActiveWorkflowRuns(): WorkflowRun[] {
+    const rows = this.db.prepare("SELECT * FROM workflow_runs WHERE status IN ('running', 'stopping') ORDER BY started_at ASC, created_at ASC").all() as any[]
+    return rows.map(rowToWorkflowRun)
+  }
+
+  countConsumedWorkflowSlots(): number {
+    const row = this.db.prepare("SELECT COUNT(*) as cnt FROM workflow_runs WHERE status IN ('running', 'stopping')").get() as any
+    return row?.cnt ?? 0
+  }
+
+  getActiveWorkflowRunForTask(taskId: string): WorkflowRun | null {
+    const row = this.db.prepare("SELECT * FROM workflow_runs WHERE current_task_id = ? AND status IN ('running', 'stopping') ORDER BY started_at ASC LIMIT 1").get(taskId) as any
+    return row ? rowToWorkflowRun(row) : null
+  }
+
+  updateWorkflowRun(id: string, updates: Partial<{
+    status: WorkflowRunStatus
+    displayName: string
+    targetTaskId: string | null
+    taskOrder: string[]
+    currentTaskId: string | null
+    currentTaskIndex: number
+    pauseRequested: boolean
+    stopRequested: boolean
+    errorMessage: string | null
+    startedAt: number
+    finishedAt: number | null
+  }>): WorkflowRun | null {
+    const sets: string[] = []
+    const values: any[] = []
+
+    if (updates.status !== undefined) { sets.push("status = ?"); values.push(updates.status) }
+    if (updates.displayName !== undefined) { sets.push("display_name = ?"); values.push(updates.displayName) }
+    if (updates.targetTaskId !== undefined) { sets.push("target_task_id = ?"); values.push(updates.targetTaskId) }
+    if (updates.taskOrder !== undefined) { sets.push("task_order_json = ?"); values.push(JSON.stringify(updates.taskOrder)) }
+    if (updates.currentTaskId !== undefined) { sets.push("current_task_id = ?"); values.push(updates.currentTaskId) }
+    if (updates.currentTaskIndex !== undefined) { sets.push("current_task_index = ?"); values.push(updates.currentTaskIndex) }
+    if (updates.pauseRequested !== undefined) { sets.push("pause_requested = ?"); values.push(updates.pauseRequested ? 1 : 0) }
+    if (updates.stopRequested !== undefined) { sets.push("stop_requested = ?"); values.push(updates.stopRequested ? 1 : 0) }
+    if (updates.errorMessage !== undefined) { sets.push("error_message = ?"); values.push(updates.errorMessage) }
+    if (updates.startedAt !== undefined) { sets.push("started_at = ?"); values.push(updates.startedAt) }
+    if (updates.finishedAt !== undefined) { sets.push("finished_at = ?"); values.push(updates.finishedAt) }
+
+    if (sets.length === 0) return this.getWorkflowRun(id)
+
+    sets.push("updated_at = unixepoch()")
+    values.push(id)
+    this.db.prepare(`UPDATE workflow_runs SET ${sets.join(", ")} WHERE id = ?`).run(...values)
+    return this.getWorkflowRun(id)
+  }
+
+  failStaleWorkflowRuns(errorMessage = "Workflow server restarted while this run was active. Review the last task and restart or repair as needed."): WorkflowRun[] {
+    const staleRuns = this.db.prepare("SELECT * FROM workflow_runs WHERE status IN ('running', 'paused', 'stopping') ORDER BY started_at ASC").all() as any[]
+    if (staleRuns.length === 0) return []
+
+    const now = Math.floor(Date.now() / 1000)
+    this.db.prepare(`
+      UPDATE workflow_runs
+      SET status = 'failed', pause_requested = 0, stop_requested = 0, error_message = ?, finished_at = ?, updated_at = ?
+      WHERE status IN ('running', 'paused', 'stopping')
+    `).run(errorMessage, now, now)
+
+    return staleRuns.map((row) => rowToWorkflowRun({
+      ...row,
+      status: "failed",
+      pause_requested: 0,
+      stop_requested: 0,
+      error_message: errorMessage,
+      finished_at: now,
+      updated_at: now,
+    }))
+  }
+
   createTaskRun(data: {
     taskId: string
     phase: RunPhase
@@ -1246,7 +1435,7 @@ export class KanbanDB {
         updated_at = excluded.updated_at
     `).run(
       data.sessionId,
-      data.taskId,
+      data.taskId ?? null,
       data.taskRunId ?? null,
       data.sessionKind,
       data.ownerDirectory,

@@ -4,7 +4,7 @@ import { fileURLToPath } from "url"
 import { dirname } from "path"
 import { homedir } from "os"
 import { execFileSync } from "child_process"
-import type { WSMessage, ThinkingLevel, ExecutionStrategy, BestOfNConfig, SelectionMode } from "./types"
+import type { WSMessage, ThinkingLevel, ExecutionStrategy, BestOfNConfig, SelectionMode, WorkflowRun } from "./types"
 import { KanbanDB } from "./db"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
 import { buildExecutionGraph, getExecutableTasks, isTaskExecutable } from "./execution-plan"
@@ -22,9 +22,10 @@ const WORKFLOW_ROOT = OPENCODE_DIR
 const KANBAN_HTML = readFileSync(join(__dirname, "kanban", "index.html"), "utf-8")
 const REVIEW_AGENT_PATH = join(WORKFLOW_ROOT, "agents", "workflow-review.md")
 
-type StartFn = () => Promise<void>
-type StartSingleFn = (taskId: string) => Promise<void>
-type StopFn = () => void
+type StartFn = () => Promise<any>
+type StartSingleFn = (taskId: string) => Promise<any>
+type StopFn = () => void | Promise<void>
+type RunControlFn = (runId: string) => Promise<any>
 type StartPreflightFn = (taskId?: string) => string | null
 type ServerUrlFn = () => string | null
 
@@ -210,16 +211,8 @@ function hasExecutableTasks(db: KanbanDB): boolean {
   return getExecutableTasks(db.getTasks()).length > 0
 }
 
-function getExecutionMutationError(): string {
-  return "Cannot modify workflow tasks while execution is running. Stop execution first."
-}
-
-function isTaskActionableWhileExecutionRuns(status: string): boolean {
-  return status === "template" || status === "review" || status === "failed" || status === "stuck"
-}
-
-function isTaskMutationLockedWhileExecuting(executing: boolean, status: string): boolean {
-  return executing && !isTaskActionableWhileExecutionRuns(status)
+function getTaskExecutionMutationError(taskName: string, runId: string): string {
+  return `Cannot modify task \"${taskName}\" while it is executing in run ${runId}.`
 }
 
 export class KanbanServer {
@@ -231,20 +224,37 @@ export class KanbanServer {
   private onStop: StopFn
   private getExecuting: () => boolean
   private getStartError: StartPreflightFn
+  private onPauseRun: RunControlFn | null
+  private onResumeRun: RunControlFn | null
+  private onStopRun: RunControlFn | null
   private getServerUrl: ServerUrlFn
   private ownerDirectory: string
   private messageLoggers: Map<string, MessageLogger> = new Map()
 
   constructor(
     db: KanbanDB,
-    opts: { onStart: StartFn; onStartSingle: StartSingleFn; onStop: StopFn; getExecuting: () => boolean; getStartError?: StartPreflightFn; getServerUrl?: ServerUrlFn; ownerDirectory?: string }
+    opts: {
+      onStart?: StartFn
+      onStartSingle?: StartSingleFn
+      onStop?: StopFn
+      getExecuting?: () => boolean
+      getStartError?: StartPreflightFn
+      onPauseRun?: RunControlFn
+      onResumeRun?: RunControlFn
+      onStopRun?: RunControlFn
+      getServerUrl?: ServerUrlFn
+      ownerDirectory?: string
+    }
   ) {
     this.db = db
-    this.onStart = opts.onStart
-    this.onStartSingle = opts.onStartSingle
-    this.onStop = opts.onStop
-    this.getExecuting = opts.getExecuting
+    this.onStart = opts.onStart || (async () => null)
+    this.onStartSingle = opts.onStartSingle || (async () => null)
+    this.onStop = opts.onStop || (() => {})
+    this.getExecuting = opts.getExecuting || (() => false)
     this.getStartError = opts.getStartError || (() => null)
+    this.onPauseRun = opts.onPauseRun || null
+    this.onResumeRun = opts.onResumeRun || null
+    this.onStopRun = opts.onStopRun || null
     this.getServerUrl = opts.getServerUrl || (() => null)
     this.ownerDirectory = opts.ownerDirectory || process.cwd()
 
@@ -306,6 +316,9 @@ export class KanbanServer {
     if (normalized.includes("task not found") || normalized.includes("missing task")) {
       return 404
     }
+    if (normalized.includes("slot") || normalized.includes("already executing")) {
+      return 409
+    }
     if (normalized.includes("opencode server url")) {
       return 500
     }
@@ -313,10 +326,25 @@ export class KanbanServer {
   }
 
   private async maybeAutoStartExecution(): Promise<void> {
-    if (this.getExecuting()) return
     const preflightError = this.getStartError()
     if (preflightError) return
     this.onStart().catch((err) => this.reportExecutionStartFailure(err))
+  }
+
+  private async maybeAutoStartTask(taskId: string): Promise<void> {
+    const preflightError = this.getStartError(taskId)
+    if (preflightError) return
+    this.onStartSingle(taskId).catch((err) => this.reportExecutionStartFailure(err))
+  }
+
+  private getActiveRunForTask(taskId: string): WorkflowRun | null {
+    return this.db.getActiveWorkflowRunForTask(taskId)
+  }
+
+  private getTaskMutationLock(taskId: string, taskName: string): string | null {
+    const activeRun = this.getActiveRunForTask(taskId)
+    if (!activeRun) return null
+    return getTaskExecutionMutationError(taskName, activeRun.id)
   }
 
   private async applyRepairAction(taskId: string, action: TaskRepairAction, reason: string, errorMessage?: string) {
@@ -647,6 +675,55 @@ export class KanbanServer {
     }
   }
 
+  async repairTaskState(taskId: string, smartRepairHints?: string): Promise<void> {
+    const task = this.db.getTask(taskId)
+    if (!task) return
+
+    let action: TaskRepairAction
+    let reason: string
+    let errorMessage: string | undefined
+
+    if (smartRepairHints !== undefined) {
+      this.db.updateTask(taskId, { smartRepairHints })
+    }
+
+    const eligibility = getPlanExecutionEligibility(task)
+    if (!eligibility.ok) {
+      action = "fail_task"
+      reason = eligibility.reason || "Task state is invalid"
+      errorMessage = reason
+    } else if (task.status === "review" || task.status === "executing") {
+      try {
+        const smart = await this.runSmartRepair(taskId)
+        action = smart.action
+        reason = smart.reason
+        errorMessage = smart.errorMessage
+      } catch (smartErr) {
+        const fallback = chooseDeterministicRepairAction(task)
+        action = fallback.action
+        reason = `${fallback.reason} Smart repair fallback: ${smartErr instanceof Error ? smartErr.message : String(smartErr)}`
+      }
+    } else {
+      const deterministic = chooseDeterministicRepairAction(task)
+      action = deterministic.action
+      reason = deterministic.reason
+    }
+
+    const updated = await this.applyRepairAction(taskId, action, reason, errorMessage)
+    if (updated) {
+      this.broadcast({ type: "task_updated", payload: updated })
+      const refreshedTask = this.db.getTask(taskId)
+      const beforeOutput = task.agentOutput ?? ""
+      const afterOutput = refreshedTask?.agentOutput ?? updated.agentOutput ?? ""
+      if (afterOutput.length > beforeOutput.length) {
+        const appended = afterOutput.slice(beforeOutput.length)
+        if (appended) {
+          this.broadcast({ type: "agent_output", payload: { taskId, output: appended } })
+        }
+      }
+    }
+  }
+
   start(): number {
     const port = this.db.getOptions().port
     let server: ReturnType<typeof Bun.serve>
@@ -816,8 +893,9 @@ export class KanbanServer {
         if (method === "PATCH") {
           const existingTask = this.db.getTask(taskId)
           if (!existingTask) return this.json({ error: "Task not found" }, 404)
-          if (isTaskMutationLockedWhileExecuting(this.getExecuting(), existingTask.status)) {
-            return this.json({ error: getExecutionMutationError() }, 409)
+          const taskMutationLock = this.getTaskMutationLock(taskId, existingTask.name)
+          if (taskMutationLock) {
+            return this.json({ error: taskMutationLock }, 409)
           }
 
           const body = await req.json()
@@ -863,8 +941,9 @@ export class KanbanServer {
         if (method === "DELETE") {
           const existingTask = this.db.getTask(taskId)
           if (!existingTask) return this.json({ error: "Task not found" }, 404)
-          if (isTaskMutationLockedWhileExecuting(this.getExecuting(), existingTask.status)) {
-            return this.json({ error: getExecutionMutationError() }, 409)
+          const taskMutationLock = this.getTaskMutationLock(taskId, existingTask.name)
+          if (taskMutationLock) {
+            return this.json({ error: taskMutationLock }, 409)
           }
 
           // Check if task has execution history - if so, archive instead of delete
@@ -886,16 +965,16 @@ export class KanbanServer {
       }
 
       if (method === "PUT" && url.pathname === "/api/tasks/reorder") {
-        if (this.getExecuting()) {
-          return this.json({ error: getExecutionMutationError() }, 409)
-        }
-
         const body = await req.json()
         if (body.id && typeof body.newIdx === "number") {
           this.db.reorderTask(body.id, body.newIdx)
           this.broadcast({ type: "task_reordered", payload: {} })
         }
         return this.json({ ok: true })
+      }
+
+      if (method === "GET" && url.pathname === "/api/runs") {
+        return this.json(this.db.getWorkflowRuns())
       }
 
       // Archive/Delete all done tasks
@@ -1069,15 +1148,12 @@ export class KanbanServer {
 
       // Execution
       if (method === "POST" && url.pathname === "/api/start") {
-        if (this.getExecuting()) {
-          return this.json({ error: "Already executing" }, 409)
-        }
         const preflightError = this.getStartError()
         if (preflightError) {
           return this.json({ error: preflightError }, this.classifyStartError(preflightError))
         }
-        this.onStart().catch((err) => this.reportExecutionStartFailure(err))
-        return this.json({ ok: true })
+        const run = await this.onStart()
+        return this.json(run ?? { ok: true })
       }
 
       if (method === "GET" && url.pathname === "/api/execution-graph") {
@@ -1126,7 +1202,7 @@ export class KanbanServer {
       }
 
       if (method === "POST" && url.pathname === "/api/stop") {
-        this.onStop()
+        await this.onStop()
         return this.json({ ok: true })
       }
 
@@ -1134,9 +1210,6 @@ export class KanbanServer {
         ? url.pathname.match(/^\/api\/tasks\/([a-z0-9]+)\/start$/)
         : null
       if (startSingleMatch) {
-        if (this.getExecuting()) {
-          return this.json({ error: "Already executing" }, 409)
-        }
         const taskId = startSingleMatch[1]
         const task = this.db.getTask(taskId)
         if (!task) {
@@ -1149,8 +1222,38 @@ export class KanbanServer {
         if (preflightError) {
           return this.json({ error: preflightError }, this.classifyStartError(preflightError))
         }
-        this.onStartSingle(taskId).catch((err) => this.reportExecutionStartFailure(err))
-        return this.json({ ok: true })
+        const run = await this.onStartSingle(taskId)
+        return this.json(run ?? { ok: true })
+      }
+
+      const pauseRunMatch = method === "POST"
+        ? url.pathname.match(/^\/api\/runs\/([a-z0-9]+)\/pause$/)
+        : null
+      if (pauseRunMatch) {
+        if (!this.onPauseRun) return this.json({ error: "Run pause is not configured" }, 501)
+        const run = await this.onPauseRun(pauseRunMatch[1])
+        if (!run) return this.json({ error: "Run not found" }, 404)
+        return this.json(run)
+      }
+
+      const resumeRunMatch = method === "POST"
+        ? url.pathname.match(/^\/api\/runs\/([a-z0-9]+)\/resume$/)
+        : null
+      if (resumeRunMatch) {
+        if (!this.onResumeRun) return this.json({ error: "Run resume is not configured" }, 501)
+        const run = await this.onResumeRun(resumeRunMatch[1])
+        if (!run) return this.json({ error: "Run not found" }, 404)
+        return this.json(run)
+      }
+
+      const stopRunMatch = method === "POST"
+        ? url.pathname.match(/^\/api\/runs\/([a-z0-9]+)\/stop$/)
+        : null
+      if (stopRunMatch) {
+        if (!this.onStopRun) return this.json({ error: "Run stop is not configured" }, 501)
+        const run = await this.onStopRun(stopRunMatch[1])
+        if (!run) return this.json({ error: "Run not found" }, 404)
+        return this.json(run)
       }
 
       // Approve plan for planmode task
@@ -1163,8 +1266,9 @@ export class KanbanServer {
         if (!task) {
           return this.json({ error: "Task not found" }, 404)
         }
-        if (isTaskMutationLockedWhileExecuting(this.getExecuting(), task.status)) {
-          return this.json({ error: getExecutionMutationError() }, 409)
+        const taskMutationLock = this.getTaskMutationLock(taskId, task.name)
+        if (taskMutationLock) {
+          return this.json({ error: taskMutationLock }, 409)
         }
         if (!hasCapturedPlanOutput(task.agentOutput)) {
           return this.json({ error: "Task has no captured plan output to approve. Reset it to backlog and rerun planning." }, 400)
@@ -1194,10 +1298,11 @@ export class KanbanServer {
         this.db.updateTask(taskId, {
           awaitingPlanApproval: false,
           executionPhase: "implementation_pending",
-          status: "executing",
+          status: "backlog",
         })
         const updated = this.db.getTask(taskId)!
         this.broadcast({ type: "task_updated", payload: updated })
+        await this.maybeAutoStartTask(taskId)
         return this.json({ ok: true })
       }
 
@@ -1211,8 +1316,9 @@ export class KanbanServer {
         if (!task) {
           return this.json({ error: "Task not found" }, 404)
         }
-        if (isTaskMutationLockedWhileExecuting(this.getExecuting(), task.status)) {
-          return this.json({ error: getExecutionMutationError() }, 409)
+        const taskMutationLock = this.getTaskMutationLock(taskId, task.name)
+        if (taskMutationLock) {
+          return this.json({ error: taskMutationLock }, 409)
         }
         if (!hasCapturedPlanOutput(task.agentOutput)) {
           return this.json({ error: "Task has no captured plan output to revise" }, 400)
@@ -1246,7 +1352,7 @@ export class KanbanServer {
         const updated = this.db.getTask(taskId)!
         this.broadcast({ type: "plan_revision_requested", payload: updated })
         this.broadcast({ type: "task_updated", payload: updated })
-        await this.maybeAutoStartExecution()
+        await this.maybeAutoStartTask(taskId)
         return this.json({ ok: true })
       }
 
@@ -1259,8 +1365,9 @@ export class KanbanServer {
         if (!task) {
           return this.json({ error: "Task not found" }, 404)
         }
-        if (isTaskMutationLockedWhileExecuting(this.getExecuting(), task.status)) {
-          return this.json({ error: getExecutionMutationError() }, 409)
+        const taskMutationLock = this.getTaskMutationLock(taskId, task.name)
+        if (taskMutationLock) {
+          return this.json({ error: taskMutationLock }, 409)
         }
 
         let requestedAction: TaskRepairAction | "smart" | "continue_with_more_reviews" | undefined
@@ -1281,10 +1388,6 @@ export class KanbanServer {
           // action is optional
         }
 
-        let action: TaskRepairAction
-        let reason: string
-        let errorMessage: string | undefined
-
         // Special handling for continue_with_more_reviews action
         if (requestedAction === "continue_with_more_reviews") {
           const currentMax = task.maxReviewRunsOverride ?? this.db.getOptions().maxReviews
@@ -1292,7 +1395,7 @@ export class KanbanServer {
           const repairNote = `[repair] action=continue_with_more_reviews reason=User increased review limit to allow more review cycles\n`
 
           const updated = this.db.updateTask(taskId, {
-            status: "executing",
+            status: "backlog",
             reviewCount: 0,
             maxReviewRunsOverride: newMaxReviewRunsOverride,
             errorMessage: null,
@@ -1307,52 +1410,28 @@ export class KanbanServer {
             this.db.appendAgentOutput(taskId, `[repair-hints] ${smartRepairHints}\n`)
           }
           this.broadcast({ type: "task_updated", payload: updated })
-          await this.maybeAutoStartExecution()
+          await this.maybeAutoStartTask(taskId)
           return this.json({ ok: true, action: "continue_with_more_reviews", reason: `Increased review limit from ${currentMax} to ${newMaxReviewRunsOverride} and resumed execution`, task: this.db.getTask(taskId) })
         }
 
         if (!requestedAction || requestedAction === "smart") {
-          const eligibility = getPlanExecutionEligibility(task)
-          if (!eligibility.ok) {
-            action = "fail_task"
-            reason = eligibility.reason || "Task state is invalid"
-            errorMessage = reason
-          } else if (task.status === "review" || task.status === "executing") {
-            try {
-              const smart = await this.runSmartRepair(taskId)
-              action = smart.action
-              reason = smart.reason
-              errorMessage = smart.errorMessage
-            } catch (smartErr) {
-              const fallback = chooseDeterministicRepairAction(task)
-              action = fallback.action
-              reason = `${fallback.reason} Smart repair fallback: ${smartErr instanceof Error ? smartErr.message : String(smartErr)}`
-            }
-          } else {
-            const deterministic = chooseDeterministicRepairAction(task)
-            action = deterministic.action
-            reason = deterministic.reason
+          await this.repairTaskState(taskId, smartRepairHints)
+          const repairedTask = this.db.getTask(taskId)
+          if (repairedTask && repairedTask.status === "backlog") {
+            await this.maybeAutoStartTask(taskId)
           }
-        } else {
-          action = requestedAction
-          reason = `User requested repair action: ${requestedAction}`
+          return this.json({ ok: true, action: "smart", task: repairedTask })
         }
 
-        const updated = await this.applyRepairAction(taskId, action, reason, errorMessage)
+        const updated = await this.applyRepairAction(taskId, requestedAction, `User requested repair action: ${requestedAction}`)
         if (!updated) {
           return this.json({ error: "Task not found" }, 404)
         }
         this.broadcast({ type: "task_updated", payload: updated })
-        if (updated.agentOutput !== task.agentOutput) {
-          const appended = updated.agentOutput.slice(task.agentOutput.length)
-          if (appended) {
-            this.broadcast({ type: "agent_output", payload: { taskId, output: appended } })
-          }
+        if (requestedAction === "queue_implementation") {
+          await this.maybeAutoStartTask(taskId)
         }
-        if (action === "queue_implementation") {
-          await this.maybeAutoStartExecution()
-        }
-        return this.json({ ok: true, action, reason, task: this.db.getTask(taskId) })
+        return this.json({ ok: true, action: requestedAction, task: this.db.getTask(taskId) })
       }
 
       // Task review limits override
@@ -1365,8 +1444,9 @@ export class KanbanServer {
         if (!task) {
           return this.json({ error: "Task not found" }, 404)
         }
-        if (isTaskMutationLockedWhileExecuting(this.getExecuting(), task.status)) {
-          return this.json({ error: getExecutionMutationError() }, 409)
+        const taskMutationLock = this.getTaskMutationLock(taskId, task.name)
+        if (taskMutationLock) {
+          return this.json({ error: taskMutationLock }, 409)
         }
 
         const body = await req.json().catch(() => ({}))

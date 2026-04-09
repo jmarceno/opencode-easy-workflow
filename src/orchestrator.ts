@@ -9,7 +9,7 @@ import type { WorkflowSessionKind } from "./db"
 import { KanbanDB } from "./db"
 import { KanbanServer } from "./server"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
-import { resolveExecutionTasks, resolveBatches } from "./execution-plan"
+import { resolveExecutionTasks } from "./execution-plan"
 import { getLatestTaggedOutput, getPlanExecutionEligibility } from "./task-state"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -620,6 +620,77 @@ export class Orchestrator {
 
   isExecuting() { return this.running }
 
+  async runTaskSequence(taskIds: string[], broadcastLifecycle = false) {
+    if (this.running) return
+
+    if (taskIds.length === 0) {
+      throw new Error("No tasks in backlog")
+    }
+
+    this.running = true
+    this.shouldStop = false
+    this.providerCatalog = null
+    this.executionSnapshot = new Set(taskIds)
+
+    let resolvedServerUrl = "unresolved"
+    try {
+      resolvedServerUrl = this.resolveServerUrl()
+    } catch (resolveErr) {
+      this.appendDebugLog("warn", "unable to resolve server URL during orchestrator start", {
+        error: resolveErr instanceof Error ? resolveErr.message : String(resolveErr),
+      })
+    }
+
+    this.appendDebugLog("info", "orchestrator starting task sequence", {
+      taskCount: taskIds.length,
+      snapshotSize: this.executionSnapshot.size,
+      serverUrl: resolvedServerUrl,
+      taskIds,
+    })
+
+    if (broadcastLifecycle) {
+      this.server.broadcast({ type: "execution_started", payload: {} })
+    }
+
+    try {
+      const options = this.db.getOptions()
+      for (const taskId of taskIds) {
+        if (this.shouldStop) break
+        const task = this.db.getTask(taskId)
+        if (!task) {
+          throw new Error(`Task ${taskId} was removed before execution could start`)
+        }
+        await this.executeTask(task, options)
+      }
+
+      if (this.onWorkflowCompleteCallback) {
+        this.onWorkflowCompleteCallback()
+      }
+      if (broadcastLifecycle) {
+        this.server.broadcast({ type: "execution_complete", payload: {} })
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      let resolvedServerUrlOnError = "unresolved"
+      try {
+        resolvedServerUrlOnError = this.resolveServerUrl()
+      } catch (resolveErr) {
+        this.appendDebugLog("warn", "unable to resolve server URL while handling execution error", {
+          error: resolveErr instanceof Error ? resolveErr.message : String(resolveErr),
+        })
+      }
+      this.appendDebugLog("error", "orchestrator execution failed", { error: msg, serverUrl: resolvedServerUrlOnError })
+      this.server.broadcast({ type: "error", payload: { message: msg } })
+      throw err
+    } finally {
+      this.running = false
+      this.executionSnapshot = null
+      if (broadcastLifecycle) {
+        this.server.broadcast({ type: "execution_stopped", payload: {} })
+      }
+    }
+  }
+
   async start() {
     if (this.running) return
 
@@ -634,71 +705,7 @@ export class Orchestrator {
       throw new Error("No tasks in backlog")
     }
 
-    this.running = true
-    this.shouldStop = false
-    this.providerCatalog = null
-    // Capture snapshot of tasks that existed before execution started
-    // New tasks added during execution will not be automatically executed
-    this.executionSnapshot = new Set(this.db.getTasks().map(t => t.id))
-    let resolvedServerUrl = "unresolved"
-    try {
-      resolvedServerUrl = this.resolveServerUrl()
-    } catch (resolveErr) {
-      this.appendDebugLog("warn", "unable to resolve server URL during orchestrator start", {
-        error: resolveErr instanceof Error ? resolveErr.message : String(resolveErr),
-      })
-      // Keep unresolved marker; execution will fail with explicit error later.
-    }
-    this.appendDebugLog("info", "orchestrator starting", { taskCount: initialTasks.length, snapshotSize: this.executionSnapshot.size, serverUrl: resolvedServerUrl })
-    this.server.broadcast({ type: "execution_started", payload: {} })
-
-    try {
-      const options = this.db.getOptions()
-      while (!this.shouldStop) {
-        const executableTasks = resolveExecutionTasks(this.db.getTasks(), undefined, this.executionSnapshot)
-        if (executableTasks.length === 0) break
-
-        const batches = resolveBatches(executableTasks, options.parallelTasks)
-
-        for (const batch of batches) {
-          if (this.shouldStop) break
-
-          const settled = await Promise.allSettled(batch.map(t => this.executeTask(t, options)))
-          const rejected = settled.filter((result): result is PromiseRejectedResult => result.status === "rejected")
-          if (rejected.length > 0) {
-            this.shouldStop = true
-            const firstReason = rejected[0].reason
-            const message = firstReason instanceof Error ? firstReason.message : String(firstReason)
-            throw new Error(message)
-          }
-
-          if (this.shouldStop) break
-        }
-      }
-
-      // Call the workflow completion callback before broadcasting
-      if (this.onWorkflowCompleteCallback) {
-        this.onWorkflowCompleteCallback()
-      }
-      this.server.broadcast({ type: "execution_complete", payload: {} })
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      let resolvedServerUrl = "unresolved"
-      try {
-        resolvedServerUrl = this.resolveServerUrl()
-      } catch (resolveErr) {
-        this.appendDebugLog("warn", "unable to resolve server URL while handling execution error", {
-          error: resolveErr instanceof Error ? resolveErr.message : String(resolveErr),
-        })
-        // Keep unresolved marker in logs.
-      }
-      this.appendDebugLog("error", "orchestrator execution failed", { error: msg, serverUrl: resolvedServerUrl })
-      this.server.broadcast({ type: "error", payload: { message: msg } })
-    } finally {
-      this.running = false
-      this.executionSnapshot = null
-      this.server.broadcast({ type: "execution_stopped", payload: {} })
-    }
+    await this.runTaskSequence(initialTasks.map((task) => task.id), true)
   }
 
   stop() {
@@ -722,72 +729,14 @@ export class Orchestrator {
       throw new Error(`Task "${taskId}" not found`)
     }
 
-    this.running = true
-    this.shouldStop = false
-    this.providerCatalog = null
-    // Capture snapshot of tasks that existed before execution started
-    // New tasks added during execution will not be automatically executed
-    this.executionSnapshot = new Set(this.db.getTasks().map(t => t.id))
-
-    const dependencyTasks = resolveExecutionTasks(this.db.getTasks(), taskId, this.executionSnapshot)
-    let resolvedServerUrl = "unresolved"
-    try {
-      resolvedServerUrl = this.resolveServerUrl()
-    } catch (resolveErr) {
-      this.appendDebugLog("warn", "unable to resolve server URL during orchestrator start", {
-        error: resolveErr instanceof Error ? resolveErr.message : String(resolveErr),
-      })
-    }
+    const dependencySnapshot = new Set(this.db.getTasks().map((task) => task.id))
+    const dependencyTasks = resolveExecutionTasks(this.db.getTasks(), taskId, dependencySnapshot)
     this.appendDebugLog("info", "orchestrator starting single task", {
       targetTaskId: taskId,
       targetTaskName: targetTask.name,
       dependencyCount: dependencyTasks.length,
-      snapshotSize: this.executionSnapshot.size,
-      serverUrl: resolvedServerUrl,
     })
-    this.server.broadcast({ type: "execution_started", payload: {} })
-
-    try {
-      const options = this.db.getOptions()
-      const batches = resolveBatches(dependencyTasks, options.parallelTasks)
-
-      for (const batch of batches) {
-        if (this.shouldStop) break
-
-        const settled = await Promise.allSettled(batch.map(t => this.executeTask(t, options)))
-        const rejected = settled.filter((result): result is PromiseRejectedResult => result.status === "rejected")
-        if (rejected.length > 0) {
-          this.shouldStop = true
-          const firstReason = rejected[0].reason
-          const message = firstReason instanceof Error ? firstReason.message : String(firstReason)
-          throw new Error(message)
-        }
-
-        if (this.shouldStop) break
-      }
-
-      // Call the workflow completion callback before broadcasting
-      if (this.onWorkflowCompleteCallback) {
-        this.onWorkflowCompleteCallback()
-      }
-      this.server.broadcast({ type: "execution_complete", payload: {} })
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      let resolvedServerUrl = "unresolved"
-      try {
-        resolvedServerUrl = this.resolveServerUrl()
-      } catch (resolveErr) {
-        this.appendDebugLog("warn", "unable to resolve server URL while handling execution error", {
-          error: resolveErr instanceof Error ? resolveErr.message : String(resolveErr),
-        })
-      }
-      this.appendDebugLog("error", "orchestrator execution failed", { error: msg, serverUrl: resolvedServerUrl })
-      this.server.broadcast({ type: "error", payload: { message: msg } })
-    } finally {
-      this.running = false
-      this.executionSnapshot = null
-      this.server.broadcast({ type: "execution_stopped", payload: {} })
-    }
+    await this.runTaskSequence(dependencyTasks.map((task) => task.id), true)
   }
 
   private async executeTask(task: Task, options: Options) {
