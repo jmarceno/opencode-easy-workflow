@@ -22,6 +22,8 @@ import {
 import { runMigrations, type Migration } from "./db/migrations.ts"
 import type {
   AppendSessionIOInput,
+  CreateTaskCandidateInput,
+  CreateTaskRunInput,
   CreatePiWorkflowSessionInput,
   CreateTaskInput,
   CreateWorkflowRunInput,
@@ -37,6 +39,8 @@ import type {
   SessionIORecordType,
   SessionIOStream,
   SessionMessageQueryOptions,
+  UpdateTaskCandidateInput,
+  UpdateTaskRunInput,
   UpdatePiWorkflowSessionInput,
   UpdateTaskInput,
   UpdateWorkflowRunInput,
@@ -1215,9 +1219,180 @@ export class PiKanbanDB {
     return rows.map(rowToTaskRun)
   }
 
+  getTaskRun(id: string): TaskRun | null {
+    const row = this.db.prepare("SELECT * FROM task_runs WHERE id = ?").get(id) as Record<string, unknown> | null
+    return row ? rowToTaskRun(row) : null
+  }
+
+  getTaskRunsByPhase(taskId: string, phase: TaskRun["phase"]): TaskRun[] {
+    const rows = this.db
+      .prepare("SELECT * FROM task_runs WHERE task_id = ? AND phase = ? ORDER BY created_at ASC")
+      .all(taskId, phase) as Record<string, unknown>[]
+    return rows.map(rowToTaskRun)
+  }
+
+  createTaskRun(input: CreateTaskRunInput): TaskRun {
+    const now = nowUnix()
+    const id = input.id ?? Math.random().toString(36).slice(2, 10)
+    const createdAt = input.createdAt ?? now
+
+    this.db
+      .prepare(`
+        INSERT INTO task_runs (
+          id, task_id, phase, slot_index, attempt_index, model, task_suffix,
+          status, session_id, session_url, worktree_dir, summary, error_message,
+          candidate_id, metadata_json, created_at, updated_at, completed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        id,
+        input.taskId,
+        input.phase,
+        input.slotIndex,
+        input.attemptIndex,
+        input.model,
+        input.taskSuffix ?? null,
+        input.status ?? "pending",
+        input.sessionId ?? null,
+        input.sessionUrl ?? null,
+        input.worktreeDir ?? null,
+        input.summary ?? null,
+        input.errorMessage ?? null,
+        input.candidateId ?? null,
+        JSON.stringify(input.metadataJson ?? {}),
+        createdAt,
+        now,
+        input.completedAt ?? null,
+      )
+
+    return this.getTaskRun(id) as TaskRun
+  }
+
+  updateTaskRun(id: string, input: UpdateTaskRunInput): TaskRun | null {
+    const sets: string[] = []
+    const values: any[] = []
+
+    if (input.status !== undefined) {
+      sets.push("status = ?")
+      values.push(input.status)
+    }
+    if (input.sessionId !== undefined) {
+      sets.push("session_id = ?")
+      values.push(input.sessionId)
+    }
+    if (input.sessionUrl !== undefined) {
+      sets.push("session_url = ?")
+      values.push(input.sessionUrl)
+    }
+    if (input.worktreeDir !== undefined) {
+      sets.push("worktree_dir = ?")
+      values.push(input.worktreeDir)
+    }
+    if (input.summary !== undefined) {
+      sets.push("summary = ?")
+      values.push(input.summary)
+    }
+    if (input.errorMessage !== undefined) {
+      sets.push("error_message = ?")
+      values.push(input.errorMessage)
+    }
+    if (input.candidateId !== undefined) {
+      sets.push("candidate_id = ?")
+      values.push(input.candidateId)
+    }
+    if (input.metadataJson !== undefined) {
+      sets.push("metadata_json = ?")
+      values.push(JSON.stringify(input.metadataJson))
+    }
+    if (input.completedAt !== undefined) {
+      sets.push("completed_at = ?")
+      values.push(input.completedAt)
+    }
+
+    if (sets.length === 0) return this.getTaskRun(id)
+
+    sets.push("updated_at = unixepoch()")
+    values.push(id)
+    this.db.prepare(`UPDATE task_runs SET ${sets.join(", ")} WHERE id = ?`).run(...values)
+
+    return this.getTaskRun(id)
+  }
+
   getTaskCandidates(taskId: string): TaskCandidate[] {
     const rows = this.db.prepare("SELECT * FROM task_candidates WHERE task_id = ? ORDER BY created_at ASC").all(taskId) as Record<string, unknown>[]
     return rows.map(rowToTaskCandidate)
+  }
+
+  getTaskCandidate(id: string): TaskCandidate | null {
+    const row = this.db.prepare("SELECT * FROM task_candidates WHERE id = ?").get(id) as Record<string, unknown> | null
+    return row ? rowToTaskCandidate(row) : null
+  }
+
+  createTaskCandidate(input: CreateTaskCandidateInput): TaskCandidate {
+    const now = nowUnix()
+    const id = input.id ?? Math.random().toString(36).slice(2, 10)
+    const createdAt = input.createdAt ?? now
+
+    this.db
+      .prepare(`
+        INSERT INTO task_candidates (
+          id, task_id, worker_run_id, status, changed_files_json, diff_stats_json,
+          verification_json, summary, error_message, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        id,
+        input.taskId,
+        input.workerRunId,
+        input.status ?? "available",
+        JSON.stringify(input.changedFilesJson ?? []),
+        JSON.stringify(input.diffStatsJson ?? {}),
+        JSON.stringify(input.verificationJson ?? {}),
+        input.summary ?? null,
+        input.errorMessage ?? null,
+        createdAt,
+        now,
+      )
+
+    return this.getTaskCandidate(id) as TaskCandidate
+  }
+
+  updateTaskCandidate(id: string, input: UpdateTaskCandidateInput): TaskCandidate | null {
+    const sets: string[] = []
+    const values: any[] = []
+
+    if (input.status !== undefined) {
+      sets.push("status = ?")
+      values.push(input.status)
+    }
+    if (input.changedFilesJson !== undefined) {
+      sets.push("changed_files_json = ?")
+      values.push(JSON.stringify(input.changedFilesJson))
+    }
+    if (input.diffStatsJson !== undefined) {
+      sets.push("diff_stats_json = ?")
+      values.push(JSON.stringify(input.diffStatsJson))
+    }
+    if (input.verificationJson !== undefined) {
+      sets.push("verification_json = ?")
+      values.push(JSON.stringify(input.verificationJson))
+    }
+    if (input.summary !== undefined) {
+      sets.push("summary = ?")
+      values.push(input.summary)
+    }
+    if (input.errorMessage !== undefined) {
+      sets.push("error_message = ?")
+      values.push(input.errorMessage)
+    }
+
+    if (sets.length === 0) return this.getTaskCandidate(id)
+
+    sets.push("updated_at = unixepoch()")
+    values.push(id)
+    this.db.prepare(`UPDATE task_candidates SET ${sets.join(", ")} WHERE id = ?`).run(...values)
+
+    return this.getTaskCandidate(id)
   }
 
   getBestOfNSummary(taskId: string): {

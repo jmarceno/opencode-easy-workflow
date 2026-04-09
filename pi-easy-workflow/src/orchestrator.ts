@@ -9,6 +9,7 @@ import type { Options, Task, WSMessage, WorkflowRun } from "./types.ts"
 import { resolveExecutionTasks } from "./execution-plan.ts"
 import { PiSessionManager } from "./runtime/session-manager.ts"
 import { PiReviewSessionRunner } from "./runtime/review-session.ts"
+import { BestOfNRunner } from "./runtime/best-of-n.ts"
 import { WorktreeLifecycle, resolveTargetBranch, type WorktreeInfo } from "./runtime/worktree.ts"
 
 function nowUnix(): number {
@@ -166,6 +167,33 @@ export class PiOrchestrator {
       if (dep && dep.status !== "done") {
         throw new Error(`Dependency "${dep.name}" is not done (status: ${dep.status})`)
       }
+    }
+
+    if (task.executionStrategy === "best_of_n") {
+      const command = options.command.trim()
+      if (command) {
+        const commandResult = await runShellCommand(command, this.projectRoot)
+        if (commandResult.stdout.trim()) {
+          this.db.appendAgentOutput(task.id, `\n[command stdout]\n${commandResult.stdout.trim()}\n`)
+        }
+        if (commandResult.stderr.trim()) {
+          this.db.appendAgentOutput(task.id, `\n[command stderr]\n${commandResult.stderr.trim()}\n`)
+        }
+        this.broadcastTask(task.id)
+        if (commandResult.exitCode !== 0) {
+          throw new Error(`Pre-execution command failed with exit code ${commandResult.exitCode}`)
+        }
+      }
+
+      const bestOfNRunner = new BestOfNRunner({
+        db: this.db,
+        projectRoot: this.projectRoot,
+        worktree: this.worktree,
+        broadcast: this.broadcast,
+        sessionUrlFor: this.sessionUrlFor,
+      })
+      await bestOfNRunner.run(task, options)
+      return
     }
 
     const isPlanResume = task.planmode && (task.executionPhase === "implementation_pending" || task.executionPhase === "plan_revision_pending")

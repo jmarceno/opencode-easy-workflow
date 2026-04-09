@@ -521,10 +521,90 @@ export class PiKanbanServer {
 
     this.router.get("/api/tasks/:id/best-of-n-summary", ({ params, json }) => {
       try {
-        return json(this.db.getBestOfNSummary(params.id))
+        const task = this.db.getTask(params.id)
+        if (!task) return json({ error: "Task not found" }, 404)
+        if (task.executionStrategy !== "best_of_n") {
+          return json({ error: "Task is not a best_of_n task" }, 400)
+        }
+
+        const summary = this.db.getBestOfNSummary(params.id)
+        const candidates = this.db.getTaskCandidates(params.id)
+        const expandedWorkerCount = task.bestOfNConfig
+          ? task.bestOfNConfig.workers.reduce((sum, slot) => sum + slot.count, 0)
+          : 0
+        const expandedReviewerCount = task.bestOfNConfig
+          ? task.bestOfNConfig.reviewers.reduce((sum, slot) => sum + slot.count, 0)
+          : 0
+
+        return json({
+          taskId: params.id,
+          substage: task.bestOfNSubstage,
+          workersTotal: summary.workersTotal,
+          workersDone: summary.workersDone + summary.workersFailed,
+          workersFailed: summary.workersFailed,
+          reviewersTotal: summary.reviewersTotal,
+          reviewersDone: summary.reviewersDone + summary.reviewersFailed,
+          reviewersFailed: summary.reviewersFailed,
+          hasFinalApplier: summary.finalApplierStatus !== "not_started",
+          finalApplierDone: summary.finalApplierStatus === "done",
+          finalApplierStatus: summary.finalApplierStatus,
+          expandedWorkerCount,
+          expandedReviewerCount,
+          totalExpandedRuns: expandedWorkerCount + expandedReviewerCount + 1,
+          successfulCandidateCount: candidates.length,
+          selectedCandidate: candidates.find((candidate) => candidate.status === "selected")?.id ?? null,
+          availableCandidates: summary.availableCandidates,
+          selectedCandidates: summary.selectedCandidates,
+        })
       } catch {
         return json({ error: "Task not found" }, 404)
       }
+    })
+
+    this.router.post("/api/tasks/:id/best-of-n/select-candidate", async ({ params, req, json, broadcast }) => {
+      const task = this.db.getTask(params.id)
+      if (!task) return json({ error: "Task not found" }, 404)
+      if (task.executionStrategy !== "best_of_n") return json({ error: "Task is not a best_of_n task" }, 400)
+
+      const body = await req.json().catch(() => ({}))
+      const candidateId = typeof body?.candidateId === "string" ? body.candidateId : ""
+      if (!candidateId) return json({ error: "candidateId is required" }, 400)
+
+      const candidates = this.db.getTaskCandidates(task.id)
+      if (!candidates.some((candidate) => candidate.id === candidateId)) {
+        return json({ error: "Candidate not found" }, 404)
+      }
+
+      const updatedCandidates = candidates
+        .map((candidate) => this.db.updateTaskCandidate(candidate.id, { status: candidate.id === candidateId ? "selected" : "rejected" }))
+        .filter(Boolean)
+
+      for (const candidate of updatedCandidates) {
+        broadcast({ type: "task_candidate_updated", payload: candidate })
+      }
+
+      return json({ ok: true, selectedCandidate: candidateId })
+    })
+
+    this.router.post("/api/tasks/:id/best-of-n/abort", async ({ params, req, json, sessionUrlFor, broadcast }) => {
+      const task = this.db.getTask(params.id)
+      if (!task) return json({ error: "Task not found" }, 404)
+      if (task.executionStrategy !== "best_of_n") return json({ error: "Task is not a best_of_n task" }, 400)
+
+      const body = await req.json().catch(() => ({}))
+      const reason = typeof body?.reason === "string" && body.reason.trim()
+        ? body.reason.trim()
+        : "Best-of-n execution aborted manually"
+
+      const updated = this.db.updateTask(task.id, {
+        status: "review",
+        bestOfNSubstage: "blocked_for_manual_review",
+        errorMessage: reason,
+      })
+      if (!updated) return json({ error: "Task not found" }, 404)
+      const normalized = normalizeTaskForClient(updated, sessionUrlFor)
+      broadcast({ type: "task_updated", payload: normalized })
+      return json({ ok: true, task: normalized })
     })
 
     this.router.get("/api/tasks/:id/review-status", ({ params, json }) => {

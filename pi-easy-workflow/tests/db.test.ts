@@ -162,6 +162,65 @@ describe("PiKanbanDB", () => {
     db.close()
   })
 
+  it("supports best-of-n task runs and candidates mutation APIs", () => {
+    const { db } = createTempDb()
+
+    db.createTask({
+      id: "bon-db-1",
+      name: "Best of N task",
+      prompt: "Run best of n",
+      executionStrategy: "best_of_n",
+      bestOfNConfig: {
+        workers: [{ model: "default", count: 1 }],
+        reviewers: [],
+        finalApplier: { model: "default" },
+        minSuccessfulWorkers: 1,
+        selectionMode: "pick_best",
+      },
+    })
+
+    const run = db.createTaskRun({
+      taskId: "bon-db-1",
+      phase: "worker",
+      slotIndex: 0,
+      attemptIndex: 0,
+      model: "default",
+      status: "running",
+    })
+    expect(run.id.length).toBeGreaterThan(0)
+
+    const updatedRun = db.updateTaskRun(run.id, {
+      status: "done",
+      summary: "worker done",
+      metadataJson: { reviewerOutput: null },
+      completedAt: Math.floor(Date.now() / 1000),
+    })
+    expect(updatedRun?.status).toBe("done")
+    expect(updatedRun?.summary).toBe("worker done")
+    expect(db.getTaskRunsByPhase("bon-db-1", "worker").length).toBe(1)
+
+    const candidate = db.createTaskCandidate({
+      taskId: "bon-db-1",
+      workerRunId: run.id,
+      status: "available",
+      changedFilesJson: ["src/index.ts"],
+      diffStatsJson: { "src/index.ts": 12 },
+      verificationJson: { status: "passed" },
+      summary: "candidate summary",
+    })
+    expect(candidate.id.length).toBeGreaterThan(0)
+
+    const updatedCandidate = db.updateTaskCandidate(candidate.id, { status: "selected" })
+    expect(updatedCandidate?.status).toBe("selected")
+
+    const summary = db.getBestOfNSummary("bon-db-1")
+    expect(summary.workersTotal).toBe(1)
+    expect(summary.workersDone).toBe(1)
+    expect(summary.availableCandidates + summary.selectedCandidates).toBe(1)
+
+    db.close()
+  })
+
   it("renders prompt templates and captures rendered prompts in session_io", () => {
     const { db } = createTempDb()
 

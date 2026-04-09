@@ -124,6 +124,66 @@ describe("PiKanbanServer API", () => {
       expect(Array.isArray(taskRunsRes.data)).toBe(true)
       expect(taskRunsRes.data[0]?.sessionUrl).toBe(`/#session/${session.id}`)
 
+      const bonTaskRes = await api("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Best of N API task",
+          prompt: "Run best-of-n",
+          status: "backlog",
+          executionStrategy: "best_of_n",
+          bestOfNConfig: {
+            workers: [{ model: "default", count: 1 }],
+            reviewers: [{ model: "default", count: 1 }],
+            finalApplier: { model: "default" },
+            minSuccessfulWorkers: 1,
+            selectionMode: "pick_best",
+          },
+        }),
+      })
+      expect(bonTaskRes.response.status).toBe(201)
+      const bonTaskId = bonTaskRes.data.id as string
+
+      db.createTaskRun({
+        id: "bon-run-worker",
+        taskId: bonTaskId,
+        phase: "worker",
+        slotIndex: 0,
+        attemptIndex: 0,
+        model: "default",
+        status: "done",
+      })
+      const bonCandidate = db.createTaskCandidate({
+        id: "bon-candidate-1",
+        taskId: bonTaskId,
+        workerRunId: "bon-run-worker",
+        status: "available",
+        summary: "candidate output",
+      })
+
+      const bonSummaryRes = await api(`/api/tasks/${bonTaskId}/best-of-n-summary`)
+      expect(bonSummaryRes.response.status).toBe(200)
+      expect(bonSummaryRes.data.taskId).toBe(bonTaskId)
+      expect(typeof bonSummaryRes.data.expandedWorkerCount).toBe("number")
+      expect(typeof bonSummaryRes.data.finalApplierDone).toBe("boolean")
+
+      const selectCandidateRes = await api(`/api/tasks/${bonTaskId}/best-of-n/select-candidate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ candidateId: bonCandidate.id }),
+      })
+      expect(selectCandidateRes.response.status).toBe(200)
+      expect(selectCandidateRes.data.selectedCandidate).toBe(bonCandidate.id)
+
+      const abortBonRes = await api(`/api/tasks/${bonTaskId}/best-of-n/abort`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "manual hold" }),
+      })
+      expect(abortBonRes.response.status).toBe(200)
+      expect(abortBonRes.data.task.status).toBe("review")
+      expect(abortBonRes.data.task.bestOfNSubstage).toBe("blocked_for_manual_review")
+
       const sessionTimelineRes = await api(`/api/sessions/${session.id}/timeline`)
       expect(sessionTimelineRes.response.status).toBe(200)
       expect(Array.isArray(sessionTimelineRes.data)).toBe(true)

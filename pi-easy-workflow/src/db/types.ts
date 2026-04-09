@@ -6,6 +6,8 @@ import type {
   ExecutionStrategy,
   MessageType,
   Options,
+  RunPhase,
+  RunStatus,
   SessionMessage,
   Task,
   TaskCandidate,
@@ -25,6 +27,8 @@ export type {
   ExecutionStrategy,
   MessageType,
   Options,
+  RunPhase,
+  RunStatus,
   SessionMessage,
   Task,
   TaskCandidate,
@@ -293,6 +297,60 @@ export interface PromptRenderAndCaptureInput {
   variables?: Record<string, unknown>
   sessionId?: string
   stream?: SessionIOStream
+}
+
+export interface CreateTaskRunInput {
+  id?: string
+  taskId: string
+  phase: RunPhase
+  slotIndex: number
+  attemptIndex: number
+  model: string
+  taskSuffix?: string | null
+  status?: RunStatus
+  sessionId?: string | null
+  sessionUrl?: string | null
+  worktreeDir?: string | null
+  summary?: string | null
+  errorMessage?: string | null
+  candidateId?: string | null
+  metadataJson?: Record<string, any>
+  createdAt?: number
+  completedAt?: number | null
+}
+
+export interface UpdateTaskRunInput {
+  status?: RunStatus
+  sessionId?: string | null
+  sessionUrl?: string | null
+  worktreeDir?: string | null
+  summary?: string | null
+  errorMessage?: string | null
+  candidateId?: string | null
+  metadataJson?: Record<string, any>
+  completedAt?: number | null
+}
+
+export interface CreateTaskCandidateInput {
+  id?: string
+  taskId: string
+  workerRunId: string
+  status?: TaskCandidate["status"]
+  changedFilesJson?: string[]
+  diffStatsJson?: Record<string, number>
+  verificationJson?: Record<string, any>
+  summary?: string | null
+  errorMessage?: string | null
+  createdAt?: number
+}
+
+export interface UpdateTaskCandidateInput {
+  status?: TaskCandidate["status"]
+  changedFilesJson?: string[]
+  diffStatsJson?: Record<string, number>
+  verificationJson?: Record<string, any>
+  summary?: string | null
+  errorMessage?: string | null
 }
 
 export interface SessionMessageQueryOptions {
