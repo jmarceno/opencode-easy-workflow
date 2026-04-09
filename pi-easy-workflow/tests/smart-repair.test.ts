@@ -15,40 +15,42 @@ function createTempDir(prefix: string): string {
 
 function createRepairMockPi(root: string, mode: "valid" | "malformed"): string {
   const filePath = join(root, "mock-pi-repair.js")
-  writeFileSync(
-    filePath,
-    `#!/usr/bin/env bun
+  const mockScript = `#!/usr/bin/env bun
 import { createInterface } from "readline"
 const mode = ${JSON.stringify(mode)}
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
 rl.on("line", (line) => {
   let request = null
-  try { request = JSON.parse(line) } catch {
-    return
-  }
+  try { request = JSON.parse(line) } catch { return }
   const id = request?.id
-  const method = request?.method
-  if (method === "initialize") {
-    console.log(JSON.stringify({ id, result: { sessionId: "repair-session-" + id, sessionFile: "/tmp/mock-repair-session" } }))
+  const type = request?.type
+  
+  if (type === "set_model" || type === "set_thinking_level") {
+    console.log(JSON.stringify({ id, type: "response", command: type, success: true }))
     return
   }
-  if (method === "prompt") {
+  
+  if (type === "prompt") {
+    console.log(JSON.stringify({ id, type: "response", command: "prompt", success: true }))
     if (mode === "malformed") {
-      console.log(JSON.stringify({ id, result: { text: "missing-json" } }))
-      return
+      console.log(JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_complete", text: "missing-json" } }))
+    } else {
+      const payload = { action: "mark_done", reason: "Repair confirmed completion", errorMessage: "" }
+      console.log(JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_complete", text: JSON.stringify(payload) } }))
     }
-    const payload = { action: "mark_done", reason: "Repair confirmed completion", errorMessage: "" }
-    console.log(JSON.stringify({ id, result: { text: JSON.stringify(payload) } }))
+    console.log(JSON.stringify({ type: "agent_end" }))
     return
   }
-  if (method === "get_messages") {
-    console.log(JSON.stringify({ id, result: { messages: [{ text: "snapshot" }] } }))
+  
+  if (type === "get_messages") {
+    console.log(JSON.stringify({ id, type: "response", command: "get_messages", success: true, data: { messages: [{ role: "assistant", text: "snapshot" }] } }))
     return
   }
-  console.log(JSON.stringify({ id, result: { ok: true } }))
-})\n`,
-    "utf-8",
-  )
+  
+  console.log(JSON.stringify({ id, type: "response", command: type || "unknown", success: true, data: {} }))
+})
+`
+  writeFileSync(filePath, mockScript, "utf-8")
   chmodSync(filePath, 0o755)
   return filePath
 }

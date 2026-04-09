@@ -3,6 +3,13 @@ import type { PiWorkflowSession } from "../db/types.ts"
 import type { SessionMessage } from "../types.ts"
 import { projectPiEventToSessionMessage } from "./message-projection.ts"
 
+export type PiEventListener = (event: Record<string, unknown>) => void
+export type ExtensionUIRequestHandler = (request: {
+  id: string
+  method: string
+  [key: string]: unknown
+}) => Promise<{ type: "extension_ui_response"; id: string } & Record<string, unknown>>
+
 type Pending = {
   resolve: (value: Record<string, unknown>) => void
   reject: (error: Error) => void
@@ -34,16 +41,29 @@ function pullResponseText(result: Record<string, unknown>): string {
   return ""
 }
 
+/**
+ * PiRpcProcess - Event-driven RPC client for pi CLI
+ * 
+ * Architecture:
+ * - Commands sent with unique string IDs
+ * - Responses match commands by ID
+ * - Events stream asynchronously (messages, tool calls, UI requests)
+ * - Completion detected via agent_end event (not polling)
+ * - Interactive UI via extension_ui_request/response
+ */
 export class PiRpcProcess {
   private readonly db: PiKanbanDB
   private readonly session: PiWorkflowSession
   private readonly onOutput?: (chunk: string) => void
   private readonly onSessionMessage?: (message: SessionMessage) => void
   private proc: Bun.Subprocess<"pipe", "pipe", "pipe"> | null = null
-  private nextId = 1
-  private readonly pending = new Map<number, Pending>()
+  private requestId = 0
+  private readonly pending = new Map<string, Pending>()
+  private eventListeners: PiEventListener[] = []
+  private extensionUIHandler: ExtensionUIRequestHandler | null = null
   private stdoutBuffer = ""
   private stderrBuffer = ""
+  private isIdle = true
 
   constructor(args: {
     db: PiKanbanDB
@@ -61,7 +81,7 @@ export class PiRpcProcess {
     if (this.proc) return
 
     const piBin = process.env.PI_EASY_WORKFLOW_PI_BIN?.trim() || "pi"
-    const defaultArgs = ["--rpc", "--no-extensions"]
+    const defaultArgs = ["--mode", "rpc", "--no-extensions"]
     const configuredArgs = process.env.PI_EASY_WORKFLOW_PI_ARGS
       ? parseArgs(process.env.PI_EASY_WORKFLOW_PI_ARGS)
       : defaultArgs
@@ -93,11 +113,34 @@ export class PiRpcProcess {
     this.captureStderr()
   }
 
-  async send(method: string, params: Record<string, unknown> = {}, timeoutMs = 120_000): Promise<Record<string, unknown>> {
+  /**
+   * Subscribe to agent events
+   */
+  onEvent(listener: PiEventListener): () => void {
+    this.eventListeners.push(listener)
+    return () => {
+      const index = this.eventListeners.indexOf(listener)
+      if (index !== -1) {
+        this.eventListeners.splice(index, 1)
+      }
+    }
+  }
+
+  /**
+   * Set handler for extension UI requests (interactive prompts)
+   */
+  setExtensionUIHandler(handler: ExtensionUIRequestHandler): void {
+    this.extensionUIHandler = handler
+  }
+
+  /**
+   * Send a command and wait for response
+   */
+  async send(command: { type: string } & Record<string, unknown>, timeoutMs = 30_000): Promise<Record<string, unknown>> {
     if (!this.proc) throw new Error("Pi process not started")
 
-    const id = this.nextId++
-    const payload = { id, method, params }
+    const id = `req_${++this.requestId}`
+    const payload = { ...command, id }
     const line = `${JSON.stringify(payload)}\n`
 
     this.db.appendSessionIO({
@@ -110,13 +153,85 @@ export class PiRpcProcess {
 
     await this.proc.stdin.write(line)
 
+    // Set idle to false when we send a prompt
+    if (command.type === "prompt" || command.type === "steer" || command.type === "follow_up") {
+      this.isIdle = false
+    }
+
     return await new Promise<Record<string, unknown>>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id)
-        reject(new Error(`Pi RPC timeout for method ${method}`))
+        reject(new Error(`Pi RPC timeout for command ${command.type}`))
       }, timeoutMs)
       this.pending.set(id, { resolve, reject, timer })
     })
+  }
+
+  /**
+   * Send a prompt (returns immediately, use onEvent/waitForIdle for results)
+   */
+  async prompt(message: string): Promise<void> {
+    await this.send({ type: "prompt", message }, 10_000)
+  }
+
+  /**
+   * Wait for agent to become idle (no streaming)
+   * Resolves when agent_end event is received
+   */
+  waitForIdle(timeoutMs = 600_000): Promise<void> { // 10 min default
+    return new Promise((resolve, reject) => {
+      if (this.isIdle) {
+        resolve()
+        return
+      }
+
+      const timer = setTimeout(() => {
+        unsubscribe()
+        reject(new Error(`Timeout waiting for agent to become idle`))
+      }, timeoutMs)
+
+      const unsubscribe = this.onEvent((event) => {
+        if (event.type === "agent_end") {
+          this.isIdle = true
+          clearTimeout(timer)
+          unsubscribe()
+          resolve()
+        }
+      })
+    })
+  }
+
+  /**
+   * Collect all events until agent becomes idle
+   */
+  collectEvents(timeoutMs = 600_000): Promise<Record<string, unknown>[]> {
+    return new Promise((resolve, reject) => {
+      const events: Record<string, unknown>[] = []
+
+      const timer = setTimeout(() => {
+        unsubscribe()
+        reject(new Error(`Timeout collecting events`))
+      }, timeoutMs)
+
+      const unsubscribe = this.onEvent((event) => {
+        events.push(event)
+        if (event.type === "agent_end") {
+          this.isIdle = true
+          clearTimeout(timer)
+          unsubscribe()
+          resolve(events)
+        }
+      })
+    })
+  }
+
+  /**
+   * Send prompt and wait for completion
+   */
+  async promptAndWait(message: string, timeoutMs = 600_000): Promise<Record<string, unknown>[]> {
+    const eventsPromise = this.collectEvents(timeoutMs)
+    await this.prompt(message)
+    return eventsPromise
   }
 
   async close(): Promise<void> {
@@ -187,29 +302,72 @@ export class PiRpcProcess {
     }
   }
 
-  private handleStdoutLine(line: string): void {
+  private async handleStdoutLine(line: string): Promise<void> {
     let parsed: Record<string, unknown>
     try {
       parsed = JSON.parse(line) as Record<string, unknown>
     } catch {
+      // Not JSON, treat as text event
       parsed = { type: "text", text: line }
     }
 
-    const record = asRecord(parsed)
-    const id = typeof record.id === "number" ? record.id : null
-    const isResponse = id !== null && ("result" in record || "error" in record)
-    const recordType = isResponse ? "rpc_response" : "rpc_event"
+    const id = typeof parsed.id === "string" ? parsed.id : null
+    const isResponse = parsed.type === "response" && id !== null
+    const isExtensionUIRequest = parsed.type === "extension_ui_request" && id !== null
 
+    // Record in database first (before handling response which might return early)
+    const recordType = isResponse ? "rpc_response" : "rpc_event"
     this.db.appendSessionIO({
       sessionId: this.session.id,
       stream: "stdout",
       recordType,
-      payloadJson: record,
+      payloadJson: parsed,
       payloadText: line,
     })
 
+    // Handle RPC responses to pending requests
+    if (isResponse && id && this.pending.has(id)) {
+      const pending = this.pending.get(id)!
+      this.pending.delete(id)
+      clearTimeout(pending.timer)
+
+      if (parsed.success === false) {
+        const errorMsg = typeof parsed.error === "string" ? parsed.error : JSON.stringify(parsed.error)
+        pending.reject(new Error(errorMsg))
+      } else {
+        pending.resolve(asRecord(parsed.data))
+      }
+      return
+    }
+
+    // Handle extension UI requests (interactive prompts)
+    if (isExtensionUIRequest && this.extensionUIHandler) {
+      try {
+        const response = await this.extensionUIHandler(parsed as { id: string; method: string; [key: string]: unknown })
+        await this.send(response, 10_000)
+      } catch (error) {
+        // Send cancelled response if handler fails
+        await this.send({
+          type: "extension_ui_response",
+          id: parsed.id,
+          cancelled: true,
+        }, 10_000).catch(() => {})
+      }
+      return
+    }
+
+    // Broadcast to event listeners
+    for (const listener of this.eventListeners) {
+      try {
+        listener(parsed)
+      } catch {
+        // Ignore listener errors
+      }
+    }
+
+    // Project to session messages
     const message = projectPiEventToSessionMessage({
-      event: record,
+      event: parsed,
       sessionId: this.session.id,
       taskId: this.session.taskId,
       taskRunId: this.session.taskRunId,
@@ -219,25 +377,11 @@ export class PiRpcProcess {
       if (createdMessage && this.onSessionMessage) {
         this.onSessionMessage(createdMessage)
       }
-      const text = pullResponseText(asRecord(record.result)) || pullResponseText(record)
+      const text = pullResponseText(parsed)
       if (text && this.onOutput) {
         this.onOutput(text)
       }
     }
-
-    if (!isResponse || id === null) return
-
-    const pending = this.pending.get(id)
-    if (!pending) return
-    this.pending.delete(id)
-    clearTimeout(pending.timer)
-
-    if (record.error !== undefined && record.error !== null) {
-      pending.reject(new Error(typeof record.error === "string" ? record.error : JSON.stringify(record.error)))
-      return
-    }
-
-    pending.resolve(asRecord(record.result))
   }
 
   private captureStderr(): void {

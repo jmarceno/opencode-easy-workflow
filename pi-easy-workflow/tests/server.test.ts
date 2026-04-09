@@ -36,22 +36,70 @@ rl.on("line", (line) => {
   let request = null
   try { request = JSON.parse(line) } catch { return }
   const id = request?.id
-  const method = request?.method
-  if (method === "initialize") {
-    console.log(JSON.stringify({ id, result: { sessionId: "server-session-" + id, sessionFile: "/tmp/mock-server-session" } }))
+  const type = request?.type
+  
+  // Handle set_model command
+  if (type === "set_model") {
+    console.log(JSON.stringify({ id, type: "response", command: "set_model", success: true, data: { provider: request.provider, id: request.modelId } }))
     return
   }
-  if (method === "prompt") {
+  
+  // Handle set_thinking_level command
+  if (type === "set_thinking_level") {
+    console.log(JSON.stringify({ id, type: "response", command: "set_thinking_level", success: true }))
+    return
+  }
+  
+  // Handle prompt command - returns immediately, then sends events
+  if (type === "prompt") {
+    // Send success response first
+    console.log(JSON.stringify({ id, type: "response", command: "prompt", success: true }))
+    // Then send streaming events
     const text = "Local session viewer execution output"
-    console.log(JSON.stringify({ method: "assistant_message", params: { role: "assistant", text } }))
-    console.log(JSON.stringify({ id, result: { text } }))
+    console.log(JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: text } }))
+    console.log(JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_complete", text } }))
+    console.log(JSON.stringify({ type: "agent_end" }))
     return
   }
-  if (method === "get_messages") {
-    console.log(JSON.stringify({ id, result: { messages: [{ text: "snapshot" }] } }))
+  
+  // Handle get_messages command
+  if (type === "get_messages") {
+    console.log(JSON.stringify({ 
+      id, 
+      type: "response", 
+      command: "get_messages", 
+      success: true, 
+      data: { 
+        messages: [
+          { role: "user", text: "test prompt" },
+          { role: "assistant", text: "Local session viewer execution output" }
+        ] 
+      } 
+    }))
     return
   }
-  console.log(JSON.stringify({ id, result: { ok: true } }))
+  
+  // Handle get_state command
+  if (type === "get_state") {
+    console.log(JSON.stringify({ 
+      id, 
+      type: "response", 
+      command: "get_state", 
+      success: true, 
+      data: { 
+        isStreaming: false,
+        messageCount: 2,
+        thinkingLevel: "medium",
+        steeringMode: "all",
+        followUpMode: "all",
+        autoCompactionEnabled: false
+      } 
+    }))
+    return
+  }
+  
+  // Default response for unknown commands
+  console.log(JSON.stringify({ id, type: "response", command: type || "unknown", success: true, data: {} }))
 })
 `,
     "utf-8",

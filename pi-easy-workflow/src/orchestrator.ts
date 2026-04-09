@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto"
-import { mkdirSync, unlinkSync, writeFileSync } from "fs"
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "fs"
 import { join } from "path"
 import { buildExecutionVariables, buildPlanningVariables, buildPlanRevisionVariables, buildCommitVariables, buildReviewFixVariables } from "./prompts/index.ts"
 import { getLatestTaggedOutput, getPlanExecutionEligibility } from "./task-state.ts"
@@ -10,7 +10,7 @@ import { resolveExecutionTasks, getExecutionGraphTasks } from "./execution-plan.
 import { PiSessionManager } from "./runtime/session-manager.ts"
 import { PiReviewSessionRunner } from "./runtime/review-session.ts"
 import { BestOfNRunner } from "./runtime/best-of-n.ts"
-import { WorktreeLifecycle, resolveTargetBranch, type WorktreeInfo } from "./runtime/worktree.ts"
+import { WorktreeLifecycle, resolveTargetBranch, listWorktrees, type WorktreeInfo } from "./runtime/worktree.ts"
 
 function nowUnix(): number {
   return Math.floor(Date.now() / 1000)
@@ -226,8 +226,26 @@ export class PiOrchestrator {
 
     let worktreeInfo: WorktreeInfo | null = null
     try {
-      worktreeInfo = await this.worktree.createForTask(task.id)
-      this.db.updateTask(task.id, { worktreeDir: worktreeInfo.directory })
+      // Check if task already has an existing worktree (e.g., from smart repair or previous run)
+      // Reuse it if it exists and is still valid
+      if (task.worktreeDir && existsSync(task.worktreeDir)) {
+        try {
+          // Verify it's still a tracked git worktree
+          const worktrees = await listWorktrees(this.projectRoot)
+          const existingWorktree = worktrees.find(w => w.directory === task.worktreeDir)
+          if (existingWorktree) {
+            worktreeInfo = existingWorktree
+          }
+        } catch {
+          // If verification fails, fall through to create new worktree
+        }
+      }
+      
+      // Create new worktree if we don't have a valid existing one
+      if (!worktreeInfo) {
+        worktreeInfo = await this.worktree.createForTask(task.id)
+        this.db.updateTask(task.id, { worktreeDir: worktreeInfo.directory })
+      }
       this.broadcastTask(task.id)
 
       const command = options.command.trim()

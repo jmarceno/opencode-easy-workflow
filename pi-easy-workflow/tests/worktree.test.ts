@@ -259,7 +259,7 @@ describe("WorktreeLifecycle", () => {
     expect(existsSync(taskWorktree.directory)).toBe(false)
 
     const runWorktree = await lifecycle.createForRun("r1", "worker")
-    expect(basename(runWorktree.directory)).toBe("worker-r1")
+    expect(basename(runWorktree.directory)).toMatch(/^worker-r1-[a-z0-9]+$/)
   })
 
   it("respects keepWorktrees and cleanupOrphaned prefix", async () => {

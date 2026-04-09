@@ -35,35 +35,35 @@ import { createInterface } from "readline"
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
 rl.on("line", (line) => {
   let request = null
-  try { request = JSON.parse(line) } catch {
-    return
-  }
+  try { request = JSON.parse(line) } catch { return }
   const id = request?.id
-  const method = request?.method
-  const prompt = String(request?.params?.prompt || "")
+  const type = request?.type
+  const prompt = String(request?.message || "")
 
-  if (method === "initialize") {
-    console.log(JSON.stringify({ id, result: { sessionId: "orchestrator-session-" + id, sessionFile: "/tmp/mock-orchestrator-session" } }))
+  if (type === "set_model" || type === "set_thinking_level") {
+    console.log(JSON.stringify({ id, type: "response", command: type, success: true }))
     return
   }
 
-  if (method === "prompt") {
+  if (type === "prompt") {
     const text = prompt.includes("Task A")
       ? "Completed Task A implementation"
       : prompt.includes("Task B")
         ? "Completed Task B implementation"
         : "Completed task"
-    console.log(JSON.stringify({ method: "assistant_message", params: { role: "assistant", text } }))
-    console.log(JSON.stringify({ id, result: { text } }))
+    console.log(JSON.stringify({ id, type: "response", command: "prompt", success: true }))
+    console.log(JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: text } }))
+    console.log(JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_complete", text } }))
+    console.log(JSON.stringify({ type: "agent_end" }))
     return
   }
 
-  if (method === "get_messages") {
-    console.log(JSON.stringify({ id, result: { messages: [{ text: "snapshot" }] } }))
+  if (type === "get_messages") {
+    console.log(JSON.stringify({ id, type: "response", command: "get_messages", success: true, data: { messages: [{ role: "assistant", text: "Completed task" }] } }))
     return
   }
 
-  console.log(JSON.stringify({ id, result: { ok: true } }))
+  console.log(JSON.stringify({ id, type: "response", command: type || "unknown", success: true, data: {} }))
 })
 `,
     "utf-8",

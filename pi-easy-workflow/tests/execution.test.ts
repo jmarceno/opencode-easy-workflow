@@ -28,42 +28,43 @@ function initGitRepo(root: string): void {
 
 function createMockPiBinary(root: string): string {
   const filePath = join(root, "mock-pi.js")
-  writeFileSync(
-    filePath,
-    `#!/usr/bin/env bun
+  const mockScript = `#!/usr/bin/env bun
 import { createInterface } from "readline"
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
 rl.on("line", (line) => {
   let request = null
-  try { request = JSON.parse(line) } catch {
-    return
-  }
+  try { request = JSON.parse(line) } catch { return }
   const id = request?.id
-  const method = request?.method
-  const params = request?.params || {}
-  if (method === "initialize") {
-    console.log(JSON.stringify({ id, result: { sessionId: "pi-session-" + id, sessionFile: "/tmp/mock-session" } }))
+  const type = request?.type
+  const prompt = String(request?.message || "")
+
+  if (type === "set_model" || type === "set_thinking_level") {
+    console.log(JSON.stringify({ id, type: "response", command: type, success: true }))
     return
   }
-  if (method === "prompt") {
-    const prompt = String(params.prompt || "")
+
+  if (type === "prompt") {
     let text = "Implemented changes end to end"
     if (prompt.includes("PREPARE PLAN ONLY") && prompt.includes("requested changes")) text = "Revised plan: 1) adjust 2) validate"
     else if (prompt.includes("PREPARE PLAN ONLY")) text = "Plan: 1) implement 2) verify"
     else if (prompt.includes("detached HEAD")) text = "Commit complete: hash abc123"
     process.stderr.write("mock pi stderr line\\n")
-    console.log(JSON.stringify({ method: "assistant_message", params: { role: "assistant", text } }))
-    console.log(JSON.stringify({ id, result: { text } }))
+    console.log(JSON.stringify({ id, type: "response", command: "prompt", success: true }))
+    console.log(JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: text } }))
+    console.log(JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_complete", text } }))
+    console.log(JSON.stringify({ type: "agent_end" }))
     return
   }
-  if (method === "get_messages") {
-    console.log(JSON.stringify({ id, result: { messages: [{ text: "snapshot" }] } }))
+
+  if (type === "get_messages") {
+    console.log(JSON.stringify({ id, type: "response", command: "get_messages", success: true, data: { messages: [{ role: "assistant", text: "Implemented changes" }] } }))
     return
   }
-  console.log(JSON.stringify({ id, result: { ok: true } }))
-})\n`,
-    "utf-8",
-  )
+
+  console.log(JSON.stringify({ id, type: "response", command: type || "unknown", success: true, data: {} }))
+})
+`
+  writeFileSync(filePath, mockScript, "utf-8")
   chmodSync(filePath, 0o755)
   return filePath
 }

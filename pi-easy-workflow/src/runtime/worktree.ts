@@ -572,11 +572,13 @@ export class WorktreeLifecycle {
     this.keepWorktrees = options.keepWorktrees === true
   }
 
-  /** Creates task worktree with `task-<taskId>` naming. */
+  /** Creates task worktree with `task-<taskId>-<random>` naming. */
   async createForTask(taskId: string, branch?: string): Promise<WorktreeInfo> {
     const normalizedTaskId = taskId.trim()
     if (!normalizedTaskId) throw new WorktreeError("taskId cannot be empty", "INVALID_TASK_ID")
-    const name = `task-${normalizedTaskId}`
+    // Add random suffix to ensure unique worktree names for task reruns
+    const randomSuffix = Math.random().toString(36).substring(2, 8)
+    const name = `task-${normalizedTaskId}-${randomSuffix}`
     return createWorktree({
       name,
       branch,
@@ -585,14 +587,16 @@ export class WorktreeLifecycle {
     })
   }
 
-  /** Creates run worktree with `<prefix>-<runId>` naming. */
+  /** Creates run worktree with `<prefix>-<runId>-<random>` naming. */
   async createForRun(runId: string, prefix: string): Promise<WorktreeInfo> {
     const normalizedRunId = runId.trim()
     const normalizedPrefix = prefix.trim()
     if (!normalizedRunId) throw new WorktreeError("runId cannot be empty", "INVALID_RUN_ID")
     if (!normalizedPrefix) throw new WorktreeError("prefix cannot be empty", "INVALID_PREFIX")
 
-    const name = `${normalizedPrefix}-${normalizedRunId}`
+    // Add random suffix to ensure unique worktree names for run reruns
+    const randomSuffix = Math.random().toString(36).substring(2, 8)
+    const name = `${normalizedPrefix}-${normalizedRunId}-${randomSuffix}`
     return createWorktree({
       name,
       baseDirectory: this.baseDirectory,
@@ -657,5 +661,15 @@ export class WorktreeLifecycle {
   /** Proxies inspect operation. */
   async inspect(worktreeDir: string): Promise<WorktreeStatus> {
     return inspectWorktree(worktreeDir)
+  }
+
+  /**
+   * Extracts task ID from a worktree directory name.
+   * Names follow pattern: `task-<taskId>-<random>`
+   * Returns null if not a task worktree.
+   */
+  static parseTaskId(worktreeName: string): string | null {
+    const match = worktreeName.match(/^task-(.+)-[a-z0-9]+$/)
+    return match?.[1] ?? null
   }
 }

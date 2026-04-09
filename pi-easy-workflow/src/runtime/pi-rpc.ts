@@ -1,51 +1,113 @@
+// Pi RPC Protocol Types
+// Based on pi mono packages/coding-agent/src/modes/rpc/rpc-types.ts
+
 export interface PiRpcRequest {
-  id: number
-  method: string
-  params?: Record<string, unknown>
-}
-
-export interface PiRpcResponse {
-  id: number
-  result?: Record<string, unknown>
-  error?: unknown
-}
-
-export interface PiRpcEvent {
-  method?: string
-  event?: string
-  type?: string
-  params?: Record<string, unknown>
-  payload?: Record<string, unknown>
+  id: string
+  type: string
   [key: string]: unknown
 }
 
-export function buildInitializeCommand(params: {
-  cwd: string
-  model?: string
-  thinkingLevel?: string
-}): Omit<PiRpcRequest, "id"> {
-  return {
-    method: "initialize",
-    params: {
-      cwd: params.cwd,
-      ...(params.model ? { model: params.model } : {}),
-      ...(params.thinkingLevel && params.thinkingLevel !== "default" ? { thinkingLevel: params.thinkingLevel } : {}),
-    },
-  }
+export interface PiRpcResponse {
+  id?: string
+  type: "response"
+  command: string
+  success: boolean
+  data?: Record<string, unknown>
+  error?: string
 }
 
-export function buildPromptCommand(promptText: string): Omit<PiRpcRequest, "id"> {
-  return {
-    method: "prompt",
-    params: {
-      prompt: promptText,
-    },
-  }
+export interface PiRpcEvent {
+  type?: string
+  event?: string
+  method?: string
+  [key: string]: unknown
 }
 
-export function buildSnapshotCommand(): Omit<PiRpcRequest, "id"> {
-  return {
-    method: "get_messages",
-    params: {},
-  }
+// Extension UI Request types for interactive prompts
+export interface ExtensionUISelectRequest {
+  type: "extension_ui_request"
+  id: string
+  method: "select"
+  title: string
+  options: string[]
+  timeout?: number
 }
+
+export interface ExtensionUIConfirmRequest {
+  type: "extension_ui_request"
+  id: string
+  method: "confirm"
+  title: string
+  message: string
+  timeout?: number
+}
+
+export interface ExtensionUIInputRequest {
+  type: "extension_ui_request"
+  id: string
+  method: "input"
+  title: string
+  placeholder?: string
+  timeout?: number
+}
+
+export interface ExtensionUIEditorRequest {
+  type: "extension_ui_request"
+  id: string
+  method: "editor"
+  title: string
+  prefill?: string
+}
+
+export interface ExtensionUINotifyRequest {
+  type: "extension_ui_request"
+  id: string
+  method: "notify"
+  message: string
+  notifyType?: "info" | "warning" | "error"
+}
+
+export type ExtensionUIRequest =
+  | ExtensionUISelectRequest
+  | ExtensionUIConfirmRequest
+  | ExtensionUIInputRequest
+  | ExtensionUIEditorRequest
+  | ExtensionUINotifyRequest
+
+// Extension UI Response types
+export interface ExtensionUISelectResponse {
+  type: "extension_ui_response"
+  id: string
+  value: string
+}
+
+export interface ExtensionUIConfirmResponse {
+  type: "extension_ui_response"
+  id: string
+  confirmed: boolean
+}
+
+export interface ExtensionUIInputResponse {
+  type: "extension_ui_response"
+  id: string
+  value: string
+}
+
+export interface ExtensionUIEditorResponse {
+  type: "extension_ui_response"
+  id: string
+  value: string
+}
+
+export interface ExtensionUICancelledResponse {
+  type: "extension_ui_response"
+  id: string
+  cancelled: true
+}
+
+export type ExtensionUIResponse =
+  | ExtensionUISelectResponse
+  | ExtensionUIConfirmResponse
+  | ExtensionUIInputResponse
+  | ExtensionUIEditorResponse
+  | ExtensionUICancelledResponse
