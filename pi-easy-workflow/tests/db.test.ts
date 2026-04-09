@@ -175,17 +175,22 @@ describe("PiKanbanDB", () => {
       key: "execution",
       variables: {
         task: { id: "task-2", name: "Task 2", prompt: "Do work" },
-        worktree_dir: "/tmp/worktree",
+        execution_intro: "Implement now",
+        approved_plan_block: "",
+        user_guidance_block: "",
+        additional_context_block: "",
       },
       sessionId: "session-prompt",
     })
 
-    expect(rendered.renderedText.includes("task-2")).toBe(true)
-    expect(rendered.renderedText.includes("/tmp/worktree")).toBe(true)
+    expect(rendered.renderedText.includes("Do work")).toBe(true)
+    expect(rendered.renderedText.includes("Implement now")).toBe(true)
 
     const capture = db.getSessionIOByType("session-prompt", "prompt_rendered")
     expect(capture.length).toBe(1)
-    expect(capture[0]?.payloadJson?.key).toBe("execution")
+    expect(capture[0]?.payloadJson?.templateKey).toBe("execution")
+    expect(capture[0]?.payloadJson?.renderedLength).toBe(rendered.renderedText.length)
+    expect(capture[0]?.payloadText).toBe(rendered.renderedText)
 
     const beforeVersions = db.getPromptTemplateVersions("execution").length
     db.upsertPromptTemplate({
