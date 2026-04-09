@@ -4,9 +4,11 @@ import { dirname, join } from "path"
 import { fileURLToPath } from "url"
 import { buildExecutionGraph, getExecutableTasks, resolveDependencyChain } from "../execution-plan.ts"
 import { discoverPiModels } from "../pi/model-discovery.ts"
-import { chooseDeterministicRepairAction, hasCapturedPlanOutput, isTaskAwaitingPlanApproval } from "../task-state.ts"
+import { isTaskAwaitingPlanApproval } from "../task-state.ts"
 import type { BestOfNConfig, Task, TaskRun, ThinkingLevel, WSMessage } from "../types.ts"
 import { PiKanbanDB } from "../db.ts"
+import { runStartupRecovery } from "../recovery/startup-recovery.ts"
+import { SmartRepairService, type SmartRepairAction } from "../runtime/smart-repair.ts"
 import { Router } from "./router.ts"
 import type { RequestContext } from "./types.ts"
 import { WebSocketHub } from "./websocket.ts"
@@ -111,6 +113,7 @@ export class PiKanbanServer {
   private readonly onResumeRun: RunControlFn | null
   private readonly onStopRun: RunControlFn | null
   private readonly defaultPort: number
+  private readonly smartRepair: SmartRepairService
 
   constructor(
     db: PiKanbanDB,
@@ -126,6 +129,7 @@ export class PiKanbanServer {
   ) {
     this.db = db
     this.defaultPort = opts.port ?? this.db.getOptions().port
+    this.smartRepair = new SmartRepairService(this.db)
     this.onStart = opts.onStart ?? (async () => null)
     this.onStartSingle = opts.onStartSingle ?? (async () => null)
     this.onStop = opts.onStop ?? (async () => null)
@@ -175,6 +179,11 @@ export class PiKanbanServer {
 
   async start(port = this.defaultPort): Promise<number> {
     if (this.server) return this.server.port
+
+    await runStartupRecovery({
+      db: this.db,
+      broadcast: (message) => this.broadcast(message),
+    })
 
     this.server = Bun.serve({
       port,
@@ -633,55 +642,26 @@ export class PiKanbanServer {
 
       const body = await req.json().catch(() => ({}))
       const requestedAction = typeof body?.action === "string" ? body.action : "smart"
-      const action = requestedAction === "smart" ? chooseDeterministicRepairAction(task).action : requestedAction
 
-      let update: Record<string, unknown> = {}
-      let reason = ""
-
-      if (action === "queue_implementation") {
-        if (!hasCapturedPlanOutput(task.agentOutput)) return json({ error: "No captured [plan] block exists" }, 400)
-        update = { status: "backlog", awaitingPlanApproval: false, executionPhase: "implementation_pending", errorMessage: null }
-        reason = "Queued implementation from repair"
-      } else if (action === "restore_plan_approval") {
-        if (!hasCapturedPlanOutput(task.agentOutput)) return json({ error: "No captured [plan] block exists" }, 400)
-        update = { status: "review", awaitingPlanApproval: true, executionPhase: "plan_complete_waiting_approval", errorMessage: null }
-        reason = "Restored plan approval"
-      } else if (action === "mark_done") {
-        update = { status: "done", completedAt: Math.floor(Date.now() / 1000), awaitingPlanApproval: false, errorMessage: null }
-        reason = "Marked done via repair"
-      } else if (action === "fail_task") {
-        update = { status: "failed", awaitingPlanApproval: false, errorMessage: body?.errorMessage ?? "Marked failed via repair" }
-        reason = "Marked failed via repair"
-      } else if (action === "continue_with_more_reviews") {
-        const additional = Number(body?.additionalReviewCount ?? 1)
-        const currentMax = task.maxReviewRunsOverride ?? this.db.getOptions().maxReviews
-        update = {
-          status: "backlog",
-          errorMessage: null,
-          maxReviewRunsOverride: currentMax + Math.max(1, additional),
-          ...(typeof body?.smartRepairHints === "string" && body.smartRepairHints.trim() ? { smartRepairHints: body.smartRepairHints.trim() } : {}),
-        }
-        reason = "Increased review allowance and resumed"
-      } else {
-        update = {
-          status: "backlog",
-          reviewCount: 0,
-          agentOutput: "",
-          errorMessage: null,
-          completedAt: null,
-          sessionId: null,
-          sessionUrl: null,
-          worktreeDir: null,
-          executionPhase: "not_started",
-          awaitingPlanApproval: false,
-          planRevisionCount: 0,
-          bestOfNSubstage: "idle",
-        }
-        reason = "Reset to backlog via repair"
+      if (requestedAction === "smart") {
+        const smart = await this.smartRepair.repair(task.id, typeof body?.smartRepairHints === "string" ? body.smartRepairHints : undefined)
+        const normalizedSmart = normalizeTaskForClient(smart.task, sessionUrlFor)
+        broadcast({ type: "task_updated", payload: normalizedSmart })
+        return json({ ok: true, action: smart.action, reason: smart.reason, task: normalizedSmart })
       }
 
-      const updated = this.db.updateTask(task.id, update)
-      if (!updated) return json({ error: "Task not found" }, 404)
+      const action = requestedAction as SmartRepairAction
+      if (!["queue_implementation", "restore_plan_approval", "reset_backlog", "mark_done", "fail_task", "continue_with_more_reviews"].includes(action)) {
+        return json({ error: `Unsupported repair action: ${requestedAction}` }, 400)
+      }
+
+      const reason = typeof body?.reason === "string" && body.reason.trim() ? body.reason.trim() : "Manual repair action"
+
+      const updated = this.smartRepair.applyAction(task.id, {
+        action,
+        reason,
+        errorMessage: typeof body?.errorMessage === "string" && body.errorMessage.trim() ? body.errorMessage.trim() : undefined,
+      })
       const normalized = normalizeTaskForClient(updated, sessionUrlFor)
       broadcast({ type: "task_updated", payload: normalized })
       return json({ ok: true, action, reason, task: normalized })

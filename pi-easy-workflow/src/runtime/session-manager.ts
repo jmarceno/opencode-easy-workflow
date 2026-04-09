@@ -94,6 +94,17 @@ export class PiSessionManager {
         piSessionFile: readString(initResult, "sessionFile", "piSessionFile"),
       }) ?? session
 
+      this.db.appendSessionIO({
+        sessionId: session.id,
+        stream: "server",
+        recordType: "prompt_rendered",
+        payloadJson: {
+          sessionKind: input.sessionKind,
+          promptLength: input.promptText.length,
+        },
+        payloadText: input.promptText,
+      })
+
       const prompt = buildPromptCommand(input.promptText)
       const promptResult = await process.send(prompt.method, prompt.params ?? {}, 300_000)
       responseText = readPromptText(promptResult)

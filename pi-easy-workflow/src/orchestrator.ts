@@ -1,12 +1,14 @@
 import { randomUUID } from "crypto"
+import { mkdirSync, unlinkSync, writeFileSync } from "fs"
 import { join } from "path"
-import { buildExecutionVariables, buildPlanningVariables, buildPlanRevisionVariables, buildCommitVariables } from "./prompts/index.ts"
+import { buildExecutionVariables, buildPlanningVariables, buildPlanRevisionVariables, buildCommitVariables, buildReviewFixVariables } from "./prompts/index.ts"
 import { getLatestTaggedOutput, getPlanExecutionEligibility } from "./task-state.ts"
 import type { PiKanbanDB } from "./db.ts"
 import type { PiSessionKind, PiWorkflowSession } from "./db/types.ts"
 import type { Options, Task, WSMessage, WorkflowRun } from "./types.ts"
 import { resolveExecutionTasks } from "./execution-plan.ts"
 import { PiSessionManager } from "./runtime/session-manager.ts"
+import { PiReviewSessionRunner } from "./runtime/review-session.ts"
 import { WorktreeLifecycle, resolveTargetBranch, type WorktreeInfo } from "./runtime/worktree.ts"
 
 function nowUnix(): number {
@@ -40,6 +42,7 @@ export class PiOrchestrator {
   private shouldStop = false
   private currentRunId: string | null = null
   private readonly sessionManager: PiSessionManager
+  private readonly reviewRunner: PiReviewSessionRunner
   private readonly worktree: WorktreeLifecycle
 
   constructor(
@@ -49,6 +52,7 @@ export class PiOrchestrator {
     private readonly projectRoot = process.cwd(),
   ) {
     this.sessionManager = new PiSessionManager(db)
+    this.reviewRunner = new PiReviewSessionRunner(db)
     this.worktree = new WorktreeLifecycle({ baseDirectory: this.projectRoot })
   }
 
@@ -200,6 +204,11 @@ export class PiOrchestrator {
         await this.runStandardPrompt(task.id, task, options, worktreeInfo)
       }
 
+      if (task.review) {
+        const reviewPassed = await this.runReviewLoop(task.id, options, worktreeInfo)
+        if (!reviewPassed) return
+      }
+
       if (task.autoCommit) {
         await this.runCommitPrompt(task.id, task, options, worktreeInfo)
       }
@@ -232,6 +241,145 @@ export class PiOrchestrator {
       })
       this.broadcastTask(task.id)
       throw error
+    }
+  }
+
+  private buildReviewFile(task: Task, worktreeDir: string): string {
+    const reviewDir = join(worktreeDir, ".pi", "easy-workflow")
+    mkdirSync(reviewDir, { recursive: true })
+    const reviewFilePath = join(reviewDir, `review-${task.id}.md`)
+    const reviewContent = [
+      `# Review Task: ${task.name}`,
+      "",
+      "## Goals",
+      task.prompt,
+      "",
+      "## Review Instructions",
+      "- Validate implementation completeness against goals.",
+      "- Identify bugs, security issues, edge cases, and missing tests.",
+      "- Return strict JSON only as instructed by prompt contract.",
+    ].join("\n")
+    writeFileSync(reviewFilePath, reviewContent, "utf-8")
+    return reviewFilePath
+  }
+
+  private async runReviewLoop(taskId: string, options: Options, worktreeInfo: WorktreeInfo): Promise<boolean> {
+    const originalTask = this.db.getTask(taskId)
+    if (!originalTask) return false
+
+    let reviewCount = originalTask.reviewCount
+    const maxRuns = originalTask.maxReviewRunsOverride ?? options.maxReviews
+    const reviewFilePath = this.buildReviewFile(originalTask, worktreeInfo.directory)
+
+    try {
+      while (reviewCount < maxRuns) {
+        const task = this.db.getTask(taskId)
+        if (!task) return false
+
+        this.db.updateTask(taskId, {
+          status: "review",
+          reviewCount,
+          reviewActivity: "running",
+        })
+        this.broadcastTask(taskId)
+
+        const reviewRun = await this.reviewRunner.run({
+          task,
+          cwd: worktreeInfo.directory,
+          worktreeDir: worktreeInfo.directory,
+          branch: worktreeInfo.branch,
+          reviewFilePath,
+          model: options.reviewModel,
+          thinkingLevel: task.thinkingLevel,
+        })
+
+        this.db.updateTask(taskId, {
+          sessionId: reviewRun.sessionId,
+          sessionUrl: this.sessionUrlFor(reviewRun.sessionId),
+          reviewActivity: "idle",
+        })
+        this.broadcastTask(taskId)
+
+        if (reviewRun.reviewResult.status === "pass") {
+          this.db.updateTask(taskId, { status: "executing", reviewActivity: "idle" })
+          this.broadcastTask(taskId)
+          return true
+        }
+
+        if (reviewRun.reviewResult.status === "blocked") {
+          this.db.updateTask(taskId, {
+            status: "stuck",
+            reviewCount,
+            reviewActivity: "idle",
+            errorMessage: `Review blocked: ${reviewRun.reviewResult.summary}`,
+          })
+          this.broadcastTask(taskId)
+          return false
+        }
+
+        reviewCount += 1
+        this.db.updateTask(taskId, { reviewCount, reviewActivity: "idle" })
+        this.broadcastTask(taskId)
+
+        if (reviewCount >= maxRuns) {
+          this.db.updateTask(taskId, {
+            status: "stuck",
+            reviewCount,
+            reviewActivity: "idle",
+            errorMessage: `Max reviews (${maxRuns}) reached. Gaps: ${reviewRun.reviewResult.gaps.join("; ") || reviewRun.reviewResult.summary}`,
+          })
+          this.broadcastTask(taskId)
+          return false
+        }
+
+        const currentTask = this.db.getTask(taskId)
+        if (!currentTask) return false
+        const fixPromptRendered = this.db.renderPrompt(
+          "review_fix",
+          buildReviewFixVariables(currentTask, reviewRun.reviewResult.summary, reviewRun.reviewResult.gaps),
+        )
+        const fixPrompt = reviewRun.reviewResult.recommendedPrompt
+          ? `${fixPromptRendered.renderedText}\n\nReviewer recommended prompt:\n${reviewRun.reviewResult.recommendedPrompt}`
+          : fixPromptRendered.renderedText
+
+        const fixSession = await this.sessionManager.executePrompt({
+          taskId,
+          sessionKind: "task",
+          cwd: worktreeInfo.directory,
+          worktreeDir: worktreeInfo.directory,
+          branch: worktreeInfo.branch,
+          model: currentTask.executionModel !== "default" ? currentTask.executionModel : options.executionModel,
+          thinkingLevel: currentTask.thinkingLevel,
+          promptText: fixPrompt,
+        })
+
+        this.db.updateTask(taskId, {
+          status: "executing",
+          sessionId: fixSession.session.id,
+          sessionUrl: this.sessionUrlFor(fixSession.session.id),
+        })
+        if (fixSession.responseText.trim()) {
+          this.db.appendAgentOutput(taskId, tagOutput(`review-fix-${reviewCount}`, fixSession.responseText))
+          this.broadcast({
+            type: "agent_output",
+            payload: {
+              taskId,
+              output: tagOutput(`review-fix-${reviewCount}`, fixSession.responseText),
+            },
+          })
+        }
+        this.broadcastTask(taskId)
+      }
+
+      return true
+    } finally {
+      this.db.updateTask(taskId, { reviewActivity: "idle" })
+      this.broadcastTask(taskId)
+      try {
+        unlinkSync(reviewFilePath)
+      } catch {
+        // best-effort cleanup
+      }
     }
   }
 

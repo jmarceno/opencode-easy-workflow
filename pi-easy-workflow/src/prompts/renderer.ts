@@ -109,6 +109,12 @@ export function buildReviewVariables(task: Task, reviewFilePath: string): Record
   }
 }
 
+export interface ReviewFixPromptVariablesInput {
+  task: Task
+  reviewSummary: string
+  reviewGaps: string[]
+}
+
 export function buildReviewFixVariables(
   task: Task,
   reviewSummary: string,
