@@ -135,6 +135,15 @@ async function main() {
     const stoppedRun = await stopResp.json() as any
     assert(stoppedRun.status === "failed", `Expected stopped run to be failed, got ${stoppedRun.status}`)
 
+    const archiveResp = await fetch(`http://127.0.0.1:${port}/api/runs/${startedRun.id}`, { method: "DELETE" })
+    assert(archiveResp.status === 200, `Expected archive to succeed, got ${archiveResp.status}`)
+    const archivedRun = await archiveResp.json() as any
+    assert(archivedRun.archived === true, "Expected archived run response")
+
+    const archivedListResp = await fetch(`http://127.0.0.1:${port}/api/runs`)
+    const archivedList = await archivedListResp.json() as any[]
+    assert(archivedList.length === 0, `Expected archived runs to be hidden, got ${archivedList.length}`)
+
     const singleStartResp = await fetch(`http://127.0.0.1:${port}/api/tasks/${task.id}/start`, { method: "POST" })
     assert(singleStartResp.status === 200, `Expected single task start to succeed after slot frees, got ${singleStartResp.status}`)
     const singleRun = await singleStartResp.json() as any

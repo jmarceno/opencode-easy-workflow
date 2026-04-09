@@ -420,6 +420,19 @@ export class PiKanbanServer {
 
     this.router.get("/api/runs", ({ json }) => json(this.db.getWorkflowRuns()))
 
+    this.router.delete("/api/runs/:id", ({ params, json, broadcast }) => {
+      const run = this.db.getWorkflowRun(params.id)
+      if (!run || run.isArchived) return json({ error: "Run not found" }, 404)
+      if (run.status === "running" || run.status === "stopping" || run.status === "paused") {
+        return json({ error: "Only completed or failed workflow runs can be archived" }, 409)
+      }
+
+      const archivedRun = this.db.archiveWorkflowRun(params.id)
+      if (!archivedRun) return json({ error: "Run not found" }, 404)
+      broadcast({ type: "run_archived", payload: { id: params.id } })
+      return json({ id: params.id, archived: true })
+    })
+
     this.router.post("/api/start", async ({ json, broadcast }) => {
       const run = await this.onStart()
       return json(run)

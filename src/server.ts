@@ -977,6 +977,22 @@ export class KanbanServer {
         return this.json(this.db.getWorkflowRuns())
       }
 
+      const archiveRunMatch = method === "DELETE"
+        ? url.pathname.match(/^\/api\/runs\/([a-z0-9]+)$/)
+        : null
+      if (archiveRunMatch) {
+        const runId = archiveRunMatch[1]
+        const run = this.db.getWorkflowRun(runId)
+        if (!run || run.isArchived) return this.json({ error: "Run not found" }, 404)
+        if (run.status === "running" || run.status === "stopping" || run.status === "paused") {
+          return this.json({ error: "Only completed or failed workflow runs can be archived" }, 409)
+        }
+        const archivedRun = this.db.archiveWorkflowRun(runId)
+        if (!archivedRun) return this.json({ error: "Run not found" }, 404)
+        this.broadcast({ type: "run_archived", payload: { id: runId } })
+        return this.json({ id: runId, archived: true })
+      }
+
       // Archive/Delete all done tasks
       if (method === "DELETE" && url.pathname === "/api/tasks/done/all") {
         const doneTasks = this.db.getTasksByStatus("done")

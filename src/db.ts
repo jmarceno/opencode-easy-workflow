@@ -101,6 +101,8 @@ function rowToWorkflowRun(row: any): WorkflowRun {
     startedAt: row.started_at,
     updatedAt: row.updated_at,
     finishedAt: row.finished_at ?? null,
+    isArchived: row.is_archived === 1,
+    archivedAt: row.archived_at ?? null,
   }
 }
 
@@ -281,7 +283,9 @@ export class KanbanDB {
         created_at INTEGER NOT NULL DEFAULT (unixepoch()),
         started_at INTEGER NOT NULL DEFAULT (unixepoch()),
         updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
-        finished_at INTEGER
+        finished_at INTEGER,
+        is_archived INTEGER NOT NULL DEFAULT 0,
+        archived_at INTEGER
       );
 
       CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
@@ -584,11 +588,23 @@ export class KanbanDB {
           created_at INTEGER NOT NULL DEFAULT (unixepoch()),
           started_at INTEGER NOT NULL DEFAULT (unixepoch()),
           updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
-          finished_at INTEGER
+          finished_at INTEGER,
+          is_archived INTEGER NOT NULL DEFAULT 0,
+          archived_at INTEGER
         );
         CREATE INDEX idx_workflow_runs_status ON workflow_runs(status);
         CREATE INDEX idx_workflow_runs_current_task_id ON workflow_runs(current_task_id);
       `)
+    }
+
+    const workflowRunColumns = this.db.prepare("PRAGMA table_info(workflow_runs)").all() as any[]
+    const hasWorkflowRunArchived = workflowRunColumns.some((col: any) => col.name === "is_archived")
+    if (!hasWorkflowRunArchived) {
+      this.db.exec("ALTER TABLE workflow_runs ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0")
+    }
+    const hasWorkflowRunArchivedAt = workflowRunColumns.some((col: any) => col.name === "archived_at")
+    if (!hasWorkflowRunArchivedAt) {
+      this.db.exec("ALTER TABLE workflow_runs ADD COLUMN archived_at INTEGER")
     }
   }
 
@@ -1166,7 +1182,7 @@ export class KanbanDB {
   }
 
   getWorkflowRuns(): WorkflowRun[] {
-    const rows = this.db.prepare("SELECT * FROM workflow_runs ORDER BY started_at DESC, created_at DESC").all() as any[]
+    const rows = this.db.prepare("SELECT * FROM workflow_runs WHERE is_archived = 0 ORDER BY started_at DESC, created_at DESC").all() as any[]
     return rows.map(rowToWorkflowRun)
   }
 
@@ -1222,7 +1238,7 @@ export class KanbanDB {
   }
 
   failStaleWorkflowRuns(errorMessage = "Workflow server restarted while this run was active. Review the last task and restart or repair as needed."): WorkflowRun[] {
-    const staleRuns = this.db.prepare("SELECT * FROM workflow_runs WHERE status IN ('running', 'paused', 'stopping') ORDER BY started_at ASC").all() as any[]
+    const staleRuns = this.db.prepare("SELECT * FROM workflow_runs WHERE is_archived = 0 AND status IN ('running', 'paused', 'stopping') ORDER BY started_at ASC").all() as any[]
     if (staleRuns.length === 0) return []
 
     const now = Math.floor(Date.now() / 1000)
@@ -1241,6 +1257,16 @@ export class KanbanDB {
       finished_at: now,
       updated_at: now,
     }))
+  }
+
+  archiveWorkflowRun(id: string): WorkflowRun | null {
+    const run = this.getWorkflowRun(id)
+    if (!run) return null
+    const now = Math.floor(Date.now() / 1000)
+    this.db.prepare(
+      "UPDATE workflow_runs SET is_archived = 1, archived_at = ?, updated_at = unixepoch() WHERE id = ?"
+    ).run(now, id)
+    return { ...run, isArchived: true, archivedAt: now, updatedAt: now }
   }
 
   createTaskRun(data: {

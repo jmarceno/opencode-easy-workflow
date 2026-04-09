@@ -1365,6 +1365,14 @@ function renderRunPanel() {
       actions.appendChild(stopBtn)
     }
 
+    if (run.status === 'completed' || run.status === 'failed') {
+      const archiveBtn = document.createElement('sl-button')
+      archiveBtn.size = 'small'
+      archiveBtn.textContent = 'Archive'
+      archiveBtn.onclick = () => archiveRun(run.id)
+      actions.appendChild(archiveBtn)
+    }
+
     item.appendChild(main)
     item.appendChild(actions)
     body.appendChild(item)
@@ -1793,6 +1801,13 @@ function connectWS() {
         updateStartBtn()
         break
       }
+      case 'run_archived':
+        addLogEntry(`Workflow run archived: ${msg.payload.id}`)
+        allRuns = allRuns.filter((run) => run.id !== msg.payload.id)
+        renderRunPanel()
+        renderBoard()
+        updateStartBtn()
+        break
       case 'agent_output':
         const t = allTasks.find(t2 => t2.id === msg.payload.taskId)
         if (t) { t.agentOutput = (t.agentOutput || '') + msg.payload.output; renderBoard() }
@@ -2963,6 +2978,20 @@ async function stopRun(runId) {
     await loadRuns()
     showToast('Run will stop after the current task', 'success')
   } catch (e) { showToast('Stop failed: ' + e.message, 'error') }
+}
+
+async function archiveRun(runId) {
+  const run = allRuns.find(r => r.id === runId)
+  const runName = run ? `"${run.displayName || run.id}"` : 'this workflow run'
+  if (!confirm(`Archive ${runName}? It will be removed from the workflow runs panel.`)) return
+  try {
+    await api(`/api/runs/${runId}`, 'DELETE')
+    allRuns = allRuns.filter(r => r.id !== runId)
+    renderRunPanel()
+    renderBoard()
+    updateStartBtn()
+    showToast('Workflow run archived', 'success')
+  } catch (e) { showToast('Failed to archive run: ' + e.message, 'error') }
 }
 
 // ---- Options ----

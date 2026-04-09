@@ -184,6 +184,28 @@ describe("PiKanbanServer API", () => {
       expect(runsRes.response.status).toBe(200)
       expect(Array.isArray(runsRes.data)).toBe(true)
 
+      const finishedRun = db.createWorkflowRun({
+        id: "run-api-finished",
+        kind: "single_task",
+        status: "completed",
+        displayName: "Completed API run",
+        taskOrder: [taskId],
+        targetTaskId: taskId,
+        finishedAt: Math.floor(Date.now() / 1000),
+      })
+
+      const runsWithFinishedRes = await api("/api/runs")
+      expect(runsWithFinishedRes.response.status).toBe(200)
+      expect(runsWithFinishedRes.data.some((run: any) => run.id === finishedRun.id)).toBe(true)
+
+      const archiveRunRes = await api(`/api/runs/${finishedRun.id}`, { method: "DELETE" })
+      expect(archiveRunRes.response.status).toBe(200)
+      expect(archiveRunRes.data.archived).toBe(true)
+
+      const runsAfterArchiveRes = await api("/api/runs")
+      expect(runsAfterArchiveRes.response.status).toBe(200)
+      expect(runsAfterArchiveRes.data.some((run: any) => run.id === finishedRun.id)).toBe(false)
+
       const graphRes = await api("/api/execution-graph")
       expect([200, 400]).toContain(graphRes.response.status)
 

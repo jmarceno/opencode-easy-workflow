@@ -99,6 +99,8 @@ export interface WorkflowRun {
   startedAt: number
   updatedAt: number
   finishedAt: number | null
+  isArchived: boolean
+  archivedAt: number | null
 }
 
 export interface TaskRun {
@@ -213,6 +215,7 @@ export type WSMessageType =
   | "execution_stopped"
   | "execution_complete"
   | "run_created"
+  | "run_archived"
   | "run_updated"
   | "agent_output"
   | "error"

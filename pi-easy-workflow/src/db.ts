@@ -577,6 +577,8 @@ function rowToWorkflowRun(row: Record<string, unknown>): WorkflowRun {
     startedAt: Number(row.started_at ?? 0),
     updatedAt: Number(row.updated_at ?? 0),
     finishedAt: row.finished_at === null || row.finished_at === undefined ? null : Number(row.finished_at),
+    isArchived: Number(row.is_archived ?? 0) === 1,
+    archivedAt: row.archived_at === null || row.archived_at === undefined ? null : Number(row.archived_at),
   }
 }
 
@@ -743,7 +745,9 @@ const MIGRATIONS: Migration[] = [
         created_at INTEGER NOT NULL DEFAULT (unixepoch()),
         started_at INTEGER NOT NULL DEFAULT (unixepoch()),
         updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
-        finished_at INTEGER
+        finished_at INTEGER,
+        is_archived INTEGER NOT NULL DEFAULT 0,
+        archived_at INTEGER
       );
       `,
       `CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status);`,
@@ -1044,9 +1048,22 @@ export class PiKanbanDB {
     this.db.exec("PRAGMA foreign_keys = ON")
 
     runMigrations(this.db, MIGRATIONS)
+    this.ensureWorkflowRunArchiveColumns()
     this.normalizeSessionMessages()
     this.seedDefaultOptions()
     this.seedPromptTemplates()
+  }
+
+  private ensureWorkflowRunArchiveColumns(): void {
+    const columns = this.db.prepare("PRAGMA table_info(workflow_runs)").all() as { name?: string }[]
+    const hasArchived = columns.some((column) => column.name === "is_archived")
+    if (!hasArchived) {
+      this.db.exec("ALTER TABLE workflow_runs ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0")
+    }
+    const hasArchivedAt = columns.some((column) => column.name === "archived_at")
+    if (!hasArchivedAt) {
+      this.db.exec("ALTER TABLE workflow_runs ADD COLUMN archived_at INTEGER")
+    }
   }
 
   close(): void {
@@ -1651,8 +1668,18 @@ export class PiKanbanDB {
   }
 
   getWorkflowRuns(): WorkflowRun[] {
-    const rows = this.db.prepare("SELECT * FROM workflow_runs ORDER BY started_at DESC, created_at DESC").all() as Record<string, unknown>[]
+    const rows = this.db.prepare("SELECT * FROM workflow_runs WHERE is_archived = 0 ORDER BY started_at DESC, created_at DESC").all() as Record<string, unknown>[]
     return rows.map(rowToWorkflowRun)
+  }
+
+  archiveWorkflowRun(id: string): WorkflowRun | null {
+    const run = this.getWorkflowRun(id)
+    if (!run) return null
+    const now = nowUnix()
+    this.db
+      .prepare("UPDATE workflow_runs SET is_archived = 1, archived_at = ?, updated_at = unixepoch() WHERE id = ?")
+      .run(now, id)
+    return { ...run, isArchived: true, archivedAt: now, updatedAt: now }
   }
 
   updateWorkflowRun(id: string, input: UpdateWorkflowRunInput): WorkflowRun | null {
