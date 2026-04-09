@@ -1,6 +1,5 @@
 /**
- * Pi Easy Workflow entrypoint (scaffolding stub).
- * TODO: Replace with Pi runtime/server bootstrap in migration tasks.
+ * Pi Easy Workflow entrypoint placeholder.
  */
 export function main(): void {
   console.log("[pi-easy-workflow] Scaffolding ready. Runtime not implemented yet.")

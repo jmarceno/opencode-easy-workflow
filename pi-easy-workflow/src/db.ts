@@ -39,6 +39,7 @@ import type {
   UpdateWorkflowRunInput,
   UpsertPromptTemplateInput,
 } from "./db/types.ts"
+import { renderTemplate } from "./prompts/renderer.ts"
 
 const DEFAULT_OPTIONS: Options = {
   commitPrompt: DEFAULT_COMMIT_PROMPT,
@@ -73,146 +74,277 @@ const DEFAULT_PROMPT_TEMPLATES: PromptSeed[] = [
   {
     key: "execution",
     name: "Task Execution",
-    description: "Executes a single workflow task in implementation mode.",
+    description: "Core implementation prompt for standard and approved-plan execution.",
     templateText: [
-      "You are implementing task {{task.id}}: {{task.name}}.",
+      "EXECUTE END-TO-END. Do not ask follow-up questions unless blocked by: missing credentials, missing required external input, or an irreversible product decision. Make reasonable assumptions from the codebase.",
       "",
-      "Task prompt:",
+      "{{execution_intro}}",
+      "",
+      "Task:",
       "{{task.prompt}}",
       "",
-      "Constraints:",
-      "- Work only inside {{worktree_dir}}",
-      "- Preserve project conventions",
-      "- Run focused validation before finishing",
+      "{{approved_plan_block}}",
+      "{{user_guidance_block}}",
+      "{{additional_context_block}}",
+      "",
+      "Implementation requirements:",
+      "- Make concrete code changes in this worktree.",
+      "- Keep changes scoped to the task goals.",
+      "- Validate your result with focused checks before finishing.",
+      "- Report concise progress and outcomes.",
     ].join("\n"),
-    variablesJson: ["task", "worktree_dir"],
+    variablesJson: [
+      "task",
+      "execution_intro",
+      "approved_plan_block",
+      "user_guidance_block",
+      "additional_context_block",
+    ],
   },
   {
     key: "planning",
     name: "Plan Generation",
-    description: "Generates an implementation plan before execution.",
+    description: "Planning-only prompt used before implementation begins.",
     templateText: [
-      "Create a plan for task {{task.id}}: {{task.name}}.",
+      "PREPARE PLAN ONLY. Do not ask follow-up questions. Make reasonable assumptions from the codebase. Output only the plan — do not proceed to implementation.",
+      "",
+      "Task:",
+      "{{task.prompt}}",
+      "",
+      "{{additional_context_block}}",
       "",
       "Plan requirements:",
-      "- Include clear implementation steps",
-      "- Include test/verification approach",
-      "- Keep changes scoped to the task",
+      "- Break work into clear, ordered implementation steps.",
+      "- Include validation and verification approach.",
+      "- Keep scope aligned to task goals and constraints.",
     ].join("\n"),
-    variablesJson: ["task"],
+    variablesJson: ["task", "additional_context_block"],
   },
   {
     key: "plan_revision",
     name: "Plan Revision",
-    description: "Revises a previously generated plan after user feedback.",
+    description: "Revises a captured plan using user feedback while staying in planning mode.",
     templateText: [
-      "Revise the plan for task {{task.id}} based on feedback.",
+      "PREPARE PLAN ONLY. Do not ask follow-up questions. Make reasonable assumptions from the codebase. Output only the plan — do not proceed to implementation.",
       "",
-      "Current plan:",
+      "The user has reviewed your plan and requested changes. Revise the plan based on feedback.",
+      "",
+      "Task:",
+      "{{task.prompt}}",
+      "",
+      "Previous plan:",
       "{{current_plan}}",
       "",
-      "Feedback:",
+      "User feedback:",
       "{{revision_feedback}}",
+      "",
+      "{{additional_context_block}}",
+      "",
+      "Provide a revised plan that directly addresses the feedback.",
     ].join("\n"),
-    variablesJson: ["task", "current_plan", "revision_feedback"],
+    variablesJson: ["task", "current_plan", "revision_feedback", "additional_context_block"],
   },
   {
     key: "review",
     name: "Review",
-    description: "Reviews implementation for bugs, security and completeness.",
+    description: "Strict repository review prompt with JSON output contract.",
     templateText: [
-      "Review task {{task.id}} implementation.",
+      "You are the workflow review agent. You are strict and thorough.",
       "",
-      "Check for:",
-      "- Goal completeness",
-      "- Bugs and regressions",
-      "- Security issues",
-      "- Missing tests",
+      "Review the current repository state against the task review file named in the user prompt.",
+      "Use that review file as the source of truth for goals and review instructions.",
+      "Inspect the codebase and branch state directly.",
+      "Do not rely on prior session history.",
+      "Do not make code changes.",
       "",
-      "Return strict JSON review output.",
+      "Review the task review file at: {{review_file_path}}",
+      "",
+      "Review Criteria:",
+      "1) Goal completeness: every goal must map to verified working code.",
+      "2) Errors and bugs: logic issues, null handling, boundary failures, race conditions, exceptions.",
+      "3) Security flaws: injection, missing validation, hardcoded secrets, unsafe file/path operations.",
+      "4) Best practices: error handling, type safety, cleanup, edge cases, project conventions.",
+      "5) Test coverage: critical paths and new behavior should be testable and covered.",
+      "",
+      "Strictness directive: default to finding gaps. Only return pass when all goals are complete and no unresolved defects remain.",
+      "",
+      "Your response must be valid JSON:",
+      '"status": "pass|gaps_found|blocked",',
+      '"summary": "<brief summary of review findings>",',
+      '"gaps": ["<first gap if any>", "<second gap if any>"],',
+      '"recommendedPrompt": "<specific prompt to address gaps, or empty string if no gaps>"',
+      "",
+      "Context:",
+      "Task ID: {{task.id}}",
+      "Task Name: {{task.name}}",
     ].join("\n"),
-    variablesJson: ["task"],
+    variablesJson: ["task", "review_file_path"],
   },
   {
     key: "review_fix",
     name: "Review Fix",
-    description: "Addresses gaps found during review.",
+    description: "Follow-up prompt that fixes issues identified by review.",
     templateText: [
-      "Fix review gaps for task {{task.id}}.",
+      "Address the issues found during review and update the implementation.",
+      "",
+      "Task:",
+      "{{task.prompt}}",
       "",
       "Review summary:",
       "{{review_summary}}",
       "",
       "Gaps:",
       "{{review_gaps}}",
+      "",
+      "Requirements:",
+      "- Fix all listed gaps completely.",
+      "- Preserve existing correct behavior.",
+      "- Keep the solution scoped and production-ready.",
     ].join("\n"),
     variablesJson: ["task", "review_summary", "review_gaps"],
   },
   {
     key: "repair",
     name: "Repair",
-    description: "Repairs invalid workflow state using deterministic rules.",
+    description: "Deterministic workflow state repair analysis prompt.",
     templateText: [
-      "Analyze workflow state for task {{task.id}} and choose one repair action.",
+      "You repair workflow task states.",
       "",
-      "Valid actions:",
+      "Analyze the task state, worktree git status, session history, and latest output. Choose what ACTUALLY happened and the right repair action.",
+      "",
+      "Choose exactly one action:",
       "- queue_implementation",
       "- restore_plan_approval",
       "- reset_backlog",
       "- mark_done",
       "- fail_task",
       "- continue_with_more_reviews",
+      "",
+      "Decision guidelines:",
+      "- Prefer queue_implementation when a usable [plan] exists and worktree shows real code changes.",
+      "- Prefer mark_done only when output and worktree both confirm completion.",
+      "- Use restore_plan_approval when plan should return to human review.",
+      "- Use reset_backlog when there are no meaningful changes and task should restart.",
+      "- Use fail_task when state is invalid and should remain visible with actionable error.",
+      "- Use continue_with_more_reviews when task is stuck only due to review limit and gaps seem fixable.",
+      "",
+      "Critical verification steps:",
+      "1) Check worktree git status.",
+      "2) Check session messages for where execution stopped.",
+      "3) Check workflow session history patterns.",
+      "4) Compare latest output claims with actual worktree changes.",
+      "",
+      "Context:",
+      "{{repair_context}}",
+      "",
+      "Return strict JSON: {\"action\":\"...\",\"reason\":\"...\",\"errorMessage\":\"optional\"}",
     ].join("\n"),
-    variablesJson: ["task"],
+    variablesJson: ["task", "repair_context"],
   },
   {
     key: "best_of_n_worker",
     name: "Best-of-N Worker",
-    description: "Worker prompt for candidate generation.",
+    description: "Worker prompt for candidate implementation generation in best-of-n.",
     templateText: [
-      "Generate one candidate implementation for task {{task.id}}.",
+      "EXECUTE END-TO-END. Do not ask follow-up questions unless blocked by: missing credentials, missing required external input, or an irreversible product decision. Make reasonable assumptions from the codebase.",
       "",
-      "Worker slot: {{slot_index}}",
-      "Model: {{model}}",
+      "You are one candidate implementation worker in a best-of-n workflow.",
+      "Produce the best complete solution you can in this worktree.",
       "",
-      "Provide concise summary of changes and tradeoffs.",
+      "Task:",
+      "{{task.prompt}}",
+      "",
+      "{{additional_context_block}}",
+      "",
+      "Worker metadata:",
+      "- Slot index: {{slot_index}}",
+      "- Model: {{model}}",
+      "- Worker instructions: {{task_suffix}}",
+      "",
+      "Deliver complete implementation and a concise summary of what changed.",
     ].join("\n"),
-    variablesJson: ["task", "slot_index", "model"],
+    variablesJson: ["task", "slot_index", "model", "task_suffix", "additional_context_block"],
   },
   {
     key: "best_of_n_reviewer",
     name: "Best-of-N Reviewer",
-    description: "Reviewer prompt for comparing worker candidates.",
+    description: "Reviewer prompt for evaluating best-of-n candidates with strict JSON output.",
     templateText: [
-      "Review worker candidates for task {{task.id}}.",
+      "You are a reviewer in a best-of-n workflow.",
+      "Your job is to evaluate the candidate implementations and provide structured guidance.",
+      "",
+      "Original Task:",
+      "{{task.prompt}}",
+      "",
+      "{{additional_context_block}}",
       "",
       "Candidates:",
       "{{candidate_summaries}}",
       "",
-      "Return strict JSON verdict with best candidates.",
+      "Your response must be valid JSON with fields:",
+      '"status": "pass|needs_manual_review",',
+      '"summary": "<short evaluation summary>",',
+      '"bestCandidateIds": ["<candidate-id-1>", "<candidate-id-2>"],',
+      '"gaps": ["<issue 1>", "<issue 2>"],',
+      '"recommendedFinalStrategy": "pick_best|synthesize|pick_or_synthesize",',
+      '"recommendedPrompt": "<optional instructions for the final applier, or null>"',
+      "",
+      "Additional reviewer instructions:",
+      "{{task_suffix}}",
     ].join("\n"),
-    variablesJson: ["task", "candidate_summaries"],
+    variablesJson: ["task", "candidate_summaries", "task_suffix", "additional_context_block"],
   },
   {
     key: "best_of_n_final_applier",
     name: "Best-of-N Final Applier",
-    description: "Final applier prompt for selected best-of-n strategy.",
+    description: "Final applier prompt to produce final implementation from best-of-n results.",
     templateText: [
-      "Apply final strategy for task {{task.id}}.",
+      "EXECUTE END-TO-END. Do not ask follow-up questions unless blocked by: missing credentials, missing required external input, or an irreversible product decision. Make reasonable assumptions from the codebase.",
       "",
-      "Selected approach:",
-      "{{final_strategy}}",
+      "You are the final applier in a best-of-n workflow.",
+      "Produce the final implementation based on the original task and reviewer guidance.",
       "",
-      "Integrate candidate strengths and produce final result.",
+      "Original Task:",
+      "{{task.prompt}}",
+      "",
+      "{{additional_context_block}}",
+      "",
+      "Selection mode:",
+      "{{selection_mode}}",
+      "",
+      "Candidate guidance:",
+      "{{candidate_guidance}}",
+      "",
+      "Recurring reviewer gaps:",
+      "{{recurring_gaps}}",
+      "",
+      "Reviewer recommended prompts:",
+      "{{reviewer_recommended_prompts}}",
+      "",
+      "Consensus reached: {{consensus_reached}}",
+      "",
+      "Additional final-applier instructions:",
+      "{{task_suffix}}",
+      "",
+      "Produce the final implementation now.",
     ].join("\n"),
-    variablesJson: ["task", "final_strategy"],
+    variablesJson: [
+      "task",
+      "selection_mode",
+      "candidate_guidance",
+      "recurring_gaps",
+      "reviewer_recommended_prompts",
+      "consensus_reached",
+      "task_suffix",
+      "additional_context_block",
+    ],
   },
   {
     key: "commit",
     name: "Commit",
     description: "Commit instructions executed after task completion.",
-    templateText: DEFAULT_COMMIT_PROMPT,
-    variablesJson: ["base_ref"],
+    templateText: `${DEFAULT_COMMIT_PROMPT}\n\n{{keep_worktree_note}}`,
+    variablesJson: ["base_ref", "keep_worktree_note"],
   },
 ]
 
@@ -716,7 +848,7 @@ export class PiKanbanDB {
 
   updateTask(id: string, input: UpdateTaskInput): Task | null {
     const sets: string[] = []
-    const values: unknown[] = []
+    const values: any[] = []
 
     if (input.name !== undefined) {
       sets.push("name = ?")
@@ -865,7 +997,7 @@ export class PiKanbanDB {
 
   updateWorkflowRun(id: string, input: UpdateWorkflowRunInput): WorkflowRun | null {
     const sets: string[] = []
-    const values: unknown[] = []
+    const values: any[] = []
 
     if (input.status !== undefined) {
       sets.push("status = ?")
@@ -977,7 +1109,7 @@ export class PiKanbanDB {
 
   updateWorkflowSession(id: string, input: UpdatePiWorkflowSessionInput): PiWorkflowSession | null {
     const sets: string[] = []
-    const values: unknown[] = []
+    const values: any[] = []
 
     if (input.taskId !== undefined) {
       sets.push("task_id = ?")
@@ -1213,7 +1345,7 @@ export class PiKanbanDB {
 
   updateSessionMessage(id: number, updates: Partial<CreateSessionMessageInput>): SessionMessage | null {
     const sets: string[] = []
-    const values: unknown[] = []
+    const values: any[] = []
 
     if (updates.messageId !== undefined) {
       sets.push("message_id = ?")
@@ -1467,12 +1599,7 @@ export class PiKanbanDB {
       throw new Error(`Prompt template not found or inactive: ${key}`)
     }
 
-    const renderedText = template.templateText.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_match, token: string) => {
-      const value = this.resolveVariablePath(variables, token)
-      if (value === undefined || value === null) return ""
-      if (typeof value === "string") return value
-      return JSON.stringify(value)
-    })
+    const renderedText = renderTemplate(template, variables)
 
     return { template, renderedText }
   }
@@ -1485,11 +1612,12 @@ export class PiKanbanDB {
         stream: input.stream ?? "server",
         recordType: "prompt_rendered",
         payloadJson: {
-          key: rendered.template.key,
+          templateKey: rendered.template.key,
           templateId: rendered.template.id,
-          renderedText: rendered.renderedText,
+          renderedLength: rendered.renderedText.length,
           variables: input.variables ?? {},
         },
+        payloadText: rendered.renderedText,
       })
     }
     return rendered
@@ -1532,9 +1660,6 @@ export class PiKanbanDB {
   }
 
   private seedPromptTemplates(): void {
-    const row = this.db.prepare("SELECT COUNT(*) AS count FROM prompt_templates").get() as { count: number }
-    if (Number(row.count ?? 0) > 0) return
-
     for (const template of DEFAULT_PROMPT_TEMPLATES) {
       this.upsertPromptTemplate(template)
     }
@@ -1557,15 +1682,4 @@ export class PiKanbanDB {
       .run(templateId, nextVersion, templateText, variablesJsonText)
   }
 
-  private resolveVariablePath(source: Record<string, unknown>, path: string): unknown {
-    const parts = path.split(".")
-    let current: unknown = source
-    for (const part of parts) {
-      if (!current || typeof current !== "object" || !(part in (current as Record<string, unknown>))) {
-        return undefined
-      }
-      current = (current as Record<string, unknown>)[part]
-    }
-    return current
-  }
 }
