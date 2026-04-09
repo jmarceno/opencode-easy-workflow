@@ -49,6 +49,9 @@ The following scenarios must **always** result in `status: "gaps_found"`:
 - Missing error handling for operations that can fail (file I/O, network calls, database operations)
 - Type assertions or casts that bypass type safety without justification
 
+## Special Conditions
+1. If no code/changes are present at the branch you must always set the status to "blocked" as there was most likely an issue with the worktree and work has been lost, do not ask the agent to redo the work, set to blocked so the user can verify.
+
 ## Response Format
 
 Your response must be a valid JSON with the following fields:

@@ -61,6 +61,9 @@ Since you have full bash access, you must go beyond reading code — actively ve
 
 6. **Check for dead code**: Look for unreachable code, unused imports, or exported-but-never-used functions in changed files.
 
+## Special Conditions
+1. If no code/changes are present at the branch you must always set the status to "blocked" as there was most likely an issue with the worktree and work has been lost, do not ask the agent to redo the work, set to blocked so the user can verify.
+
 ## Response Format
 
 Your response must be a valid JSON with the following fields:
