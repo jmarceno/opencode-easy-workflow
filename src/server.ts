@@ -1606,6 +1606,8 @@ export class KanbanServer {
       await this.handleToolExecuteEvent(payload)
     } else if (type === "session.updated") {
       await this.handleSessionUpdateEvent(payload)
+    } else if (type === "session.status") {
+      await this.handleSessionStatusEvent(payload)
     } else if (type === "session.idle") {
       await this.handleSessionIdleEvent(payload)
     } else if (type === "message.part.added") {
@@ -1722,8 +1724,12 @@ export class KanbanServer {
     const candidates = [
       event?.properties?.sessionId,
       event?.properties?.sessionID,
+      event?.properties?.info?.sessionID,
+      event?.properties?.part?.sessionID,
       event?.sessionId,
       event?.sessionID,
+      event?.info?.sessionID,
+      event?.part?.sessionID,
     ]
     return candidates.find((c) => typeof c === "string" && c.trim().length > 0) || null
   }
@@ -1774,17 +1780,65 @@ export class KanbanServer {
     return this.messageLoggers.get(sessionId)!
   }
 
+  private extractSessionIdFromPayload(payload: any): string | null {
+    return payload?.sessionId ?? this.extractSessionIdFromEvent(payload?.event ?? payload?.output ?? payload?.input ?? payload)
+  }
+
+  private normalizeBridgeEvent(payload: any, type: string): any {
+    if (payload?.event?.type) return payload.event
+
+    const sessionID = this.extractSessionIdFromPayload(payload)
+    const timestamp = payload?.timestamp ?? Date.now()
+
+    switch (type) {
+      case "message.updated":
+        return {
+          type,
+          properties: {
+            sessionID,
+            info: payload?.output ?? payload,
+          },
+        }
+      case "message.part.added":
+      case "message.part.updated":
+        return {
+          type,
+          properties: {
+            sessionID,
+            part: payload?.output?.part ?? payload?.output ?? payload?.part ?? payload,
+            time: timestamp,
+          },
+        }
+      case "session.created":
+      case "session.updated":
+        return {
+          type,
+          properties: {
+            sessionID,
+            info: payload?.output ?? payload,
+          },
+        }
+      case "session.status":
+      case "session.idle":
+      case "session.error":
+      case "permission.asked":
+      case "permission.replied":
+        return {
+          type,
+          properties: payload?.output ?? payload,
+        }
+      default:
+        return payload
+    }
+  }
+
   private async handleMessageEvent(payload: any): Promise<void> {
     try {
-      const sessionId = payload?.sessionId
+      const sessionId = this.extractSessionIdFromPayload(payload)
       if (!sessionId) return
 
       const logger = this.getOrCreateMessageLogger(sessionId)
-      await logger.logMessageUpdated({
-        properties: payload?.output,
-        parts: payload?.output?.parts,
-        ...payload?.output,
-      })
+      await logger.logMessageUpdated(this.normalizeBridgeEvent(payload, "message.updated"))
     } catch (err) {
       console.error("[message-logger] Error handling message event:", err instanceof Error ? err.message : String(err))
     }
@@ -1804,32 +1858,35 @@ export class KanbanServer {
 
   private async handleSessionUpdateEvent(payload: any): Promise<void> {
     try {
-      const sessionId = payload?.sessionId
+      const sessionId = this.extractSessionIdFromPayload(payload)
       if (!sessionId) return
 
       const logger = this.getOrCreateMessageLogger(sessionId)
-      await logger.logSessionUpdated({
-        properties: payload?.output,
-        ...payload?.output,
-      })
+      await logger.logSessionUpdated(this.normalizeBridgeEvent(payload, "session.updated"))
     } catch (err) {
       console.error("[message-logger] Error handling session update event:", err instanceof Error ? err.message : String(err))
     }
   }
 
-  private async handleSessionIdleEvent(payload: any): Promise<void> {
+  private async handleSessionStatusEvent(payload: any): Promise<void> {
     try {
-      const sessionId = payload?.sessionId
+      const sessionId = this.extractSessionIdFromPayload(payload)
       if (!sessionId) return
 
       const logger = this.getOrCreateMessageLogger(sessionId)
-      await logger.logSessionIdle({
-        properties: payload?.event,
-        ...payload?.event,
-      })
+      await logger.logSessionStatus(this.normalizeBridgeEvent(payload, "session.status"))
+    } catch (err) {
+      console.error("[message-logger] Error handling session status event:", err instanceof Error ? err.message : String(err))
+    }
+  }
 
-      // Clean up the logger for this session
-      this.messageLoggers.delete(sessionId)
+  private async handleSessionIdleEvent(payload: any): Promise<void> {
+    try {
+      const sessionId = this.extractSessionIdFromPayload(payload)
+      if (!sessionId) return
+
+      const logger = this.getOrCreateMessageLogger(sessionId)
+      await logger.logSessionIdle(this.normalizeBridgeEvent(payload, "session.idle"))
     } catch (err) {
       console.error("[message-logger] Error handling session idle event:", err instanceof Error ? err.message : String(err))
     }
@@ -1837,11 +1894,11 @@ export class KanbanServer {
 
   private async handleMessagePartAddedEvent(payload: any): Promise<void> {
     try {
-      const sessionId = payload?.sessionId
+      const sessionId = this.extractSessionIdFromPayload(payload)
       if (!sessionId) return
 
       const logger = this.getOrCreateMessageLogger(sessionId, payload?.directory)
-      await logger.logMessagePartAdded(payload?.input, payload?.output, sessionId)
+      await logger.logMessagePartAdded(this.normalizeBridgeEvent(payload, "message.part.added"), undefined, sessionId)
     } catch (err) {
       console.error("[message-logger] Error handling message part added event:", err instanceof Error ? err.message : String(err))
     }
@@ -1849,11 +1906,11 @@ export class KanbanServer {
 
   private async handleMessagePartUpdatedEvent(payload: any): Promise<void> {
     try {
-      const sessionId = payload?.sessionId
+      const sessionId = this.extractSessionIdFromPayload(payload)
       if (!sessionId) return
 
       const logger = this.getOrCreateMessageLogger(sessionId)
-      await logger.logMessagePartUpdated(payload?.input, payload?.output, sessionId)
+      await logger.logMessagePartUpdated(this.normalizeBridgeEvent(payload, "message.part.updated"), undefined, sessionId)
     } catch (err) {
       console.error("[message-logger] Error handling message part updated event:", err instanceof Error ? err.message : String(err))
     }
@@ -1861,11 +1918,11 @@ export class KanbanServer {
 
   private async handleSessionCreatedEvent(payload: any): Promise<void> {
     try {
-      const sessionId = this.extractSessionIdFromEvent(payload)
+      const sessionId = this.extractSessionIdFromPayload(payload)
       if (!sessionId) return
 
       const logger = this.getOrCreateMessageLogger(sessionId)
-      await logger.logSessionCreated(payload)
+      await logger.logSessionCreated(this.normalizeBridgeEvent(payload, "session.created"))
     } catch (err) {
       console.error("[message-logger] Error handling session created event:", err instanceof Error ? err.message : String(err))
     }
@@ -1873,11 +1930,11 @@ export class KanbanServer {
 
   private async handleSessionErrorEvent(payload: any): Promise<void> {
     try {
-      const sessionId = this.extractSessionIdFromEvent(payload)
+      const sessionId = this.extractSessionIdFromPayload(payload)
       if (!sessionId) return
 
       const logger = this.getOrCreateMessageLogger(sessionId)
-      await logger.logSessionError(payload)
+      await logger.logSessionError(this.normalizeBridgeEvent(payload, "session.error"))
     } catch (err) {
       console.error("[message-logger] Error handling session error event:", err instanceof Error ? err.message : String(err))
     }
@@ -1885,11 +1942,11 @@ export class KanbanServer {
 
   private async handlePermissionAskedEvent(payload: any): Promise<void> {
     try {
-      const sessionId = this.extractSessionIdFromEvent(payload)
+      const sessionId = this.extractSessionIdFromPayload(payload)
       if (!sessionId) return
 
       const logger = this.getOrCreateMessageLogger(sessionId)
-      await logger.logPermissionEvent(payload, 'asked')
+      await logger.logPermissionEvent(this.normalizeBridgeEvent(payload, "permission.asked"), 'asked')
     } catch (err) {
       console.error("[message-logger] Error handling permission asked event:", err instanceof Error ? err.message : String(err))
     }
@@ -1897,11 +1954,11 @@ export class KanbanServer {
 
   private async handlePermissionRepliedEvent(payload: any): Promise<void> {
     try {
-      const sessionId = this.extractSessionIdFromEvent(payload)
+      const sessionId = this.extractSessionIdFromPayload(payload)
       if (!sessionId) return
 
       const logger = this.getOrCreateMessageLogger(sessionId)
-      await logger.logPermissionEvent(payload, 'replied')
+      await logger.logPermissionEvent(this.normalizeBridgeEvent(payload, "permission.replied"), 'replied')
     } catch (err) {
       console.error("[message-logger] Error handling permission replied event:", err instanceof Error ? err.message : String(err))
     }

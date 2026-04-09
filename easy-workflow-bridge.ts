@@ -969,6 +969,17 @@ export const EasyWorkflowBridgePlugin = async (input: any) => {
 
   let lastForwardErrorLog = 0
   const FORWARD_ERROR_LOG_INTERVAL = 30000
+  const FORWARDED_EVENT_TYPES = new Set([
+    "message.updated",
+    "message.part.updated",
+    "session.created",
+    "session.updated",
+    "session.status",
+    "session.idle",
+    "session.error",
+    "permission.asked",
+    "permission.replied",
+  ])
 
   async function forwardEvent(eventType: string, payload: any): Promise<void> {
     const url = `${config!.standaloneServerUrl}/api/events/bridge`
@@ -1072,11 +1083,12 @@ export const EasyWorkflowBridgePlugin = async (input: any) => {
       // Forward all events to standalone server
       await forwardEvent("event", { event })
 
-      // Handle session.idle events for message logging
-      if (event?.type === "session.idle") {
-        const sessionId = extractSessionId(event)
+      if (FORWARDED_EVENT_TYPES.has(event?.type)) {
+        const sessionId = event?.type?.startsWith("permission.")
+          ? extractPermissionSessionId(event)
+          : extractSessionId(event)
         if (sessionId) {
-          await forwardEvent("session.idle", {
+          await forwardEvent(event.type, {
             event,
             sessionId,
             timestamp: Date.now(),
@@ -1148,19 +1160,6 @@ export const EasyWorkflowBridgePlugin = async (input: any) => {
           }
         } catch {
           // Ignore errors - session might not exist
-        }
-      }
-
-      // Forward permission events to standalone server for logging
-      if (event?.type === "permission.asked" || event?.type === "permission.replied") {
-        const sessionId = extractPermissionSessionId(event)
-        if (sessionId) {
-          await forwardEvent(event.type, {
-            event,
-            sessionId,
-            timestamp: Date.now(),
-            directory: config!.projectDirectory,
-          })
         }
       }
     },

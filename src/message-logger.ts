@@ -6,6 +6,7 @@
  * prepares data for the session_messages table.
  */
 
+import { createHash } from "crypto"
 import type { KanbanDB } from "./db"
 import type { CreateSessionMessageInput, MessageRole, MessageType } from "./types"
 
@@ -19,6 +20,7 @@ export interface MessageLoggerContext {
 
 export interface ParsedMessage {
   sessionId: string
+  timestamp?: number
   role: MessageRole
   messageType: MessageType
   content: Record<string, any>
@@ -41,13 +43,19 @@ export interface ParsedMessage {
   }
 }
 
+interface CachedMessageMetadata {
+  role: MessageRole
+  metadata: ParsedMessage["metadata"]
+}
+
 export class MessageLogger {
   private db: KanbanDB
   private currentTaskId: string | null
   private currentTaskRunId: string | null
   private currentWorkflowPhase: string | null
   private currentSessionStatus: string | null
-  private recentMessageIds: Map<string, number>
+  private recentEventKeys: Map<string, number>
+  private messageMetadata: Map<string, CachedMessageMetadata>
   private readonly DEDUP_WINDOW_MS = 5000
 
   constructor(context: MessageLoggerContext) {
@@ -56,23 +64,52 @@ export class MessageLogger {
     this.currentTaskRunId = context.taskRunId ?? null
     this.currentWorkflowPhase = context.workflowPhase ?? null
     this.currentSessionStatus = context.sessionStatus ?? null
-    this.recentMessageIds = new Map()
+    this.recentEventKeys = new Map()
+    this.messageMetadata = new Map()
   }
 
-  private isDuplicate(messageId: string | null | undefined): boolean {
-    if (!messageId) return false
+  private isDuplicateEvent(prefix: string, payload: any): boolean {
+    const fingerprint = this.fingerprint(payload)
+    const key = `${prefix}:${fingerprint}`
     const now = Date.now()
-    const existing = this.recentMessageIds.get(messageId)
+    const existing = this.recentEventKeys.get(key)
     if (existing && now - existing < this.DEDUP_WINDOW_MS) {
       return true
     }
-    this.recentMessageIds.set(messageId, now)
-    for (const [key, timestamp] of this.recentMessageIds.entries()) {
+    this.recentEventKeys.set(key, now)
+    for (const [key, timestamp] of this.recentEventKeys.entries()) {
       if (now - timestamp > this.DEDUP_WINDOW_MS * 2) {
-        this.recentMessageIds.delete(key)
+        this.recentEventKeys.delete(key)
       }
     }
     return false
+  }
+
+  private fingerprint(payload: any): string {
+    try {
+      return createHash("sha1").update(JSON.stringify(this.sanitizeRawEvent(payload))).digest("hex")
+    } catch {
+      return createHash("sha1").update(String(payload ?? "")).digest("hex")
+    }
+  }
+
+  private unwrapEvent(event: any): any {
+    return event?.event ?? event
+  }
+
+  private eventProperties(event: any): any {
+    const raw = this.unwrapEvent(event)
+    return raw?.properties ?? raw
+  }
+
+  private rememberMessageMetadata(messageId: string | null | undefined, value: CachedMessageMetadata): void {
+    if (!messageId) return
+    this.messageMetadata.set(messageId, value)
+  }
+
+  private getMessageMetadata(messageId: string | null | undefined): CachedMessageMetadata | undefined {
+    if (!messageId) return undefined
+    return this.messageMetadata.get(messageId)
   }
 
   /**
@@ -89,6 +126,8 @@ export class MessageLogger {
    * Log a message from the message.updated event
    */
   async logMessageUpdated(event: any): Promise<void> {
+    if (this.isDuplicateEvent("message.updated", event)) return
+
     const parsed = this.parseMessageUpdatedEvent(event)
     if (!parsed) return
 
@@ -99,6 +138,8 @@ export class MessageLogger {
    * Log a tool execution from the tool.execute.after event
    */
   async logToolExecuteAfter(input: any, output: any): Promise<void> {
+    if (this.isDuplicateEvent("tool.execute.after", { input, output })) return
+
     const parsed = this.parseToolExecuteEvent(input, output)
     if (!parsed) return
 
@@ -112,28 +153,60 @@ export class MessageLogger {
     const sessionId = this.extractSessionId(event)
     if (!sessionId) return
 
+    if (this.isDuplicateEvent("session.updated", event)) return
+
+    const properties = this.eventProperties(event)
+    const info = properties?.info ?? properties
+
     // Update session status if available
-    const newStatus = event?.properties?.status ?? event?.status
+    const newStatus = properties?.status ?? info?.status
     if (newStatus) {
-      this.currentSessionStatus = newStatus
+      this.currentSessionStatus = typeof newStatus === "string" ? newStatus : newStatus?.type ?? this.currentSessionStatus
     }
 
-    // Log session status change as a system message
     const message: ParsedMessage = {
       sessionId,
+      timestamp: info?.time?.updated,
       role: "system",
-      messageType: "session_start",
+      messageType: "session_status",
       content: {
         event: "session.updated",
         status: newStatus,
-        title: event?.properties?.title ?? event?.title,
+        info,
       },
       metadata: {
-        messageId: event?.properties?.id ?? event?.id,
+        messageId: info?.id,
       },
     }
 
     await this.storeMessage(message, event)
+  }
+
+  async logSessionStatus(event: any): Promise<void> {
+    const sessionId = this.extractSessionId(event)
+    if (!sessionId) return
+
+    if (this.isDuplicateEvent("session.status", event)) return
+
+    const properties = this.eventProperties(event)
+    const status = properties?.status ?? event?.status
+    if (status?.type) {
+      this.currentSessionStatus = status.type
+    }
+
+    await this.storeMessage(
+      {
+        sessionId,
+        role: "system",
+        messageType: "session_status",
+        content: {
+          event: "session.status",
+          status,
+        },
+        metadata: {},
+      },
+      event,
+    )
   }
 
   /**
@@ -143,7 +216,11 @@ export class MessageLogger {
     const sessionId = this.extractSessionId(event)
     if (!sessionId) return
 
+    if (this.isDuplicateEvent("session.idle", event)) return
+
     this.currentSessionStatus = "idle"
+
+    const properties = this.eventProperties(event)
 
     const message: ParsedMessage = {
       sessionId,
@@ -151,73 +228,73 @@ export class MessageLogger {
       messageType: "session_end",
       content: {
         event: "session.idle",
-        reason: event?.properties?.reason ?? event?.reason,
+        reason: properties?.reason ?? event?.reason,
       },
-      metadata: {
-        messageId: event?.properties?.id ?? event?.id,
-      },
+      metadata: {},
     }
 
     await this.storeMessage(message, event)
   }
 
   async logMessagePartAdded(input: any, output: any, sessionIdHint?: string): Promise<void> {
-    const sessionId = sessionIdHint || this.extractSessionId(input, output)
+    const event = this.unwrapEvent(input)
+    const sessionId = sessionIdHint || this.extractSessionId(event, output)
     if (!sessionId) return
 
-    const part = output?.part ?? input?.part
+    const properties = this.eventProperties(event)
+    const part = properties?.part ?? output?.part ?? input?.part
     if (!part) return
 
-    const messageId = part?.id ?? output?.id ?? input?.id
-    if (this.isDuplicate(messageId)) return
+    if (this.isDuplicateEvent("message.part.added", event)) return
 
-    const parsed = this.parseMessagePart(part, sessionId, messageId)
+    const parsed = this.parseMessagePart(part, sessionId, part?.messageID ?? null, properties?.time)
     if (!parsed) return
 
-    await this.storeMessage(parsed, { input, output, part })
+    await this.storeMessage(parsed, event)
   }
 
   async logMessagePartUpdated(input: any, output: any, sessionIdHint?: string): Promise<void> {
-    const sessionId = sessionIdHint || this.extractSessionId(input, output)
+    const event = this.unwrapEvent(input)
+    const sessionId = sessionIdHint || this.extractSessionId(event, output)
     if (!sessionId) return
 
-    const part = output?.part ?? input?.part
+    const properties = this.eventProperties(event)
+    const part = properties?.part ?? output?.part ?? input?.part
     if (!part) return
 
-    const messageId = part?.id ?? output?.id ?? input?.id
-    if (this.isDuplicate(messageId)) return
+    if (this.isDuplicateEvent("message.part.updated", event)) return
 
-    const parsed = this.parseMessagePartUpdate(part, sessionId, messageId)
+    const parsed = this.parseMessagePartUpdate(part, sessionId, part?.messageID ?? null, properties?.time)
     if (!parsed) return
 
-    await this.storeMessage(parsed, { input, output, part })
+    await this.storeMessage(parsed, event)
   }
 
   async logSessionCreated(event: any): Promise<void> {
     const sessionId = this.extractSessionId(event)
     if (!sessionId) return
 
-    const messageId = event?.properties?.id ?? event?.id ?? `session_created_${sessionId}`
-    if (this.isDuplicate(messageId)) return
+    if (this.isDuplicateEvent("session.created", event)) return
+
+    const properties = this.eventProperties(event)
+    const info = properties?.info ?? properties
 
     this.currentSessionStatus = "created"
 
     const message: ParsedMessage = {
       sessionId,
+      timestamp: info?.time?.created,
       role: "system",
       messageType: "session_start",
       content: {
         event: "session.created",
-        title: event?.properties?.title ?? event?.title,
-        model: event?.properties?.model ?? event?.model,
-        agent: event?.properties?.agent ?? event?.agent,
-        directory: event?.properties?.directory ?? event?.directory,
+        info,
       },
       metadata: {
-        messageId,
+        messageId: info?.id,
         modelProvider: this.extractModelInfo(event).provider,
         modelId: this.extractModelInfo(event).model,
-        agentName: event?.properties?.agent ?? event?.agent,
+        agentName: info?.agent ?? null,
       },
     }
 
@@ -228,8 +305,9 @@ export class MessageLogger {
     const sessionId = this.extractSessionId(event)
     if (!sessionId) return
 
-    const messageId = event?.properties?.id ?? event?.id ?? `session_error_${sessionId}`
-    if (this.isDuplicate(messageId)) return
+    if (this.isDuplicateEvent("session.error", event)) return
+
+    const properties = this.eventProperties(event)
 
     this.currentSessionStatus = "error"
 
@@ -239,12 +317,10 @@ export class MessageLogger {
       messageType: "session_error",
       content: {
         event: "session.error",
-        error: event?.properties?.error ?? event?.error,
-        reason: event?.properties?.reason ?? event?.reason,
+        error: properties?.error ?? event?.error,
+        reason: properties?.reason ?? event?.reason,
       },
-      metadata: {
-        messageId,
-      },
+      metadata: {},
     }
 
     await this.storeMessage(message, event)
@@ -254,9 +330,11 @@ export class MessageLogger {
     const sessionId = this.extractSessionId(event)
     if (!sessionId) return
 
-    const permissionId = event?.properties?.id ?? event?.properties?.permissionID ?? event?.id ?? event?.requestID
+    if (this.isDuplicateEvent(`permission.${type}`, event)) return
+
+    const properties = this.eventProperties(event)
+    const permissionId = properties?.id ?? properties?.permissionID ?? event?.id ?? event?.requestID
     const messageId = `permission_${type}_${permissionId}`
-    if (this.isDuplicate(messageId)) return
 
     const messageType = type === 'asked' ? 'permission_asked' : 'permission_replied'
     
@@ -266,11 +344,11 @@ export class MessageLogger {
     }
 
     if (type === 'asked') {
-      content.message = event?.properties?.message ?? event?.message
-      content.tool = event?.properties?.tool ?? event?.tool
-      content.args = event?.properties?.args ?? event?.args
+      content.message = properties?.message ?? event?.message
+      content.tool = properties?.tool ?? event?.tool
+      content.args = properties?.args ?? event?.args
     } else {
-      content.response = event?.properties?.response ?? event?.response
+      content.response = properties?.response ?? event?.response
     }
 
     const message: ParsedMessage = {
@@ -293,21 +371,25 @@ export class MessageLogger {
     const sessionId = this.extractSessionId(event)
     if (!sessionId) return null
 
-    const info = event?.properties ?? event
-    const parts = event?.parts ?? info?.parts ?? []
+    const raw = this.unwrapEvent(event)
+    const properties = this.eventProperties(event)
+    const info = properties?.info ?? properties
+    const parts = raw?.parts ?? properties?.parts ?? []
+    if (!info?.role && parts.length === 0) return null
     
     const role = this.inferRole(info?.role, parts)
-    const messageType = this.inferMessageType(parts)
-    const content = this.extractContent(parts)
+    const messageType = parts.length > 0 ? this.inferMessageType(parts) : this.inferMessageTypeFromInfo(info)
+    const content = parts.length > 0 ? this.extractContent(parts) : { info }
     
     // Extract model info from the event
-    const modelInfo = this.extractModelInfo(event)
+    const modelInfo = this.extractModelInfo(info)
     
     // Extract token usage if available
-    const tokenUsage = this.extractTokenUsage(event)
+    const tokenUsage = this.extractTokenUsage(info)
 
-    return {
+    const parsed: ParsedMessage = {
       sessionId,
+      timestamp: info?.time?.completed ?? info?.time?.updated ?? info?.time?.created,
       role,
       messageType,
       content,
@@ -319,6 +401,13 @@ export class MessageLogger {
         ...tokenUsage,
       },
     }
+
+    this.rememberMessageMetadata(info?.id, {
+      role,
+      metadata: parsed.metadata,
+    })
+
+    return parsed
   }
 
   /**
@@ -354,12 +443,13 @@ export class MessageLogger {
       messageType: "tool_result",
       content: {
         tool: toolName,
+        callId: input?.callID,
         args: toolArgs,
         result: toolResult,
         status: toolStatus,
       },
       metadata: {
-        messageId: output?.id,
+        messageId: input?.callID ?? output?.id,
       },
       toolInfo: {
         name: toolName,
@@ -372,48 +462,49 @@ export class MessageLogger {
     }
   }
 
-  private parseMessagePart(part: any, sessionId: string, messageId: string | null): ParsedMessage | null {
+  private parseMessagePart(
+    part: any,
+    sessionId: string,
+    messageId: string | null,
+    timestamp?: number,
+  ): ParsedMessage | null {
     if (!part || !part.type) return null
 
-    const role = this.inferRoleFromPart(part)
-    const { messageType, content } = this.extractPartContent(part)
+    const cached = this.getMessageMetadata(messageId ?? part?.messageID)
+    const role = this.inferRoleFromPart(part, cached?.role)
+    const { messageType, content, toolInfo } = this.extractPartContent(part, cached?.role ?? role)
 
     return {
       sessionId,
+      timestamp: timestamp ?? part?.time?.end ?? part?.time?.start,
       role,
       messageType,
       content,
       metadata: {
-        messageId,
-        agentName: part?.agent,
+        messageId: messageId ?? part?.messageID ?? cached?.metadata.messageId ?? null,
+        modelProvider: cached?.metadata.modelProvider,
+        modelId: cached?.metadata.modelId,
+        agentName: part?.agent ?? cached?.metadata.agentName,
+        promptTokens: cached?.metadata.promptTokens,
+        completionTokens: cached?.metadata.completionTokens,
+        totalTokens: cached?.metadata.totalTokens,
       },
-      toolInfo: messageType === 'tool_request' || messageType === 'tool_call' ? {
-        name: part?.tool,
-        args: part?.args ?? {},
-        status: 'pending',
-      } : undefined,
+      toolInfo,
     }
   }
 
-  private parseMessagePartUpdate(part: any, sessionId: string, messageId: string | null): ParsedMessage | null {
-    if (!part || !part.type) return null
-
-    const role = this.inferRoleFromPart(part)
-    const { messageType, content } = this.extractPartContent(part, true)
-
-    return {
-      sessionId,
-      role,
-      messageType,
-      content,
-      metadata: {
-        messageId,
-        agentName: part?.agent,
-      },
-    }
+  private parseMessagePartUpdate(
+    part: any,
+    sessionId: string,
+    messageId: string | null,
+    timestamp?: number,
+  ): ParsedMessage | null {
+    return this.parseMessagePart(part, sessionId, messageId, timestamp)
   }
 
-  private inferRoleFromPart(part: any): MessageRole {
+  private inferRoleFromPart(part: any, messageRole?: MessageRole): MessageRole {
+    if (messageRole) return messageRole
+
     const partType = part?.type
     if (partType === 'tool' || partType === 'tool_call') return 'assistant'
     if (partType === 'user' || partType === 'user_prompt') return 'user'
@@ -429,54 +520,117 @@ export class MessageLogger {
     return 'assistant'
   }
 
-  private extractPartContent(part: any, isUpdate = false): { messageType: MessageType; content: Record<string, any> } {
+  private extractPartContent(
+    part: any,
+    messageRole: MessageRole,
+  ): {
+    messageType: MessageType
+    content: Record<string, any>
+    toolInfo?: ParsedMessage["toolInfo"]
+  } {
     const content: Record<string, any> = {}
     const partType = part?.type ?? part?.partType
 
     switch (partType) {
       case 'text':
         content.text = part?.text ?? part?.content ?? ''
-        return { messageType: 'text', content }
+        if (part?.metadata) content.metadata = part.metadata
+        if (part?.time) content.time = part.time
+        if (part?.synthetic !== undefined) content.synthetic = part.synthetic
+        if (part?.ignored !== undefined) content.ignored = part.ignored
+        return { messageType: messageRole === 'user' ? 'user_prompt' : 'assistant_response', content }
       
       case 'thinking':
       case 'reasoning':
-        content.thinking = part?.thinking ?? part?.content ?? part?.reasoning ?? ''
-        content.reasoning = part?.reasoning ?? part?.thinking ?? ''
+        content.text = part?.text ?? part?.thinking ?? part?.content ?? part?.reasoning ?? ''
+        content.reasoning = content.text
+        if (part?.metadata) content.metadata = part.metadata
+        if (part?.time) content.time = part.time
         return { messageType: 'thinking', content }
       
       case 'tool':
       case 'tool_call':
-      case 'tool_request':
+      case 'tool_request': {
+        const state = part?.state ?? {}
+        const args = state?.input ?? part?.args ?? {}
         content.tool = part?.tool
-        content.args = part?.args ?? {}
-        content.state = part?.state
-        return { messageType: partType === 'tool_call' || partType === 'tool_request' ? 'tool_call' : 'tool_request', content }
-      
+        content.callId = part?.callID
+        content.args = args
+        content.state = state
+
+        if (state?.status === 'completed') {
+          content.output = state.output
+          if (state?.metadata) content.metadata = state.metadata
+          if (state?.attachments) content.attachments = state.attachments
+          return {
+            messageType: 'tool_result',
+            content,
+            toolInfo: {
+              name: part?.tool,
+              args,
+              result: {
+                output: state.output,
+                metadata: state.metadata,
+                attachments: state.attachments,
+              },
+              status: state.status,
+            },
+          }
+        }
+
+        if (state?.status === 'error') {
+          content.error = state.error
+          if (state?.metadata) content.metadata = state.metadata
+          return {
+            messageType: 'tool_result',
+            content,
+            toolInfo: {
+              name: part?.tool,
+              args,
+              result: {
+                error: state.error,
+                metadata: state.metadata,
+              },
+              status: state.status,
+            },
+          }
+        }
+
+        return {
+          messageType: partType === 'tool_request' ? 'tool_request' : 'tool_call',
+          content,
+          toolInfo: {
+            name: part?.tool,
+            args,
+            status: state?.status ?? 'pending',
+          },
+        }
+      }
+
+      case 'step-start':
+        content.snapshot = part?.snapshot
+        return { messageType: 'step_start', content }
+
       case 'step':
       case 'step_progress':
+      case 'step-finish':
+        content.reason = part?.reason
         content.step = part?.step ?? part?.content
         content.progress = part?.progress
+        content.snapshot = part?.snapshot
+        content.cost = part?.cost
+        content.tokens = part?.tokens
         return { messageType: 'step_finish', content }
-      
-      case 'user':
-      case 'user_prompt':
-        content.text = part?.text ?? part?.content ?? ''
-        return { messageType: 'user_prompt', content }
       
       case 'retry':
         content.attempt = part?.attempt
         content.error = part?.error
+        content.time = part?.time
         return { messageType: 'error', content }
       
       case 'error':
         content.error = part?.error ?? part?.message
         return { messageType: 'error', content }
-      
-      case 'assistant':
-      case 'assistant_response':
-        content.text = part?.text ?? part?.content ?? ''
-        content.model = part?.model
-        return { messageType: 'assistant_response', content }
       
       default:
         content.raw = part
@@ -493,7 +647,7 @@ export class MessageLogger {
       sessionId: parsed.sessionId,
       taskId: this.currentTaskId,
       taskRunId: this.currentTaskRunId,
-      timestamp: Date.now(),
+      timestamp: parsed.timestamp ?? Date.now(),
       role: parsed.role,
       messageType: parsed.messageType,
       contentJson: parsed.content,
@@ -530,8 +684,15 @@ export class MessageLogger {
       const candidates = [
         source?.sessionId,
         source?.sessionID,
+        source?.info?.sessionID,
+        source?.part?.sessionID,
         source?.properties?.sessionId,
         source?.properties?.sessionID,
+        source?.properties?.info?.sessionID,
+        source?.properties?.part?.sessionID,
+        source?.event?.properties?.sessionID,
+        source?.event?.properties?.info?.sessionID,
+        source?.event?.properties?.part?.sessionID,
         source?.path?.id,
         source?.body?.sessionId,
       ]
@@ -565,12 +726,20 @@ export class MessageLogger {
    */
   private inferMessageType(parts: any[]): MessageType {
     if (parts.some(p => p?.type === "tool")) return "tool_call"
+    if (parts.some(p => p?.type === "step-start")) return "step_start"
     if (parts.some(p => p?.type === "step-finish")) return "step_finish"
     if (parts.some(p => p?.type === "retry")) return "error"
     if (parts.some(p => p?.type === "thinking" || p?.type === "reasoning")) return "thinking"
     if (parts.some(p => p?.type === "user" || p?.type === "user_prompt")) return "user_prompt"
     if (parts.some(p => p?.type === "assistant" || p?.type === "assistant_response")) return "assistant_response"
     if (parts.some(p => p?.state?.status === "error")) return "error"
+    return "text"
+  }
+
+  private inferMessageTypeFromInfo(info: any): MessageType {
+    if (info?.error) return "error"
+    if (info?.role === "user") return "user_prompt"
+    if (info?.role === "assistant") return "assistant_response"
     return "text"
   }
 
@@ -592,9 +761,14 @@ export class MessageLogger {
           content.tools = content.tools ?? []
           content.tools.push({
             tool: part.tool,
-            args: part.args,
+            args: part.state?.input ?? part.args,
             state: part.state,
           })
+          break
+        case "step-start":
+          content.stepStart = {
+            snapshot: part.snapshot,
+          }
           break
         case "step-finish":
           content.stepFinish = {
@@ -649,7 +823,16 @@ export class MessageLogger {
    * Extract model information from event
    */
   private extractModelInfo(event: any): { provider: string | null; model: string | null } {
-    const model = event?.properties?.model ?? event?.model
+    const properties = this.eventProperties(event)
+    const info = properties?.info ?? properties
+    const model = properties?.model ?? info?.model ?? event?.model
+
+    if (info?.providerID || info?.modelID) {
+      return {
+        provider: info?.providerID ?? null,
+        model: info?.modelID ?? null,
+      }
+    }
     
     if (typeof model === "string") {
       // Parse "provider/model" format
@@ -681,13 +864,25 @@ export class MessageLogger {
     completionTokens?: number | null
     totalTokens?: number | null
   } {
-    const usage = event?.properties?.usage ?? event?.usage
+    const properties = this.eventProperties(event)
+    const info = properties?.info ?? properties
+    const usage = properties?.usage ?? info?.usage ?? info?.tokens ?? event?.usage ?? event?.tokens
     
     if (usage && typeof usage === "object") {
+      const promptTokens = usage.promptTokens ?? usage.prompt_tokens ?? usage.input ?? usage.inputTokens ?? null
+      const completionTokens = usage.completionTokens ?? usage.completion_tokens ?? usage.output ?? usage.outputTokens ?? null
+      const totalTokens =
+        usage.totalTokens ??
+        usage.total_tokens ??
+        usage.total ??
+        (typeof promptTokens === "number" && typeof completionTokens === "number"
+          ? promptTokens + completionTokens + (usage.reasoning ?? usage.reasoningTokens ?? 0)
+          : null)
+
       return {
-        promptTokens: usage.promptTokens ?? usage.prompt_tokens ?? null,
-        completionTokens: usage.completionTokens ?? usage.completion_tokens ?? null,
-        totalTokens: usage.totalTokens ?? usage.total_tokens ?? null,
+        promptTokens,
+        completionTokens,
+        totalTokens,
       }
     }
 
