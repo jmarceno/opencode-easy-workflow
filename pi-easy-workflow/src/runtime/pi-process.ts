@@ -1,5 +1,6 @@
 import type { PiKanbanDB } from "../db.ts"
 import type { PiWorkflowSession } from "../db/types.ts"
+import type { SessionMessage } from "../types.ts"
 import { projectPiEventToSessionMessage } from "./message-projection.ts"
 
 type Pending = {
@@ -37,6 +38,7 @@ export class PiRpcProcess {
   private readonly db: PiKanbanDB
   private readonly session: PiWorkflowSession
   private readonly onOutput?: (chunk: string) => void
+  private readonly onSessionMessage?: (message: SessionMessage) => void
   private proc: Bun.Subprocess<"pipe", "pipe", "pipe"> | null = null
   private nextId = 1
   private readonly pending = new Map<number, Pending>()
@@ -47,10 +49,12 @@ export class PiRpcProcess {
     db: PiKanbanDB
     session: PiWorkflowSession
     onOutput?: (chunk: string) => void
+    onSessionMessage?: (message: SessionMessage) => void
   }) {
     this.db = args.db
     this.session = args.session
     this.onOutput = args.onOutput
+    this.onSessionMessage = args.onSessionMessage
   }
 
   start(): void {
@@ -211,7 +215,10 @@ export class PiRpcProcess {
       taskRunId: this.session.taskRunId,
     })
     if (message.contentJson && Object.keys(message.contentJson).length > 0) {
-      this.db.createSessionMessage(message)
+      const createdMessage = this.db.createSessionMessage(message)
+      if (createdMessage && this.onSessionMessage) {
+        this.onSessionMessage(createdMessage)
+      }
       const text = pullResponseText(asRecord(record.result)) || pullResponseText(record)
       if (text && this.onOutput) {
         this.onOutput(text)

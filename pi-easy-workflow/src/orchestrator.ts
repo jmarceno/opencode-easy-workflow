@@ -639,6 +639,12 @@ export class PiOrchestrator {
           },
         })
       },
+      onSessionMessage: (message) => {
+        this.broadcast({
+          type: "session_message_created",
+          payload: message,
+        })
+      },
     })
 
     const updated = this.db.updateTask(input.task.id, {

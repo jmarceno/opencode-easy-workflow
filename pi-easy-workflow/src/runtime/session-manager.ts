@@ -46,6 +46,7 @@ export interface ExecuteSessionPromptInput {
   thinkingLevel?: ThinkingLevel
   promptText: string
   onOutput?: (chunk: string) => void
+  onSessionMessage?: (message: import("../types.ts").SessionMessage) => void
 }
 
 export interface ExecuteSessionPromptResult {
@@ -76,6 +77,7 @@ export class PiSessionManager {
       db: this.db,
       session,
       onOutput: input.onOutput,
+      onSessionMessage: input.onSessionMessage,
     })
 
     let responseText = ""
