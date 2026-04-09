@@ -393,60 +393,41 @@ export class PiKanbanServer {
     this.router.get("/api/runs", ({ json }) => json(this.db.getWorkflowRuns()))
 
     this.router.post("/api/start", async ({ json, broadcast }) => {
-      const callable = await this.onStart()
-      if (callable) return json(callable)
+      const run = await this.onStart()
+      return json(run)
+    })
 
-      const executable = getExecutableTasks(this.db.getTasks())
-      if (executable.length === 0) return json({ error: "No tasks in backlog" }, 400)
-
-      const run = this.db.createWorkflowRun({
-        id: randomUUID().slice(0, 8),
-        kind: "all_tasks",
-        status: "running",
-        displayName: "Workflow run",
-        taskOrder: executable.map((task) => task.id),
-        currentTaskId: executable[0]?.id ?? null,
-      })
-
-      broadcast({ type: "run_created", payload: run })
-      broadcast({ type: "execution_started", payload: {} })
+    this.router.post("/api/execution/start", async ({ json }) => {
+      const run = await this.onStart()
       return json(run)
     })
 
     this.router.post("/api/stop", async ({ json, broadcast }) => {
-      await this.onStop()
-      for (const run of this.db.getWorkflowRuns()) {
-        if (run.status === "running" || run.status === "paused" || run.status === "stopping") {
-          const updated = this.db.updateWorkflowRun(run.id, {
-            status: "completed",
-            stopRequested: true,
-            finishedAt: Math.floor(Date.now() / 1000),
-          })
-          if (updated) broadcast({ type: "run_updated", payload: updated })
-        }
-      }
-      broadcast({ type: "execution_stopped", payload: {} })
-      return json({ ok: true })
+      const result = await this.onStop()
+      return json(result ?? { ok: true })
+    })
+
+    this.router.post("/api/execution/stop", async ({ json }) => {
+      const result = await this.onStop()
+      return json(result ?? { ok: true })
+    })
+
+    this.router.post("/api/execution/pause", async ({ json }) => {
+      const active = this.db.getWorkflowRuns().find((run) => run.status === "running")
+      if (!active) return json({ error: "No running workflow run" }, 404)
+      const updated = this.db.updateWorkflowRun(active.id, {
+        pauseRequested: true,
+        status: "paused",
+      })
+      if (updated) this.broadcast({ type: "run_updated", payload: updated })
+      return json(updated ?? { error: "Run not found" }, updated ? 200 : 404)
     })
 
     this.router.post("/api/tasks/:id/start", async ({ params, json, broadcast }) => {
       const task = this.db.getTask(params.id)
       if (!task) return json({ error: "Task not found" }, 404)
 
-      const runFromHook = await this.onStartSingle(params.id)
-      if (runFromHook) return json(runFromHook)
-
-      const chain = resolveDependencyChain(params.id, this.db.getTasks())
-      const run = this.db.createWorkflowRun({
-        id: randomUUID().slice(0, 8),
-        kind: "single_task",
-        status: "running",
-        displayName: `Single task: ${task.name}`,
-        targetTaskId: task.id,
-        taskOrder: chain.map((item) => item.id),
-        currentTaskId: chain[0]?.id ?? null,
-      })
-      broadcast({ type: "run_created", payload: run })
+      const run = await this.onStartSingle(params.id)
       return json(run)
     })
 
@@ -552,6 +533,7 @@ export class PiKanbanServer {
     this.router.post("/api/tasks/:id/approve-plan", async ({ params, req, json, sessionUrlFor, broadcast }) => {
       const task = this.db.getTask(params.id)
       if (!task) return json({ error: "Task not found" }, 404)
+      if (!task.planmode) return json({ error: "Task is not in plan mode" }, 400)
       const body = await req.json().catch(() => ({}))
 
       const updated = this.db.updateTask(task.id, {
@@ -559,8 +541,10 @@ export class PiKanbanServer {
         awaitingPlanApproval: false,
         executionPhase: "implementation_pending",
         errorMessage: null,
-        ...(typeof body?.message === "string" && body.message.trim().length > 0
-          ? { agentOutput: `${task.agentOutput}\n[user-approval-message]\n${body.message.trim()}\n` }
+        ...(typeof body?.approvalNote === "string" && body.approvalNote.trim().length > 0
+          ? { agentOutput: `${task.agentOutput}\n[user-approval-note]\n${body.approvalNote.trim()}\n` }
+          : typeof body?.message === "string" && body.message.trim().length > 0
+            ? { agentOutput: `${task.agentOutput}\n[user-approval-note]\n${body.message.trim()}\n` }
           : {}),
       })
 
@@ -573,6 +557,7 @@ export class PiKanbanServer {
     this.router.post("/api/tasks/:id/request-plan-revision", async ({ params, req, json, sessionUrlFor, broadcast }) => {
       const task = this.db.getTask(params.id)
       if (!task) return json({ error: "Task not found" }, 404)
+      if (!task.planmode) return json({ error: "Task is not in plan mode" }, 400)
       const body = await req.json()
       if (typeof body?.feedback !== "string" || !body.feedback.trim()) {
         return json({ error: "feedback is required" }, 400)
@@ -590,6 +575,55 @@ export class PiKanbanServer {
       const normalized = normalizeTaskForClient(updated, sessionUrlFor)
       broadcast({ type: "task_updated", payload: normalized })
       broadcast({ type: "plan_revision_requested", payload: { taskId: task.id } })
+      const run = await this.onStartSingle(task.id).catch(() => null)
+      return json({ task: normalized, run })
+    })
+
+    this.router.post("/api/tasks/:id/request-revision", async ({ params, req, json, sessionUrlFor, broadcast }) => {
+      const task = this.db.getTask(params.id)
+      if (!task) return json({ error: "Task not found" }, 404)
+      if (!task.planmode) return json({ error: "Task is not in plan mode" }, 400)
+      const body = await req.json()
+      if (typeof body?.feedback !== "string" || !body.feedback.trim()) {
+        return json({ error: "feedback is required" }, 400)
+      }
+
+      const updated = this.db.updateTask(task.id, {
+        status: "backlog",
+        awaitingPlanApproval: false,
+        executionPhase: "plan_revision_pending",
+        planRevisionCount: (task.planRevisionCount ?? 0) + 1,
+        agentOutput: `${task.agentOutput}\n[user-revision-request]\n${body.feedback.trim()}\n`,
+      })
+
+      if (!updated) return json({ error: "Task not found" }, 404)
+      const normalized = normalizeTaskForClient(updated, sessionUrlFor)
+      broadcast({ type: "task_updated", payload: normalized })
+      broadcast({ type: "plan_revision_requested", payload: { taskId: task.id } })
+      const run = await this.onStartSingle(task.id).catch(() => null)
+      return json({ task: normalized, run })
+    })
+
+    this.router.post("/api/tasks/:id/reset", async ({ params, json, sessionUrlFor, broadcast }) => {
+      const task = this.db.getTask(params.id)
+      if (!task) return json({ error: "Task not found" }, 404)
+
+      const reset = this.db.updateTask(task.id, {
+        status: "backlog",
+        reviewCount: 0,
+        errorMessage: null,
+        completedAt: null,
+        sessionId: null,
+        sessionUrl: null,
+        worktreeDir: null,
+        executionPhase: "not_started",
+        awaitingPlanApproval: false,
+        planRevisionCount: 0,
+      })
+
+      if (!reset) return json({ error: "Task not found" }, 404)
+      const normalized = normalizeTaskForClient(reset, sessionUrlFor)
+      broadcast({ type: "task_updated", payload: normalized })
       return json(normalized)
     })
 

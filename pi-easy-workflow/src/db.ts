@@ -1113,6 +1113,12 @@ export class PiKanbanDB {
     return this.getTask(id)
   }
 
+  appendAgentOutput(taskId: string, chunk: string): Task | null {
+    const task = this.getTask(taskId)
+    if (!task) return null
+    return this.updateTask(taskId, { agentOutput: `${task.agentOutput}${chunk}` })
+  }
+
   deleteTask(id: string): boolean {
     const result = this.db.prepare("DELETE FROM tasks WHERE id = ?").run(id)
     return result.changes > 0

@@ -1,1 +1,5 @@
 export * from "./worktree.ts"
+export * from "./pi-rpc.ts"
+export * from "./message-projection.ts"
+export * from "./pi-process.ts"
+export * from "./session-manager.ts"
