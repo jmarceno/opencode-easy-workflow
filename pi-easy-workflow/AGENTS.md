@@ -1,0 +1,1 @@
+This is a typescript project using Bun.

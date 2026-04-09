@@ -414,7 +414,7 @@ export class PiKanbanServer {
     })
 
     this.router.get("/api/models", async ({ json }) => {
-      const catalog = await discoverPiModels({ maxRetries: 1, commandTimeoutMs: 500 })
+      const catalog = await discoverPiModels({ maxRetries: 2 })
       return json(catalog)
     })
 
