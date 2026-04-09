@@ -28,6 +28,7 @@ export interface ExecuteSessionPromptInput {
   promptText: string
   onOutput?: (chunk: string) => void
   onSessionMessage?: (message: import("../types.ts").SessionMessage) => void
+  onSessionStart?: (session: PiWorkflowSession) => void
 }
 
 export interface ExecuteSessionPromptResult {
@@ -71,6 +72,11 @@ export class PiSessionManager {
 
     let responseText = ""
     try {
+      // Notify that session has started immediately
+      if (input.onSessionStart) {
+        input.onSessionStart(session)
+      }
+
       process.start()
 
       // Wait for process to be ready

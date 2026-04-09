@@ -243,7 +243,13 @@ export class PiOrchestrator {
       
       // Create new worktree if we don't have a valid existing one
       if (!worktreeInfo) {
-        worktreeInfo = await this.worktree.createForTask(task.id)
+        // Resolve the target branch to use as base for the worktree
+        const targetBranch = await resolveTargetBranch({
+          baseDirectory: this.projectRoot,
+          taskBranch: task.branch,
+          optionBranch: options.branch,
+        })
+        worktreeInfo = await this.worktree.createForTask(task.id, undefined, targetBranch)
         this.db.updateTask(task.id, { worktreeDir: worktreeInfo.directory })
       }
       this.broadcastTask(task.id)
@@ -646,6 +652,14 @@ export class PiOrchestrator {
       model: input.model,
       thinkingLevel: input.task.thinkingLevel,
       promptText: input.promptText,
+      onSessionStart: (startedSession) => {
+        // Update task with session info immediately when session starts
+        const updated = this.db.updateTask(input.task.id, {
+          sessionId: startedSession.id,
+          sessionUrl: this.sessionUrlFor(startedSession.id),
+        })
+        if (updated) this.broadcast({ type: "task_updated", payload: updated })
+      },
       onOutput: (chunk) => {
         if (!chunk.trim()) return
         this.db.appendAgentOutput(input.task.id, `${stripAndNormalize(chunk)}\n`)
@@ -664,12 +678,6 @@ export class PiOrchestrator {
         })
       },
     })
-
-    const updated = this.db.updateTask(input.task.id, {
-      sessionId: session.session.id,
-      sessionUrl: this.sessionUrlFor(session.session.id),
-    })
-    if (updated) this.broadcast({ type: "task_updated", payload: updated })
 
     return { session: session.session, responseText: session.responseText }
   }

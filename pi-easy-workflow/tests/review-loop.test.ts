@@ -20,7 +20,7 @@ function git(cwd: string, args: string[]): string {
 
 function initGitRepo(root: string): void {
   git(root, ["init"])
-  git(root, ["checkout", "-b", "main"])
+  git(root, ["checkout", "-b", "master"])
   writeFileSync(join(root, "README.md"), "# review loop test\n", "utf-8")
   git(root, ["add", "README.md"])
   git(root, ["-c", "user.name=Test User", "-c", "user.email=test@example.com", "commit", "-m", "init"])
@@ -129,6 +129,7 @@ describe("review loop", () => {
     process.env.PI_EASY_WORKFLOW_PI_ARGS = ""
 
     const db = new PiKanbanDB(join(root, "tasks.db"))
+    db.updateOptions({ branch: "master" })
     const task = db.createTask({
       id: "review-1",
       name: "Review loop task",
@@ -168,6 +169,7 @@ describe("review loop", () => {
     process.env.PI_EASY_WORKFLOW_PI_ARGS = ""
 
     const db = new PiKanbanDB(join(root, "tasks.db"))
+    db.updateOptions({ branch: "master" })
     const task = db.createTask({
       id: "review-2",
       name: "Malformed review json",
@@ -199,7 +201,7 @@ describe("review loop", () => {
     process.env.PI_EASY_WORKFLOW_PI_ARGS = ""
 
     const db = new PiKanbanDB(join(root, "tasks.db"))
-    db.updateOptions({ maxReviews: 1 })
+    db.updateOptions({ maxReviews: 1, branch: "master" })
 
     const task = db.createTask({
       id: "review-3",

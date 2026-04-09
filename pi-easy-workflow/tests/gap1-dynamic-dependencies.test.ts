@@ -22,7 +22,7 @@ function git(cwd: string, args: string[]): string {
 
 function initGitRepo(root: string): void {
   git(root, ["init"])
-  git(root, ["checkout", "-b", "main"])
+  git(root, ["checkout", "-b", "master"])
   writeFileSync(join(root, "README.md"), "# pi-easy-workflow test\n", "utf-8")
   git(root, ["add", "README.md"])
   git(root, ["-c", "user.name=Test User", "-c", "user.email=test@example.com", "commit", "-m", "init"])
@@ -260,6 +260,7 @@ describe("GAP 1: Dynamic Dependency Scheduling", () => {
       process.env.PI_EASY_WORKFLOW_PI_ARGS = ""
 
       const db = new PiKanbanDB(join(root, "tasks.db"))
+      db.updateOptions({ branch: "master" })
       db.updateOptions({ command: "echo preflight-ok" })
 
       // Create Task A (dependency)
@@ -323,6 +324,7 @@ describe("GAP 1: Dynamic Dependency Scheduling", () => {
       process.env.PI_EASY_WORKFLOW_PI_ARGS = ""
 
       const db = new PiKanbanDB(join(root, "tasks.db"))
+      db.updateOptions({ branch: "master" })
       db.updateOptions({ command: "echo preflight-ok" })
 
       // Create Task A first (will have lower idx)
@@ -413,6 +415,7 @@ describe("GAP 1: Dynamic Dependency Scheduling", () => {
       process.env.PI_EASY_WORKFLOW_PI_ARGS = ""
 
       const db = new PiKanbanDB(join(root, "tasks.db"))
+      db.updateOptions({ branch: "master" })
       db.updateOptions({ command: "echo preflight-ok" })
 
       const taskA = db.createTask({

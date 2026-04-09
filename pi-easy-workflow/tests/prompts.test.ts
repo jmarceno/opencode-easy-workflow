@@ -32,7 +32,7 @@ function createTask(overrides: Partial<Task> = {}): Task {
     name: "Implement feature",
     idx: 0,
     prompt: "Add feature end-to-end",
-    branch: "main",
+    branch: "master",
     planModel: "default",
     executionModel: "default",
     planmode: false,
@@ -92,7 +92,7 @@ describe("prompt renderer helpers", () => {
       {
         commitPrompt: "",
         extraPrompt: "Be precise",
-        branch: "main",
+        branch: "master",
         planModel: "default",
         executionModel: "default",
         reviewModel: "default",
@@ -123,7 +123,7 @@ describe("prompt renderer helpers", () => {
     const planningVars = buildPlanningVariables(task, {
       commitPrompt: "",
       extraPrompt: "Use existing patterns",
-      branch: "main",
+      branch: "master",
       planModel: "default",
       executionModel: "default",
       reviewModel: "default",

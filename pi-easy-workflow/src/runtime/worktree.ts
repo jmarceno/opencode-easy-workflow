@@ -296,8 +296,8 @@ export function getRemoteDefaultBranch(directory?: string): string | null {
 }
 
 /**
- * Resolves merge target branch with fallback order:
- * taskBranch -> optionBranch -> origin/HEAD -> current HEAD branch.
+ * Resolves merge target branch. NO FALLBACKS - user must explicitly select a branch.
+ * Checks taskBranch first, then optionBranch. Throws if neither is valid.
  */
 export async function resolveTargetBranch(options: ResolveTargetBranchOptions): Promise<string> {
   const baseDirectory = options.baseDirectory ? resolve(options.baseDirectory) : process.cwd()
@@ -309,17 +309,10 @@ export async function resolveTargetBranch(options: ResolveTargetBranchOptions): 
   const optionBranch = normalizeBranchName(options.optionBranch)
   if (optionBranch && branchExists(optionBranch, repoRoot)) return optionBranch
 
-  const remoteDefault = getRemoteDefaultBranch(repoRoot)
-  if (remoteDefault && branchExists(remoteDefault, repoRoot)) return remoteDefault
-
-  try {
-    const current = runGit(["rev-parse", "--abbrev-ref", "HEAD"], repoRoot).stdout
-    if (current && current !== "HEAD" && branchExists(current, repoRoot)) return current
-  } catch {
-    // fall through
-  }
-
-  throw new WorktreeError("Unable to resolve target branch", "TARGET_BRANCH_NOT_FOUND")
+  throw new WorktreeError(
+    "No target branch specified. Please configure a branch in task options or global settings.",
+    "TARGET_BRANCH_NOT_FOUND"
+  )
 }
 
 /**
@@ -396,7 +389,13 @@ export async function createWorktree(options: CreateWorktreeOptions): Promise<Wo
   }
 
   const branch = normalizeBranchName(options.branch) ?? name
-  const baseRef = normalizeBranchName(options.baseRef) ?? (await resolveTargetBranch({ baseDirectory: repoRoot }))
+  const baseRef = normalizeBranchName(options.baseRef)
+  if (!baseRef) {
+    throw new WorktreeError(
+      "No base branch specified for worktree creation. Please configure a branch in task options or global settings.",
+      "BASE_REF_NOT_SPECIFIED"
+    )
+  }
   const directory = buildWorktreePath(repoRoot, name, options.worktreeBaseDir)
 
   if (existsSync(directory)) {
@@ -573,7 +572,7 @@ export class WorktreeLifecycle {
   }
 
   /** Creates task worktree with `task-<taskId>-<random>` naming. */
-  async createForTask(taskId: string, branch?: string): Promise<WorktreeInfo> {
+  async createForTask(taskId: string, branch?: string, baseRef?: string): Promise<WorktreeInfo> {
     const normalizedTaskId = taskId.trim()
     if (!normalizedTaskId) throw new WorktreeError("taskId cannot be empty", "INVALID_TASK_ID")
     // Add random suffix to ensure unique worktree names for task reruns
@@ -582,13 +581,14 @@ export class WorktreeLifecycle {
     return createWorktree({
       name,
       branch,
+      baseRef,
       baseDirectory: this.baseDirectory,
       worktreeBaseDir: this.worktreeBaseDir,
     })
   }
 
   /** Creates run worktree with `<prefix>-<runId>-<random>` naming. */
-  async createForRun(runId: string, prefix: string): Promise<WorktreeInfo> {
+  async createForRun(runId: string, prefix: string, baseRef?: string): Promise<WorktreeInfo> {
     const normalizedRunId = runId.trim()
     const normalizedPrefix = prefix.trim()
     if (!normalizedRunId) throw new WorktreeError("runId cannot be empty", "INVALID_RUN_ID")
@@ -599,6 +599,7 @@ export class WorktreeLifecycle {
     const name = `${normalizedPrefix}-${normalizedRunId}-${randomSuffix}`
     return createWorktree({
       name,
+      baseRef,
       baseDirectory: this.baseDirectory,
       worktreeBaseDir: this.worktreeBaseDir,
     })

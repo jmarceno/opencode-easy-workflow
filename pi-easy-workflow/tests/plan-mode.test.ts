@@ -21,7 +21,7 @@ function git(cwd: string, args: string[]): string {
 
 function initGitRepo(root: string): void {
   git(root, ["init"])
-  git(root, ["checkout", "-b", "main"])
+  git(root, ["checkout", "-b", "master"])
   writeFileSync(join(root, "README.md"), "# plan mode test\n", "utf-8")
   git(root, ["add", "README.md"])
   git(root, ["-c", "user.name=Test User", "-c", "user.email=test@example.com", "commit", "-m", "init"])
@@ -91,6 +91,7 @@ describe("Plan mode flows", () => {
     process.env.PI_EASY_WORKFLOW_PI_ARGS = ""
 
     const db = new PiKanbanDB(join(root, "tasks.db"))
+    db.updateOptions({ branch: "master" })
     const orchestrator = new PiOrchestrator(db, () => {}, (sessionId) => `/#session/${sessionId}`, root)
     const server = new PiKanbanServer(db, {
       port: 0,

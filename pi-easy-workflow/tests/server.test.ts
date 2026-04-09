@@ -19,7 +19,7 @@ function git(cwd: string, args: string[]): string {
 
 function initGitRepo(root: string): void {
   git(root, ["init"])
-  git(root, ["checkout", "-b", "main"])
+  git(root, ["checkout", "-b", "master"])
   writeFileSync(join(root, "README.md"), "# server test\n", "utf-8")
   git(root, ["add", "README.md"])
   git(root, ["-c", "user.name=Test User", "-c", "user.email=test@example.com", "commit", "-m", "init"])
@@ -130,6 +130,7 @@ describe("PiKanbanServer API", () => {
     const root = createTempDir("pi-easy-workflow-server-")
     const dbPath = join(root, "tasks.db")
     const { db, server } = createPiServer({ dbPath, port: 0 })
+    db.updateOptions({ branch: "master" })
 
     const port = await server.start(0)
     const baseUrl = `http://127.0.0.1:${port}`
@@ -323,6 +324,7 @@ describe("PiKanbanServer API", () => {
     const root = createTempDir("pi-easy-workflow-ws-")
     const dbPath = join(root, "tasks.db")
     const { db, server } = createPiServer({ dbPath, port: 0 })
+    db.updateOptions({ branch: "master" })
     const port = await server.start(0)
 
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`)
@@ -365,6 +367,7 @@ describe("PiKanbanServer API", () => {
     const root = createTempDir("pi-easy-workflow-session-ws-")
     const dbPath = join(root, "tasks.db")
     const { db, server } = createPiServer({ dbPath, port: 0 })
+    db.updateOptions({ branch: "master" })
     const port = await server.start(0)
 
     const session = db.createWorkflowSession({
@@ -424,6 +427,7 @@ describe("PiKanbanServer API", () => {
 
     const dbPath = join(root, "tasks.db")
     const { db, server } = createPiServer({ dbPath, port: 0 })
+    db.updateOptions({ branch: "master" })
     const port = await server.start(0)
     const baseUrl = `http://127.0.0.1:${port}`
 

@@ -143,6 +143,13 @@ export class BestOfNRunner {
       throw new Error(`Task ${task.id} has executionStrategy=best_of_n but missing bestOfNConfig`)
     }
 
+    // Resolve target branch upfront to use as baseRef for all worktrees
+    const targetBranch = await resolveTargetBranch({
+      baseDirectory: this.deps.projectRoot,
+      taskBranch: task.branch,
+      optionBranch: options.branch,
+    })
+
     this.deps.db.updateTask(task.id, {
       status: "executing",
       bestOfNSubstage: "workers_running",
@@ -165,7 +172,7 @@ export class BestOfNRunner {
       this.deps.broadcast({ type: "task_run_created", payload: run })
     }
 
-    await Promise.all(this.deps.db.getTaskRunsByPhase(task.id, "worker").map((run) => this.runWorker(task.id, run, options)))
+    await Promise.all(this.deps.db.getTaskRunsByPhase(task.id, "worker").map((run) => this.runWorker(task.id, run, options, targetBranch)))
 
     const successfulWorkers = this.deps.db.getTaskRunsByPhase(task.id, "worker").filter((run) => run.status === "done")
     if (successfulWorkers.length < task.bestOfNConfig.minSuccessfulWorkers) {
@@ -247,7 +254,7 @@ export class BestOfNRunner {
     })
     this.deps.broadcast({ type: "task_run_created", payload: finalRun })
 
-    await this.runFinalApplier(task.id, finalRun.id, candidates, aggregatedReview, options)
+    await this.runFinalApplier(task.id, finalRun.id, candidates, aggregatedReview, options, targetBranch)
 
     this.deps.db.updateTask(task.id, {
       status: "done",
@@ -258,7 +265,7 @@ export class BestOfNRunner {
     this.broadcastTask(task.id)
   }
 
-  private async runWorker(taskId: string, workerRun: TaskRun, options: Options): Promise<void> {
+  private async runWorker(taskId: string, workerRun: TaskRun, options: Options, targetBranch: string): Promise<void> {
     const task = this.deps.db.getTask(taskId)
     if (!task || !task.bestOfNConfig) return
 
@@ -267,7 +274,7 @@ export class BestOfNRunner {
       this.deps.db.updateTaskRun(workerRun.id, { status: "running" })
       this.broadcastRun(workerRun.id)
 
-      const worktreeInfo = await this.deps.worktree.createForRun(workerRun.id, "bon-worker")
+      const worktreeInfo = await this.deps.worktree.createForRun(workerRun.id, "bon-worker", targetBranch)
       worktreeDir = worktreeInfo.directory
       this.deps.db.updateTaskRun(workerRun.id, { worktreeDir })
       this.broadcastRun(workerRun.id)
@@ -408,6 +415,7 @@ export class BestOfNRunner {
     candidates: TaskCandidate[],
     aggregatedReview: AggregatedReviewResult,
     options: Options,
+    targetBranch: string,
   ): Promise<void> {
     const task = this.deps.db.getTask(taskId)
     if (!task || !task.bestOfNConfig) return
@@ -420,7 +428,7 @@ export class BestOfNRunner {
       this.deps.db.updateTaskRun(finalRun.id, { status: "running" })
       this.broadcastRun(finalRun.id)
 
-      const worktreeInfo = await this.deps.worktree.createForRun(finalRun.id, "bon-final")
+      const worktreeInfo = await this.deps.worktree.createForRun(finalRun.id, "bon-final", targetBranch)
       worktreeDir = worktreeInfo.directory
       this.deps.db.updateTaskRun(finalRun.id, { worktreeDir })
       this.broadcastRun(finalRun.id)
@@ -483,11 +491,6 @@ export class BestOfNRunner {
         }
       }
 
-      const targetBranch = await resolveTargetBranch({
-        baseDirectory: this.deps.projectRoot,
-        taskBranch: task.branch,
-        optionBranch: options.branch,
-      })
       await this.deps.worktree.complete(worktreeDir, {
         branch: worktreeInfo.branch,
         targetBranch,

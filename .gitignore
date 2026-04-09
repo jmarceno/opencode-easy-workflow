@@ -9,7 +9,7 @@ kanban.sqlite*
 .server.pid
 root-owner.json
 telegram-polling.lock
-
+.worktrees/*
 
 # Logs
 logs

@@ -20,7 +20,7 @@ function git(cwd: string, args: string[]): string {
 
 function initGitRepo(root: string): void {
   git(root, ["init"])
-  git(root, ["checkout", "-b", "main"])
+  git(root, ["checkout", "-b", "master"])
   writeFileSync(join(root, "README.md"), "# best-of-n test\n", "utf-8")
   git(root, ["add", "README.md"])
   git(root, ["-c", "user.name=Test User", "-c", "user.email=test@example.com", "commit", "-m", "init"])
@@ -129,6 +129,7 @@ describe("PiOrchestrator best-of-n execution", () => {
     process.env.PI_EASY_WORKFLOW_PI_ARGS = ""
 
     const db = new PiKanbanDB(join(root, "tasks.db"))
+    db.updateOptions({ branch: "master" })
     const task = db.createTask({
       id: "bon-1",
       name: "Best of N task",
@@ -191,6 +192,7 @@ describe("PiOrchestrator best-of-n execution", () => {
     process.env.PI_EASY_WORKFLOW_PI_ARGS = ""
 
     const db = new PiKanbanDB(join(root, "tasks.db"))
+    db.updateOptions({ branch: "master" })
     const task = db.createTask({
       id: "bon-2",
       name: "Best of N manual review task",
