@@ -19,6 +19,7 @@ import { tmpdir } from "os"
 
 const PRODUCTION_CONFIG_PATH = join(process.cwd(), ".opencode", "easy-workflow", "config.json")
 const TEST_TIMEOUT = 30000
+const TEST_STANDALONE_MODULES = ["db.ts", "server.ts", "orchestrator.ts", "run-manager.ts", "types.ts", "execution-plan.ts", "task-state.ts", "telegram.ts"]
 
 async function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -94,8 +95,7 @@ async function testConfigCreation(): Promise<boolean> {
     cpSync(standaloneSource, standaloneDest)
     
     // Copy required modules
-    const modules = ["db.ts", "server.ts", "orchestrator.ts", "types.ts", "execution-plan.ts", "task-state.ts", "telegram.ts"]
-    for (const mod of modules) {
+    for (const mod of TEST_STANDALONE_MODULES) {
       const src = join(process.cwd(), "src", mod)
       const dest = join(workflowDir, mod)
       if (existsSync(src)) {
@@ -185,8 +185,7 @@ async function testServerStartup(): Promise<boolean> {
     const standaloneDest = join(workflowDir, "standalone.ts")
     cpSync(standaloneSource, standaloneDest)
     
-    const modules = ["db.ts", "server.ts", "orchestrator.ts", "types.ts", "execution-plan.ts", "task-state.ts", "telegram.ts"]
-    for (const mod of modules) {
+    for (const mod of TEST_STANDALONE_MODULES) {
       const src = join(process.cwd(), "src", mod)
       const dest = join(workflowDir, mod)
       if (existsSync(src)) {
@@ -265,8 +264,7 @@ async function testApiEndpoints(): Promise<boolean> {
     const standaloneDest = join(workflowDir, "standalone.ts")
     cpSync(standaloneSource, standaloneDest)
     
-    const modules = ["db.ts", "server.ts", "orchestrator.ts", "types.ts", "execution-plan.ts", "task-state.ts", "telegram.ts"]
-    for (const mod of modules) {
+    for (const mod of TEST_STANDALONE_MODULES) {
       const src = join(process.cwd(), "src", mod)
       const dest = join(workflowDir, mod)
       if (existsSync(src)) {

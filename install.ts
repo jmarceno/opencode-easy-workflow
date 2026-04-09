@@ -52,6 +52,7 @@ const WORKFLOW_FILES = [
   "task-state.ts",
   "telegram.ts",
   "orchestrator.ts",
+  "run-manager.ts",
   "standalone.ts",
   "execution-plan.ts",
   "message-logger.ts",
