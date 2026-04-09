@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test"
-import { mkdtempSync, rmSync } from "fs"
+import { execFileSync } from "child_process"
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { createPiServer } from "../src/server.ts"
@@ -12,7 +13,65 @@ function createTempDir(prefix: string): string {
   return dir
 }
 
+function git(cwd: string, args: string[]): string {
+  return execFileSync("git", args, { cwd, encoding: "utf-8", stdio: "pipe" }).trim()
+}
+
+function initGitRepo(root: string): void {
+  git(root, ["init"])
+  git(root, ["checkout", "-b", "main"])
+  writeFileSync(join(root, "README.md"), "# server test\n", "utf-8")
+  git(root, ["add", "README.md"])
+  git(root, ["-c", "user.name=Test User", "-c", "user.email=test@example.com", "commit", "-m", "init"])
+}
+
+function createMockPiBinary(root: string): string {
+  const filePath = join(root, "mock-pi-server.js")
+  writeFileSync(
+    filePath,
+    `#!/usr/bin/env bun
+import { createInterface } from "readline"
+const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
+rl.on("line", (line) => {
+  let request = null
+  try { request = JSON.parse(line) } catch { return }
+  const id = request?.id
+  const method = request?.method
+  if (method === "initialize") {
+    console.log(JSON.stringify({ id, result: { sessionId: "server-session-" + id, sessionFile: "/tmp/mock-server-session" } }))
+    return
+  }
+  if (method === "prompt") {
+    const text = "Local session viewer execution output"
+    console.log(JSON.stringify({ method: "assistant_message", params: { role: "assistant", text } }))
+    console.log(JSON.stringify({ id, result: { text } }))
+    return
+  }
+  if (method === "get_messages") {
+    console.log(JSON.stringify({ id, result: { messages: [{ text: "snapshot" }] } }))
+    return
+  }
+  console.log(JSON.stringify({ id, result: { ok: true } }))
+})
+`,
+    "utf-8",
+  )
+  chmodSync(filePath, 0o755)
+  return filePath
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) return
+    await Bun.sleep(50)
+  }
+  throw new Error("Timed out waiting for condition")
+}
+
 afterEach(() => {
+  delete process.env.PI_EASY_WORKFLOW_PI_BIN
+  delete process.env.PI_EASY_WORKFLOW_PI_ARGS
   for (const dir of tempDirs.splice(0, tempDirs.length)) {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -304,6 +363,77 @@ describe("PiKanbanServer API", () => {
       expect(event.payload.messageType).toBe("thinking")
     } finally {
       ws.close()
+      server.stop()
+      db.close()
+    }
+  })
+
+  it("supports local session viewing for real orchestrated runs", async () => {
+    const root = createTempDir("pi-easy-workflow-local-session-view-")
+    initGitRepo(root)
+    process.env.PI_EASY_WORKFLOW_PI_BIN = createMockPiBinary(root)
+    process.env.PI_EASY_WORKFLOW_PI_ARGS = ""
+
+    const dbPath = join(root, "tasks.db")
+    const { db, server } = createPiServer({ dbPath, port: 0 })
+    const port = await server.start(0)
+    const baseUrl = `http://127.0.0.1:${port}`
+
+    try {
+      const createTaskResponse = await fetch(`${baseUrl}/api/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Local session viewer task",
+          prompt: "Execute task and verify local session viewer APIs",
+          status: "backlog",
+          review: false,
+          autoCommit: false,
+          executionStrategy: "standard",
+        }),
+      })
+      expect(createTaskResponse.status).toBe(201)
+      const createdTask = await createTaskResponse.json()
+
+      const startResponse = await fetch(`${baseUrl}/api/tasks/${createdTask.id}/start`, { method: "POST" })
+      expect(startResponse.status).toBe(200)
+
+      await waitFor(() => {
+        const current = db.getTask(createdTask.id)
+        return Boolean(current && (current.status === "done" || current.status === "failed"))
+      })
+
+      const finalTaskResponse = await fetch(`${baseUrl}/api/tasks/${createdTask.id}`)
+      expect(finalTaskResponse.status).toBe(200)
+      const finalTask = await finalTaskResponse.json()
+      expect(finalTask.status).toBe("done")
+      expect(finalTask.sessionId).toBeTruthy()
+      expect(finalTask.sessionUrl).toBe(`/#session/${encodeURIComponent(finalTask.sessionId)}`)
+
+      const sessionResponse = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(finalTask.sessionId)}`)
+      expect(sessionResponse.status).toBe(200)
+      const session = await sessionResponse.json()
+      expect(session.id).toBe(finalTask.sessionId)
+
+      const messagesResponse = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(finalTask.sessionId)}/messages?limit=1000`)
+      expect(messagesResponse.status).toBe(200)
+      const messages = await messagesResponse.json()
+      expect(Array.isArray(messages)).toBe(true)
+      expect(messages.length).toBeGreaterThan(0)
+
+      const timelineResponse = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(finalTask.sessionId)}/timeline`)
+      expect(timelineResponse.status).toBe(200)
+      const timeline = await timelineResponse.json()
+      expect(Array.isArray(timeline)).toBe(true)
+      expect(timeline.length).toBeGreaterThan(0)
+
+      const ioResponse = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(finalTask.sessionId)}/io?limit=1000`)
+      expect(ioResponse.status).toBe(200)
+      const io = await ioResponse.json()
+      expect(Array.isArray(io)).toBe(true)
+      expect(io.some((record: any) => record.recordType === "rpc_command")).toBe(true)
+      expect(io.some((record: any) => record.recordType === "prompt_rendered")).toBe(true)
+    } finally {
       server.stop()
       db.close()
     }

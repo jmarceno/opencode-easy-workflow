@@ -51,6 +51,7 @@ rl.on("line", (line) => {
     if (prompt.includes("PREPARE PLAN ONLY") && prompt.includes("requested changes")) text = "Revised plan: 1) adjust 2) validate"
     else if (prompt.includes("PREPARE PLAN ONLY")) text = "Plan: 1) implement 2) verify"
     else if (prompt.includes("detached HEAD")) text = "Commit complete: hash abc123"
+    process.stderr.write("mock pi stderr line\\n")
     console.log(JSON.stringify({ method: "assistant_message", params: { role: "assistant", text } }))
     console.log(JSON.stringify({ id, result: { text } }))
     return
@@ -129,7 +130,12 @@ describe("PiOrchestrator standard execution", () => {
     expect(sessions.length).toBeGreaterThanOrEqual(2)
     const io = db.getSessionIO(sessions[0]!.id)
     expect(io.some((record) => record.recordType === "rpc_command")).toBe(true)
-    expect(io.some((record) => record.recordType === "rpc_response" || record.recordType === "rpc_event")).toBe(true)
+    expect(io.some((record) => record.recordType === "rpc_response")).toBe(true)
+    expect(io.some((record) => record.recordType === "rpc_event")).toBe(true)
+    expect(io.some((record) => record.recordType === "stderr_chunk")).toBe(true)
+    expect(io.some((record) => record.recordType === "lifecycle")).toBe(true)
+    expect(io.some((record) => record.recordType === "prompt_rendered")).toBe(true)
+    expect(io.some((record) => record.recordType === "snapshot")).toBe(true)
 
     db.close()
   })
