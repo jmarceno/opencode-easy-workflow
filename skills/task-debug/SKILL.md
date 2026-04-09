@@ -12,7 +12,7 @@ metadata:
 - Diagnose why a task is `failed`, `stuck`, or otherwise not progressing.
 - Reconstruct what an agent actually did by examining the session timeline.
 - Compare task output against worktree changes to verify implementation completeness.
-- Apply the correct repair action (`reset_backlog`, `queue_implementation`, `mark_done`, `fail_task`, `restore_plan_approval`) based on evidence.
+- Apply the correct repair action (`reset_backlog`, `queue_implementation`, `mark_done`, `fail_task`, `restore_plan_approval`, `continue_with_more_reviews`) based on evidence.
 - Identify when to escalate to human review versus auto-repair.
 
 ## When to use me
@@ -47,6 +47,9 @@ curl http://localhost:<port>/api/tasks/<task-id>/runs
 
 # Get task candidates (for best-of-n)
 curl http://localhost:<port>/api/tasks/<task-id>/candidates
+
+# Get review status and history
+curl http://localhost:<port>/api/tasks/<task-id>/review-status
 ```
 
 Key fields to examine:
@@ -55,12 +58,18 @@ Key fields to examine:
 | --- | --- |
 | `status` | Current board state (`failed`, `stuck`, `review`, `executing`, etc.) |
 | `errorMessage` | If set, the workflow recorded a failure reason |
-| `agentOutput` | Accumulated tagged output (`[plan]`, `[exec]`, `[review-fix-N]`) |
+| `agentOutput` | Accumulated tagged output (`[plan]`, `[exec]`, `[review-fix-N]`, `[user-revision-request]`) |
 | `sessionId` / `sessionUrl` | OpenCode session link—use for timeline |
 | `worktreeDir` | Worktree path—check git status there |
-| `executionPhase` | Internal phase for plan-mode tasks |
+| `executionPhase` | Internal phase for plan-mode tasks: `not_started`, `plan_complete_waiting_approval`, `plan_revision_pending`, `implementation_pending`, `implementation_done` |
+| `awaitingPlanApproval` | Whether task is paused for plan approval |
+| `planRevisionCount` | How many plan revision cycles occurred |
 | `reviewCount` | How many review cycles ran |
 | `bestOfNSubstage` | For best-of-n: which phase is active |
+| `reviewActivity` | `idle` or `running` - current review status |
+| `smartRepairHints` | User-provided hints for smart repair decisions |
+| `maxReviewRunsOverride` | Per-task override for max review runs |
+| `isArchived` | Whether task has been archived (soft deleted) |
 
 ### Step 2: Examine Session Timeline
 
@@ -85,12 +94,15 @@ Timeline entry fields:
 | Field | What it tells you |
 | --- | --- |
 | `role` | `user`, `assistant`, `system`, `tool` |
-| `messageType` | `text`, `tool_call`, `tool_result`, `step_finish`, `error` |
+| `messageType` | `text`, `tool_call`, `tool_result`, `step_finish`, `error`, `thinking`, `permission_asked`, `permission_replied` |
 | `summary` | Short human-readable description |
 | `hasToolCalls` | Whether the message triggered tools |
 | `hasEdits` | Whether file edits occurred |
 | `modelProvider` / `modelId` | Which model was used |
 | `relativeTime` | Milliseconds from session start |
+| `toolName` | Name of tool that was called |
+| `editFilePath` | Path of file that was edited |
+| `agentName` | Name of agent executing |
 
 ### Step 3: Check Worktree Git State
 
@@ -128,13 +140,23 @@ A task is truly complete only when:
 
 ### Step 5: Understand Repair Actions
 
-Use `PUT /api/tasks/<task-id>/repair-state` with an `action` field:
+Use `POST /api/tasks/<task-id>/repair-state` with an `action` field:
 
 ```bash
 # Manual repair action
 curl -X POST http://localhost:<port>/api/tasks/<task-id>/repair-state \
   -H "Content-Type: application/json" \
   -d '{"action": "reset_backlog"}'
+
+# Smart repair (AI decides)
+curl -X POST http://localhost:<port>/api/tasks/<task-id>/repair-state \
+  -H "Content-Type: application/json" \
+  -d '{"action": "smart", "smartRepairHints": "Focus on the database migration issues"}'
+
+# Continue with more reviews
+curl -X POST http://localhost:<port>/api/tasks/<task-id>/repair-state \
+  -H "Content-Type: application/json" \
+  -d '{"action": "continue_with_more_reviews", "additionalReviewCount": 3}'
 ```
 
 Available actions:
@@ -147,7 +169,7 @@ Available actions:
 | `fail_task` | State is invalid and should stay visible with an error. Use when task cannot be repaired. |
 | `restore_plan_approval` | Task should return to plan approval review. |
 | `continue_with_more_reviews` | Stuck in review due to limit; allow more review cycles. |
-| `smart` | Let the repair model analyze the situation and decide. Requires `repairModel` to be configured. |
+| `smart` | Let the repair model analyze the situation and decide. Requires `repairModel` to be configured in options. |
 
 ## Smart Repair
 
@@ -167,6 +189,14 @@ Smart repair gathers:
 - Latest `[plan]`, `[exec]`, and `[user-revision-request]` blocks from `agentOutput`
 
 It then prompts the configured `repairModel` to decide the best action.
+
+You can provide hints to guide smart repair:
+
+```bash
+curl -X POST http://localhost:<port>/api/tasks/<task-id>/repair-state \
+  -H "Content-Type: application/json" \
+  -d '{"action": "smart", "smartRepairHints": "The issue is with the foreign key constraints, ignore other warnings"}'
+```
 
 ## Common Failure Patterns
 
@@ -213,6 +243,14 @@ It then prompts the configured `repairModel` to decide the best action.
 - `reset_backlog` with improved instructions
 - Add `smartRepairHints` to give the agent targeted guidance
 
+### Pattern 6: Task requires plan revision
+
+**Symptoms:** `executionPhase: "plan_revision_pending"`, `[user-revision-request]` in agentOutput.
+
+**Diagnosis:** User requested changes to the plan. Task will re-run planning with the revision feedback.
+
+**Repair:** Usually auto-handled, but can use `reset_backlog` if stuck.
+
 ## Debugging Best-of-N Tasks
 
 For best-of-n tasks, you can drill into individual runs:
@@ -239,6 +277,27 @@ Best-of-n substages:
 | `blocked_for_manual_review` | Waiting for human decision |
 | `completed` | Successfully completed |
 
+## Workflow Run Controls
+
+The workflow supports workflow runs with pause/resume/stop controls:
+
+```bash
+# List all workflow runs
+curl http://localhost:<port>/api/runs
+
+# Pause a running workflow
+curl -X POST http://localhost:<port>/api/runs/<run-id>/pause
+
+# Resume a paused workflow
+curl -X POST http://localhost:<port>/api/runs/<run-id>/resume
+
+# Stop a workflow
+curl -X POST http://localhost:<port>/api/runs/<run-id>/stop
+
+# Archive a completed/failed run
+curl -X DELETE http://localhost:<port>/api/runs/<run-id>
+```
+
 ## State Transitions
 
 Understanding how tasks move between states helps you diagnose issues:
@@ -261,22 +320,37 @@ The orchestrator handles transitions automatically, but stuck/failed states indi
 
 The debug skill operates on the **standalone server + bridge plugin** architecture:
 
-1. **Standalone Server** (`.opencode/easy-workflow/standalone.ts`)
+1. **Standalone Server** (`src/standalone.ts`)
    - HTTP API on `kanbanPort`
    - SQLite database at `.opencode/easy-workflow/tasks.db`
    - Message logger captures all session events
+   - Workflow run orchestration with pause/resume/stop
 
 2. **Bridge Plugin** (in OpenCode plugins directory)
    - Forwards `message.updated`, `tool.execute.after`, `session.updated` events
    - Session IDs link messages to tasks
+   - Auto-replies to permissions for workflow sessions
 
 3. **Database Tables:**
 
-   `tasks` — Core task state
+   `tasks` — Core task state with fields:
+   - Standard: `id`, `name`, `idx`, `prompt`, `branch`, `status`
+   - Models: `plan_model`, `execution_model`, `thinking_level`
+   - Flags: `planmode`, `auto_approve_plan`, `review`, `auto_commit`, `delete_worktree`, `skip_permission_asking`
+   - Plan mode: `execution_phase`, `awaiting_plan_approval`, `plan_revision_count`
+   - Best-of-n: `execution_strategy`, `best_of_n_config`, `best_of_n_substage`
+   - Review: `review_count`, `max_review_runs_override`, `review_activity`
+   - Repair: `smart_repair_hints`, `error_message`
+   - Session: `session_id`, `session_url`, `worktree_dir`
+   - Output: `agent_output`
+   - Archive: `is_archived`, `archived_at`
+   - Timestamps: `created_at`, `updated_at`, `completed_at`
 
    `task_runs` — Child runs for best-of-n
 
    `task_candidates` — Successful worker artifacts
+
+   `workflow_runs` — Workflow execution runs with pause/resume/stop support
 
    `workflow_sessions` — Links OpenCode sessions to tasks
 
@@ -286,13 +360,30 @@ The debug skill operates on the **standalone server + bridge plugin** architectu
 
 Database location: `<workspace>/.opencode/easy-workflow/tasks.db`
 
-The storage layer is in `.opencode/easy-workflow/db.ts`.
+The storage layer is in `src/db.ts`.
 
 Session logs are stored in `session_messages` table and available via:
 - `GET /api/sessions/:sessionId/timeline`
 - `GET /api/sessions/:sessionId/messages`
 - `GET /api/tasks/:taskId/messages`
 - `GET /api/task-runs/:runId/messages`
+
+## Task Archiving
+
+Tasks with execution history are archived (soft deleted) rather than hard deleted:
+
+- Tasks without execution history: hard deleted
+- Tasks with execution history: `is_archived = 1`, `archived_at = timestamp`
+- Archived tasks are filtered out of normal listings
+- Archive preserves all history for debugging
+
+```bash
+# Delete a task (will archive if has history)
+curl -X DELETE http://localhost:<port>/api/tasks/<task-id>
+
+# Delete all done tasks (archives those with history)
+curl -X DELETE http://localhost:<port>/api/tasks/done/all
+```
 
 ## Diagnostic Checklist
 
@@ -302,10 +393,32 @@ When debugging a failing task, verify:
 - [ ] `sessionId` points to a real OpenCode session
 - [ ] Session timeline shows what the agent was doing when it stopped
 - [ ] Worktree exists and has the expected changes (or lack thereof)
-- [ ] `agentOutput` contains the expected tagged blocks (`[plan]`, `[exec]`)
+- [ ] `agentOutput` contains the expected tagged blocks (`[plan]`, `[exec]`, `[user-revision-request]`)
 - [ ] For best-of-n: task runs and candidates reflect expected progress
 - [ ] `executionPhase` and `awaitingPlanApproval` are consistent with the task type
 - [ ] Review gaps (if any) are specific and actionable
+- [ ] `isArchived` is false (task hasn't been archived)
+- [ ] No active workflow run is locking the task (check `/api/runs`)
+
+## Review Management
+
+```bash
+# Get detailed review status
+curl http://localhost:<port>/api/tasks/<task-id>/review-status
+
+# Update review limits for a task
+curl -X PATCH http://localhost:<port>/api/tasks/<task-id>/review-limits \
+  -H "Content-Type: application/json" \
+  -d '{"maxReviewRunsOverride": 5, "smartRepairHints": "Focus on API consistency"}'
+```
+
+Review status response includes:
+- `reviewCount`: Number of review cycles completed
+- `maxReviewRuns`: Global default from options
+- `maxReviewRunsOverride`: Per-task override (if set)
+- `effectiveMaxReviewRuns`: Effective limit (override or default)
+- `reviewLimitExceeded`: Boolean if limit reached
+- `reviewHistory`: Array of review cycles with gaps and recommendations
 
 ## What to Tell the User
 
@@ -316,3 +429,4 @@ After diagnosing a task issue, report:
 - What repair action you took (or recommended)
 - Any assumptions made during diagnosis
 - What the user should expect after the repair (e.g., "task will restart from planning")
+- If smart repair was used, what hints were provided and what action was chosen

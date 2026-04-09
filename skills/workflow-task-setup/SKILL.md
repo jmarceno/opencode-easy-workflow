@@ -30,6 +30,7 @@ metadata:
 - Create template tasks only when the user wants reusable blueprints; otherwise create backlog tasks.
 - Reuse or update an existing task instead of creating a duplicate when the match is clear. If the match is ambiguous, ask.
 - Use `best_of_n` only for tasks where multiple candidate implementations and convergence are useful; otherwise keep `standard`.
+- Respect task archiving: tasks with execution history are archived, not hard deleted.
 
 ## Recommended Workflow
 
@@ -43,7 +44,7 @@ metadata:
 
 ## Task Shape
 
-The workflow task model is defined in `.opencode/easy-workflow/types.ts`.
+The workflow task model is defined in `src/types.ts`.
 
 Required fields for useful task creation:
 
@@ -61,27 +62,35 @@ Common optional fields:
 | `planModel` | Planning model override | `default` |
 | `executionModel` | Execution model override | `default` |
 | `planmode` | Pause after planning and wait for approval | `false` |
+| `autoApprovePlan` | Automatically approve plans without user review | `false` |
 | `executionStrategy` | Execution mode (`standard` or `best_of_n`) | `standard` |
 | `bestOfNConfig` | Best-of-N worker/reviewer/final-applier config | `null` unless strategy is `best_of_n` |
 | `review` | Run review loop after implementation | `true` |
 | `autoCommit` | Auto-commit on success | `true` |
 | `deleteWorktree` | Remove worktree when task completes, resets, or is marked done. If `false`, worktree is preserved even on failure. | `true` |
 | `requirements` | Array of blocking task ids | `[]` |
-| `thinkingLevel` | Reasoning effort | `default` |
+| `thinkingLevel` | Reasoning effort (`default`, `low`, `medium`, `high`) | `default` |
+| `skipPermissionAsking` | Auto-reply to permission prompts | `true` |
+| `maxReviewRunsOverride` | Per-task override for max review runs | `null` (uses global default) |
 
 Advanced fields normally left alone on fresh task creation:
 
 | Field | Meaning |
 | --- | --- |
-| `executionPhase` | Internal phase for plan-mode lifecycle |
+| `executionPhase` | Internal phase for plan-mode lifecycle: `not_started`, `plan_complete_waiting_approval`, `plan_revision_pending`, `implementation_pending`, `implementation_done` |
 | `bestOfNSubstage` | Internal substage for best-of-n lifecycle |
 | `awaitingPlanApproval` | Whether a plan-mode task is waiting for approval |
-| `agentOutput` | Accumulated agent output |
+| `planRevisionCount` | Number of plan revision cycles |
+| `agentOutput` | Accumulated agent output with tagged blocks |
 | `reviewCount` | Review loop counter |
+| `reviewActivity` | Current review status: `idle` or `running` |
 | `sessionId` / `sessionUrl` | Linked OpenCode session |
 | `worktreeDir` | Active worktree location |
 | `errorMessage` | Failure detail |
+| `smartRepairHints` | User-provided hints for smart repair |
 | `completedAt` | Unix timestamp when done |
+| `isArchived` | Whether task has been archived |
+| `archivedAt` | When task was archived |
 
 ## State Model
 
@@ -102,7 +111,8 @@ Execution phase values:
 | Phase | Meaning |
 | --- | --- |
 | `not_started` | Normal initial state |
-| `plan_complete_waiting_approval` | Planning finished and the task is paused |
+| `plan_complete_waiting_approval` | Planning finished and the task is paused for approval |
+| `plan_revision_pending` | User requested plan revision, waiting to re-plan |
 | `implementation_pending` | Plan was approved and implementation can run |
 | `implementation_done` | Implementation finished |
 
@@ -123,6 +133,7 @@ Important runtime rules from the server and orchestrator:
 - A plan-mode task also becomes executable when `executionPhase = implementation_pending`.
 - When a plan-mode task finishes planning, it moves to `status = review`, `awaitingPlanApproval = true`, `executionPhase = plan_complete_waiting_approval`.
 - Approving that plan moves it to `status = backlog`, `awaitingPlanApproval = false`, `executionPhase = implementation_pending`.
+- Requesting plan revision moves it to `executionPhase = plan_revision_pending` with the user's feedback appended as `[user-revision-request]`.
 - Resetting a task to backlog clears it back to `executionPhase = not_started` and `awaitingPlanApproval = false`.
 - Best-of-N and plan mode cannot be combined in v1 (`planmode = true` with `executionStrategy = best_of_n` is rejected by API validation).
 - For `best_of_n`, the board still treats it as one logical task card while child runs are stored separately.
@@ -131,6 +142,7 @@ Important runtime rules from the server and orchestrator:
   - Task completes successfully (if `deleteWorktree` is `true`, the default)
   - User explicitly resets a task to backlog (cleanup happens regardless of `deleteWorktree`)
   - User explicitly marks a task as done (cleanup happens if `deleteWorktree` is `true`)
+- **Task Archiving**: Tasks with execution history are archived (soft deleted) rather than hard deleted. This preserves session logs and debugging information.
 
 ## Dependency Rules
 
@@ -145,10 +157,10 @@ Important runtime rules from the server and orchestrator:
 
 Easy Workflow uses a **standalone server + bridge plugin** architecture:
 
-1. **Standalone Server** (`.opencode/easy-workflow/standalone.ts`) - Runs outside OpenCode
+1. **Standalone Server** (`src/standalone.ts`) - Runs outside OpenCode
    - Provides HTTP API and WebSocket server
    - Manages SQLite database
-   - Runs the task orchestrator
+   - Runs the task orchestrator with workflow run controls (pause/resume/stop)
    - Reads config from `.opencode/easy-workflow/config.json`
 
 2. **Bridge Plugin** (`.opencode/plugins/easy-workflow.ts`) - Minimal plugin inside OpenCode
@@ -166,7 +178,7 @@ The workflow DB is managed by the standalone server at:
 
 `<workspace>/.opencode/easy-workflow/tasks.db`
 
-The storage layer lives in `.opencode/easy-workflow/db.ts`.
+The storage layer lives in `src/db.ts`.
 
 Tables:
 
@@ -182,12 +194,13 @@ Tables:
 | `plan_model` | Planning model |
 | `execution_model` | Execution model |
 | `planmode` | `0/1` boolean |
+| `auto_approve_plan` | `0/1` boolean - auto approve plans |
 | `review` | `0/1` boolean |
 | `auto_commit` | `0/1` boolean |
 | `delete_worktree` | `0/1` boolean |
 | `status` | Task status string |
 | `requirements` | JSON array string of task ids |
-| `agent_output` | Aggregated output |
+| `agent_output` | Aggregated output with tagged blocks |
 | `review_count` | Number of review attempts |
 | `session_id` | OpenCode session id |
 | `session_url` | OpenCode session URL |
@@ -199,9 +212,16 @@ Tables:
 | `thinking_level` | `default`, `low`, `medium`, `high` |
 | `execution_phase` | Internal plan-mode phase |
 | `awaiting_plan_approval` | `0/1` boolean |
+| `plan_revision_count` | Number of plan revisions |
 | `execution_strategy` | `standard` or `best_of_n` |
 | `best_of_n_config` | JSON config for worker/reviewer/final-applier runs |
 | `best_of_n_substage` | Internal best-of-n substage |
+| `skip_permission_asking` | `0/1` boolean |
+| `max_review_runs_override` | Integer or null |
+| `smart_repair_hints` | Text hints for smart repair |
+| `review_activity` | `idle` or `running` |
+| `is_archived` | `0/1` boolean |
+| `archived_at` | Unix timestamp or null |
 
 Indexes:
 
@@ -220,10 +240,20 @@ Important keys:
 | `branch` | Default branch |
 | `plan_model` | Default plan model |
 | `execution_model` | Default execution model |
+| `review_model` | Default review model |
+| `repair_model` | Default repair model for smart repair |
 | `command` | Pre-execution command |
 | `parallel_tasks` | Parallelism limit |
 | `port` | Kanban server port |
 | `thinking_level` | Default thinking level |
+| `auto_delete_normal_sessions` | Auto-delete normal sessions |
+| `auto_delete_review_sessions` | Auto-delete review sessions |
+| `show_execution_graph` | Show execution graph in UI |
+| `telegram_bot_token` | Telegram bot token |
+| `telegram_chat_id` | Telegram chat ID |
+| `telegram_notifications_enabled` | Enable Telegram notifications |
+| `max_reviews` | Default max review runs |
+| `extra_prompt` | Extra prompt appended to all tasks |
 
 ### `task_runs`
 
@@ -239,7 +269,7 @@ Child run records for best-of-n internals.
 | `task_suffix` | Optional slot-specific prompt suffix |
 | `status` | `pending`, `running`, `done`, `failed`, `skipped` |
 | `session_id` / `session_url` | Session metadata |
-| `worktree_dir` | Worktree path (kept on failure, kept if cleanup fails, kept if deleteWorktree is disabled) |
+| `worktree_dir` | Worktree path (kept on failure) |
 | `summary` | Short run summary |
 | `error_message` | Run-level error details |
 | `candidate_id` | Linked candidate id (worker runs) |
@@ -261,6 +291,67 @@ Successful worker candidate artifacts for best-of-n.
 | `summary` | Candidate summary |
 | `error_message` | Candidate artifact error detail |
 
+### `workflow_runs`
+
+Workflow execution runs with pause/resume/stop controls.
+
+| Column | Notes |
+| --- | --- |
+| `id` | Text primary key |
+| `kind` | `all_tasks`, `single_task`, `workflow_review` |
+| `status` | `running`, `paused`, `stopping`, `completed`, `failed` |
+| `display_name` | Human-readable run name |
+| `target_task_id` | Single task target (if kind is single_task) |
+| `task_order_json` | JSON array of task IDs in execution order |
+| `current_task_id` | Currently executing task |
+| `current_task_index` | Index in task order |
+| `pause_requested` | `0/1` boolean |
+| `stop_requested` | `0/1` boolean |
+| `error_message` | Run-level error |
+| `created_at` / `started_at` / `updated_at` / `finished_at` | Timestamps |
+| `is_archived` | `0/1` boolean |
+| `archived_at` | Unix timestamp or null |
+| `color` | Run color for UI |
+
+### `workflow_sessions`
+
+Session tracking for message logging and permission handling.
+
+| Column | Notes |
+| --- | --- |
+| `session_id` | Text primary key |
+| `task_id` | Associated task |
+| `task_run_id` | Associated task run (if any) |
+| `session_kind` | `task`, `task_run_worker`, `task_run_reviewer`, `task_run_final_applier`, `review_scratch`, `repair`, `plan`, `plan_revision` |
+| `owner_directory` | Project directory |
+| `skip_permission_asking` | `0/1` boolean |
+| `permission_mode` | Permission handling mode |
+| `status` | `active`, `completed`, `deleted`, `stale` |
+| `created_at` / `updated_at` | Timestamps |
+
+### `session_messages`
+
+Detailed message logging for timeline reconstruction.
+
+| Column | Notes |
+| --- | --- |
+| `id` | Integer primary key |
+| `message_id` | OpenCode message ID |
+| `session_id` | Session reference |
+| `task_id` | Task reference (nullable) |
+| `task_run_id` | Task run reference (nullable) |
+| `timestamp` | Unix timestamp (milliseconds) |
+| `role` | `user`, `assistant`, `system`, `tool` |
+| `message_type` | `text`, `tool_call`, `tool_result`, `error`, `step_start`, `step_finish`, `session_start`, `session_end`, `session_status`, `thinking`, `user_prompt`, `assistant_response`, `tool_request`, `permission_asked`, `permission_replied`, `session_error`, `message_part` |
+| `content_json` | Message content as JSON |
+| `model_provider` / `model_id` | Model information |
+| `agent_name` | Executing agent |
+| `prompt_tokens` / `completion_tokens` / `total_tokens` | Token counts |
+| `tool_name` / `tool_args_json` / `tool_result_json` / `tool_status` | Tool execution details |
+| `edit_diff` / `edit_file_path` | File edit information |
+| `session_status` / `workflow_phase` | Session state |
+| `raw_event_json` | Raw bridge event |
+
 ## Preferred Write Path
 
 Prefer the HTTP API when the kanban server is running, because API writes also broadcast UI updates.
@@ -273,24 +364,75 @@ Base URL:
 
 The port is read from `.opencode/easy-workflow/config.json` under the `kanbanPort` key, or from the `options` table as fallback.
 
-Useful endpoints from `.opencode/easy-workflow/server.ts`:
+Useful endpoints from `src/server.ts`:
+
+### Tasks
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/tasks` | List tasks |
+| `GET` | `/api/tasks` | List tasks (excludes archived) |
 | `POST` | `/api/tasks` | Create task |
-| `PATCH` | `/api/tasks/:id` | Update task |
-| `DELETE` | `/api/tasks/:id` | Delete task |
+| `PATCH` | `/api/tasks/:id` | Update task (blocked if executing in a run) |
+| `DELETE` | `/api/tasks/:id` | Delete task (archives if has history) |
 | `PUT` | `/api/tasks/reorder` | Reorder by `idx` |
 | `POST` | `/api/tasks/:id/approve-plan` | Approve a plan-mode task |
+| `POST` | `/api/tasks/:id/request-plan-revision` | Request plan revision |
+| `POST` | `/api/tasks/:id/start` | Start a single task |
+| `POST` | `/api/tasks/:id/repair-state` | Repair task state |
+| `PATCH` | `/api/tasks/:id/review-limits` | Update review limits |
+| `GET` | `/api/tasks/:id/review-status` | Get review status and history |
+| `GET` | `/api/tasks/:id/runs` | List best-of-n child runs |
+| `GET` | `/api/tasks/:id/candidates` | List best-of-n candidates |
+| `GET` | `/api/tasks/:id/best-of-n-summary` | Aggregated best-of-n progress |
+| `GET` | `/api/tasks/:id/messages` | Get messages for a task |
+
+### Workflow Runs
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/runs` | List workflow runs |
+| `DELETE` | `/api/runs/:id` | Archive a completed/failed run |
+| `POST` | `/api/runs/:id/pause` | Pause a running workflow |
+| `POST` | `/api/runs/:id/resume` | Resume a paused workflow |
+| `POST` | `/api/runs/:id/stop` | Stop a workflow |
+
+### Bulk Operations
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `DELETE` | `/api/tasks/done/all` | Archive/delete all done tasks |
+
+### Options & Configuration
+
+| Method | Path | Purpose |
+| --- | --- | --- |
 | `GET` | `/api/options` | Read workflow defaults |
 | `PUT` | `/api/options` | Update workflow defaults |
 | `GET` | `/api/branches` | List git branches |
-| `GET` | `/api/tasks/:id/runs` | List best-of-n child runs for task |
-| `GET` | `/api/tasks/:id/candidates` | List best-of-n candidate artifacts |
-| `GET` | `/api/tasks/:id/best-of-n-summary` | Aggregated best-of-n progress/status |
+| `GET` | `/api/models` | List available models |
+
+### Execution
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/start` | Start workflow execution |
+| `POST` | `/api/stop` | Stop workflow execution |
+| `GET` | `/api/execution-graph` | Get execution plan graph |
+
+### Session Messages
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/sessions/:id/messages` | Get raw messages for session |
+| `GET` | `/api/sessions/:id/timeline` | Get formatted timeline |
+| `GET` | `/api/task-runs/:id/messages` | Get messages for task run |
+| `GET` | `/api/workflow-session/:id` | Check if session is workflow-owned |
+
+### Bridge Events
+
+| Method | Path | Purpose |
+| --- | --- | --- |
 | `POST` | `/api/events/bridge` | Receive events from bridge plugin (internal) |
-| `GET` | `/api/workflow-session/:id` | Check if session is workflow-owned (internal) |
 
 API payload field names use camelCase.
 DB column names use snake_case.
@@ -313,6 +455,7 @@ Inspect current tasks:
 ```sql
 SELECT id, idx, name, status, execution_phase, awaiting_plan_approval, requirements
 FROM tasks
+WHERE is_archived = 0
 ORDER BY idx ASC;
 ```
 
@@ -323,6 +466,7 @@ SELECT id, idx, name, branch, status, execution_phase
 FROM tasks
 WHERE status = 'backlog'
   AND execution_phase != 'plan_complete_waiting_approval'
+  AND is_archived = 0
 ORDER BY idx ASC;
 ```
 
@@ -332,6 +476,7 @@ Inspect templates:
 SELECT id, idx, name
 FROM tasks
 WHERE status = 'template'
+  AND is_archived = 0
 ORDER BY idx ASC;
 ```
 
@@ -346,10 +491,30 @@ ORDER BY key ASC;
 Inspect tasks waiting for plan approval:
 
 ```sql
-SELECT id, idx, name, status, execution_phase, awaiting_plan_approval
+SELECT id, idx, name, status, execution_phase, awaiting_plan_approval, plan_revision_count
 FROM tasks
 WHERE awaiting_plan_approval = 1
+  AND is_archived = 0
 ORDER BY idx ASC;
+```
+
+Inspect archived tasks:
+
+```sql
+SELECT id, name, archived_at
+FROM tasks
+WHERE is_archived = 1
+ORDER BY archived_at DESC;
+```
+
+Inspect active workflow runs:
+
+```sql
+SELECT id, kind, status, display_name, current_task_id, pause_requested, stop_requested
+FROM workflow_runs
+WHERE is_archived = 0
+  AND status IN ('running', 'paused')
+ORDER BY created_at DESC;
 ```
 
 Example direct insert shape:
@@ -357,9 +522,10 @@ Example direct insert shape:
 ```sql
 INSERT INTO tasks (
   id, name, idx, prompt, branch, plan_model, execution_model,
-  planmode, review, auto_commit, delete_worktree, status,
+  planmode, auto_approve_plan, review, auto_commit, delete_worktree, status,
   requirements, created_at, updated_at, thinking_level,
-  execution_phase, awaiting_plan_approval
+  execution_phase, awaiting_plan_approval, plan_revision_count,
+  execution_strategy, best_of_n_substage, skip_permission_asking
 ) VALUES (
   'task1234',
   'Implement feature X',
@@ -368,6 +534,7 @@ INSERT INTO tasks (
   'main',
   'default',
   'default',
+  0,
   0,
   1,
   1,
@@ -378,7 +545,11 @@ INSERT INTO tasks (
   unixepoch(),
   'default',
   'not_started',
-  0
+  0,
+  0,
+  'standard',
+  'idle',
+  1
 );
 ```
 
@@ -395,9 +566,11 @@ Create a normal backlog task:
   "planModel": "default",
   "executionModel": "default",
   "planmode": false,
+  "autoApprovePlan": false,
   "review": true,
   "autoCommit": true,
   "deleteWorktree": true,
+  "skipPermissionAsking": true,
   "requirements": [],
   "thinkingLevel": "default"
 }
@@ -411,11 +584,31 @@ Create a plan-mode task that should pause for approval after planning:
   "prompt": "Review the source material, produce a migration plan, and stop for approval before implementation.",
   "status": "backlog",
   "planmode": true,
+  "autoApprovePlan": false,
   "review": true,
   "autoCommit": true,
   "deleteWorktree": true,
+  "skipPermissionAsking": true,
   "requirements": [],
   "thinkingLevel": "medium"
+}
+```
+
+Create a plan-mode task with auto-approval:
+
+```json
+{
+  "name": "Refactor utility functions",
+  "prompt": "Refactor the utility functions for better testability.",
+  "status": "backlog",
+  "planmode": true,
+  "autoApprovePlan": true,
+  "review": true,
+  "autoCommit": true,
+  "deleteWorktree": true,
+  "skipPermissionAsking": true,
+  "requirements": [],
+  "thinkingLevel": "default"
 }
 ```
 
@@ -447,8 +640,29 @@ Create a best-of-n task:
   "review": true,
   "autoCommit": true,
   "deleteWorktree": true,
+  "skipPermissionAsking": true,
   "requirements": [],
   "thinkingLevel": "medium"
+}
+```
+
+Update review limits for a task:
+
+```json
+// PATCH /api/tasks/task123/review-limits
+{
+  "maxReviewRunsOverride": 5,
+  "smartRepairHints": "Focus on error handling and edge cases"
+}
+```
+
+Repair a task with smart repair:
+
+```json
+// POST /api/tasks/task123/repair-state
+{
+  "action": "smart",
+  "smartRepairHints": "The issue is likely with the database connection string"
 }
 ```
 
@@ -458,8 +672,11 @@ Create a best-of-n task:
 - If the source mixes research, implementation, and validation, split those into separate tasks when they can be reviewed independently.
 - If one step exists only to unblock another, make it a dependency.
 - If a step is optional, risky, or calls for human approval, consider `planmode = true`.
+- If you want fast iteration without approval delays, use `autoApprovePlan = true` with `planmode = true`.
 - If the user wants reusable scaffolding for future work, create `template` tasks instead of backlog tasks.
 - Keep prompts explicit about files, subsystems, constraints, and verification expectations when those are available in the source.
+- Use `maxReviewRunsOverride` when a task is expected to need more review cycles than the default.
+- Set `skipPermissionAsking = false` only when the user wants to manually approve file edits.
 
 ## Validation Checklist
 
@@ -471,9 +688,11 @@ Before finishing, verify:
 - no obvious circular dependency exists
 - statuses are appropriate for the user's intent
 - plan-mode tasks are only used where an approval pause is actually useful
+- `autoApprovePlan` is only used when the user trusts automatic plan approval
 - `best_of_n` is only used where candidate fan-out/convergence is useful
 - `bestOfNConfig` is valid (workers present, counts > 0, final applier model present, min successful workers <= total workers)
 - ordering in `idx` matches the intended flow
+- tasks won't conflict with active workflow runs (check `/api/runs`)
 
 ## What to Tell the User
 
@@ -482,5 +701,7 @@ After setup, report:
 - how many tasks you created or updated
 - any templates versus backlog tasks
 - any important dependencies you added
+- any plan-mode tasks with or without auto-approval
+- any best-of-n tasks with their worker/reviewer configuration
 - any assumptions you made while translating the source material
 - any ambiguities that still need user input
