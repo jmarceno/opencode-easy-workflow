@@ -221,6 +221,10 @@ export type WSMessageType =
   | "task_candidate_created"
   | "task_candidate_updated"
   | "plan_revision_requested"
+  | "session_started"
+  | "session_message_created"
+  | "session_status_changed"
+  | "session_completed"
 
 export interface WSMessage {
   type: WSMessageType

@@ -974,7 +974,7 @@ sl-tooltip {
       <div class="form-group">
         <div class="label-row">
           <label>Session Cleanup (global)</label>
-          <sl-icon-button class="help-btn" type="button" title="Automatically delete OpenCode sessions after task/review runs finish. Enable only if you do not need session history for debugging." aria-label="Session cleanup help" name="question-circle"></sl-icon-button>
+          <sl-icon-button class="help-btn" type="button" title="Automatically delete Pi workflow sessions after task/review runs finish. Enable only if you do not need session history for debugging." aria-label="Session cleanup help" name="question-circle"></sl-icon-button>
         </div>
         <div class="checkbox-group">
           <sl-checkbox id="optAutoDeleteNormalSessions" title="Delete normal execution sessions for tasks, worker runs, and final applier runs after they finish.">Auto-delete normal sessions</sl-checkbox>
@@ -1469,7 +1469,7 @@ async function loadModels() {
       window.dispatchEvent(new Event('easyworkflow:model-catalog-updated'))
       return
     }
-    // Handle warning (e.g., OpenCode server still initializing)
+    // Handle warning (e.g., Pi model catalog still initializing)
     if (data.warning) {
       console.warn('[Kanban] Model catalog warning:', data.warning)
       modelCatalog = { providers: data.providers || [], defaults: data.defaults || {} }
@@ -2212,7 +2212,7 @@ function renderCard(task, colStatus) {
   if (isOrphanExecutingTask(task)) {
     const note = document.createElement('div')
     note.className = 'card-note'
-    note.textContent = 'OpenCode session may have dropped. Click on card title to verify, no action is needed if the session is still active, otherwise use Send to Exec, Repair Done, Smart Repair, or Reset.'
+    note.textContent = 'Session may have dropped. Click on card title to verify. If the session is no longer active, use Send to Exec, Repair Done, Smart Repair, or Reset.'
     card.appendChild(note)
   }
 

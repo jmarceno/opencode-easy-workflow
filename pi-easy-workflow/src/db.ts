@@ -10,8 +10,11 @@ import {
   type Options,
   type SessionMessage,
   type Task,
+  type TaskCandidate,
+  type TaskRun,
   type TaskStatus,
   type ThinkingLevel,
+  type TimelineEntry,
   type WorkflowRun,
   type WorkflowRunKind,
   type WorkflowRunStatus,
@@ -394,6 +397,17 @@ function asExecutionStrategy(value: unknown): ExecutionStrategy {
   return value === "best_of_n" || value === "standard" ? value : "standard"
 }
 
+function asBestOfNSubstage(value: unknown): Task["bestOfNSubstage"] {
+  return value === "workers_running"
+    || value === "reviewers_running"
+    || value === "final_apply_running"
+    || value === "blocked_for_manual_review"
+    || value === "completed"
+    || value === "idle"
+    ? value
+    : "idle"
+}
+
 function asWorkflowRunKind(value: unknown): WorkflowRunKind {
   return value === "all_tasks" || value === "single_task" || value === "workflow_review"
     ? value
@@ -466,7 +480,7 @@ function rowToTask(row: Record<string, unknown>): Task {
     planRevisionCount: Number(row.plan_revision_count ?? 0),
     executionStrategy: asExecutionStrategy(row.execution_strategy),
     bestOfNConfig: parseJSON<Record<string, unknown> | null>(row.best_of_n_config, null) as Task["bestOfNConfig"],
-    bestOfNSubstage: String(row.best_of_n_substage ?? "idle") as Task["bestOfNSubstage"],
+    bestOfNSubstage: asBestOfNSubstage(row.best_of_n_substage),
     skipPermissionAsking: Number(row.skip_permission_asking ?? 1) === 1,
     maxReviewRunsOverride: row.max_review_runs_override === null || row.max_review_runs_override === undefined
       ? null
@@ -475,6 +489,50 @@ function rowToTask(row: Record<string, unknown>): Task {
     reviewActivity: row.review_activity === "running" ? "running" : "idle",
     isArchived: Number(row.is_archived ?? 0) === 1,
     archivedAt: row.archived_at === null || row.archived_at === undefined ? null : Number(row.archived_at),
+  }
+}
+
+function rowToTaskRun(row: Record<string, unknown>): TaskRun {
+  const validPhase: TaskRun["phase"][] = ["worker", "reviewer", "final_applier"]
+  const validStatus: TaskRun["status"][] = ["pending", "running", "done", "failed", "skipped"]
+
+  return {
+    id: String(row.id),
+    taskId: String(row.task_id),
+    phase: validPhase.includes(row.phase as TaskRun["phase"]) ? (row.phase as TaskRun["phase"]) : "worker",
+    slotIndex: Number(row.slot_index ?? 0),
+    attemptIndex: Number(row.attempt_index ?? 0),
+    model: String(row.model ?? "default"),
+    taskSuffix: row.task_suffix ? String(row.task_suffix) : null,
+    status: validStatus.includes(row.status as TaskRun["status"]) ? (row.status as TaskRun["status"]) : "pending",
+    sessionId: row.session_id ? String(row.session_id) : null,
+    sessionUrl: row.session_url ? String(row.session_url) : null,
+    worktreeDir: row.worktree_dir ? String(row.worktree_dir) : null,
+    summary: row.summary ? String(row.summary) : null,
+    errorMessage: row.error_message ? String(row.error_message) : null,
+    candidateId: row.candidate_id ? String(row.candidate_id) : null,
+    metadataJson: parseJSON<Record<string, any>>(row.metadata_json, {}),
+    createdAt: Number(row.created_at ?? 0),
+    updatedAt: Number(row.updated_at ?? 0),
+    completedAt: row.completed_at === null || row.completed_at === undefined ? null : Number(row.completed_at),
+  }
+}
+
+function rowToTaskCandidate(row: Record<string, unknown>): TaskCandidate {
+  const validStatus: TaskCandidate["status"][] = ["available", "selected", "rejected"]
+
+  return {
+    id: String(row.id),
+    taskId: String(row.task_id),
+    workerRunId: String(row.worker_run_id),
+    status: validStatus.includes(row.status as TaskCandidate["status"]) ? (row.status as TaskCandidate["status"]) : "available",
+    changedFilesJson: parseJSON<string[]>(row.changed_files_json, []),
+    diffStatsJson: parseJSON<Record<string, number>>(row.diff_stats_json, {}),
+    verificationJson: parseJSON<Record<string, any>>(row.verification_json, {}),
+    summary: row.summary ? String(row.summary) : null,
+    errorMessage: row.error_message ? String(row.error_message) : null,
+    createdAt: Number(row.created_at ?? 0),
+    updatedAt: Number(row.updated_at ?? 0),
   }
 }
 
@@ -776,6 +834,57 @@ const MIGRATIONS: Migration[] = [
       `CREATE INDEX IF NOT EXISTS idx_prompt_template_versions_template_id ON prompt_template_versions(prompt_template_id);`,
     ],
   },
+  {
+    version: 2,
+    description: "Add task_runs and task_candidates for best-of-n APIs",
+    statements: [
+      `
+      CREATE TABLE IF NOT EXISTS task_runs (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        phase TEXT NOT NULL,
+        slot_index INTEGER NOT NULL DEFAULT 0,
+        attempt_index INTEGER NOT NULL DEFAULT 0,
+        model TEXT NOT NULL,
+        task_suffix TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        session_id TEXT,
+        session_url TEXT,
+        worktree_dir TEXT,
+        summary TEXT,
+        error_message TEXT,
+        candidate_id TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        completed_at INTEGER,
+        FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+      );
+      `,
+      `CREATE INDEX IF NOT EXISTS idx_task_runs_task_id ON task_runs(task_id);`,
+      `CREATE INDEX IF NOT EXISTS idx_task_runs_phase ON task_runs(phase);`,
+      `CREATE INDEX IF NOT EXISTS idx_task_runs_status ON task_runs(status);`,
+      `
+      CREATE TABLE IF NOT EXISTS task_candidates (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        worker_run_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'available',
+        changed_files_json TEXT NOT NULL DEFAULT '[]',
+        diff_stats_json TEXT NOT NULL DEFAULT '{}',
+        verification_json TEXT NOT NULL DEFAULT '{}',
+        summary TEXT,
+        error_message TEXT,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+        FOREIGN KEY(worker_run_id) REFERENCES task_runs(id) ON DELETE CASCADE
+      );
+      `,
+      `CREATE INDEX IF NOT EXISTS idx_task_candidates_task_id ON task_candidates(task_id);`,
+      `CREATE INDEX IF NOT EXISTS idx_task_candidates_worker_run_id ON task_candidates(worker_run_id);`,
+    ],
+  },
 ]
 
 export class PiKanbanDB {
@@ -820,8 +929,10 @@ export class PiKanbanDB {
           id, name, idx, prompt, branch, plan_model, execution_model, planmode,
           auto_approve_plan, review, auto_commit, delete_worktree, status,
           requirements, agent_output, review_count, created_at, updated_at,
-          thinking_level
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 0, ?, ?, ?)
+          thinking_level, execution_phase, awaiting_plan_approval, plan_revision_count,
+          execution_strategy, best_of_n_config, best_of_n_substage, skip_permission_asking,
+          max_review_runs_override, smart_repair_hints, review_activity, is_archived, archived_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
       `)
       .run(
         input.id,
@@ -841,6 +952,16 @@ export class PiKanbanDB {
         now,
         now,
         input.thinkingLevel ?? "default",
+        input.executionPhase ?? "not_started",
+        input.awaitingPlanApproval ? 1 : 0,
+        input.planRevisionCount ?? 0,
+        input.executionStrategy ?? "standard",
+        input.bestOfNConfig ? JSON.stringify(input.bestOfNConfig) : null,
+        input.bestOfNSubstage ?? "idle",
+        input.skipPermissionAsking !== false ? 1 : 0,
+        input.maxReviewRunsOverride ?? null,
+        input.smartRepairHints ?? null,
+        input.reviewActivity ?? "idle",
       )
 
     return this.getTask(input.id) as Task
@@ -934,6 +1055,54 @@ export class PiKanbanDB {
       sets.push("thinking_level = ?")
       values.push(input.thinkingLevel)
     }
+    if (input.executionPhase !== undefined) {
+      sets.push("execution_phase = ?")
+      values.push(input.executionPhase)
+    }
+    if (input.awaitingPlanApproval !== undefined) {
+      sets.push("awaiting_plan_approval = ?")
+      values.push(input.awaitingPlanApproval ? 1 : 0)
+    }
+    if (input.planRevisionCount !== undefined) {
+      sets.push("plan_revision_count = ?")
+      values.push(input.planRevisionCount)
+    }
+    if (input.executionStrategy !== undefined) {
+      sets.push("execution_strategy = ?")
+      values.push(input.executionStrategy)
+    }
+    if (input.bestOfNConfig !== undefined) {
+      sets.push("best_of_n_config = ?")
+      values.push(input.bestOfNConfig ? JSON.stringify(input.bestOfNConfig) : null)
+    }
+    if (input.bestOfNSubstage !== undefined) {
+      sets.push("best_of_n_substage = ?")
+      values.push(input.bestOfNSubstage)
+    }
+    if (input.skipPermissionAsking !== undefined) {
+      sets.push("skip_permission_asking = ?")
+      values.push(input.skipPermissionAsking ? 1 : 0)
+    }
+    if (input.maxReviewRunsOverride !== undefined) {
+      sets.push("max_review_runs_override = ?")
+      values.push(input.maxReviewRunsOverride)
+    }
+    if (input.smartRepairHints !== undefined) {
+      sets.push("smart_repair_hints = ?")
+      values.push(input.smartRepairHints)
+    }
+    if (input.reviewActivity !== undefined) {
+      sets.push("review_activity = ?")
+      values.push(input.reviewActivity)
+    }
+    if (input.isArchived !== undefined) {
+      sets.push("is_archived = ?")
+      values.push(input.isArchived ? 1 : 0)
+    }
+    if (input.archivedAt !== undefined) {
+      sets.push("archived_at = ?")
+      values.push(input.archivedAt)
+    }
 
     if (sets.length === 0) return this.getTask(id)
 
@@ -947,6 +1116,150 @@ export class PiKanbanDB {
   deleteTask(id: string): boolean {
     const result = this.db.prepare("DELETE FROM tasks WHERE id = ?").run(id)
     return result.changes > 0
+  }
+
+  getTasksByStatus(status: TaskStatus): Task[] {
+    const rows = this.db.prepare("SELECT * FROM tasks WHERE status = ? AND is_archived = 0 ORDER BY idx ASC").all(status) as Record<string, unknown>[]
+    return rows.map(rowToTask)
+  }
+
+  reorderTask(id: string, newIdx: number): Task | null {
+    const task = this.getTask(id)
+    if (!task) return null
+
+    if (newIdx < task.idx) {
+      this.db
+        .prepare("UPDATE tasks SET idx = idx + 1, updated_at = unixepoch() WHERE idx >= ? AND idx < ? AND id != ?")
+        .run(newIdx, task.idx, id)
+    } else if (newIdx > task.idx) {
+      this.db
+        .prepare("UPDATE tasks SET idx = idx - 1, updated_at = unixepoch() WHERE idx > ? AND idx <= ? AND id != ?")
+        .run(task.idx, newIdx, id)
+    }
+
+    this.db.prepare("UPDATE tasks SET idx = ?, updated_at = unixepoch() WHERE id = ?").run(newIdx, id)
+    return this.getTask(id)
+  }
+
+  hasTaskExecutionHistory(taskId: string): boolean {
+    const task = this.db.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId) as Record<string, unknown> | null
+    if (!task) return false
+
+    if (task.session_id || task.session_url) return true
+    if (typeof task.agent_output === "string" && task.agent_output.trim().length > 0) return true
+
+    const runsCount = this.db.prepare("SELECT COUNT(*) AS cnt FROM task_runs WHERE task_id = ?").get(taskId) as { cnt: number }
+    if ((runsCount?.cnt ?? 0) > 0) return true
+
+    const sessionsCount = this.db.prepare("SELECT COUNT(*) AS cnt FROM workflow_sessions WHERE task_id = ?").get(taskId) as { cnt: number }
+    if ((sessionsCount?.cnt ?? 0) > 0) return true
+
+    const messagesCount = this.db.prepare("SELECT COUNT(*) AS cnt FROM session_messages WHERE task_id = ?").get(taskId) as { cnt: number }
+    if ((messagesCount?.cnt ?? 0) > 0) return true
+
+    return false
+  }
+
+  archiveTask(id: string): Task | null {
+    const task = this.getTask(id)
+    if (!task) return null
+
+    const now = nowUnix()
+    this.db.prepare("UPDATE tasks SET is_archived = 1, archived_at = ?, updated_at = unixepoch() WHERE id = ?").run(now, id)
+
+    const allTasks = this.getTasks()
+    for (const t of allTasks) {
+      if (t.requirements.includes(id)) {
+        this.db
+          .prepare("UPDATE tasks SET requirements = ?, updated_at = unixepoch() WHERE id = ?")
+          .run(JSON.stringify(t.requirements.filter((r) => r !== id)), t.id)
+      }
+    }
+
+    return { ...task, isArchived: true, archivedAt: now }
+  }
+
+  hardDeleteTask(id: string): boolean {
+    if (this.hasTaskExecutionHistory(id)) return false
+
+    const allTasks = this.getTasks()
+    for (const t of allTasks) {
+      if (t.requirements.includes(id)) {
+        this.db
+          .prepare("UPDATE tasks SET requirements = ?, updated_at = unixepoch() WHERE id = ?")
+          .run(JSON.stringify(t.requirements.filter((r) => r !== id)), t.id)
+      }
+    }
+
+    const result = this.db.prepare("DELETE FROM tasks WHERE id = ?").run(id)
+    return result.changes > 0
+  }
+
+  getActiveWorkflowRunForTask(taskId: string): WorkflowRun | null {
+    const row = this.db
+      .prepare("SELECT * FROM workflow_runs WHERE current_task_id = ? AND status IN ('running', 'stopping') ORDER BY started_at ASC LIMIT 1")
+      .get(taskId) as Record<string, unknown> | null
+    return row ? rowToWorkflowRun(row) : null
+  }
+
+  // ---- task runs / candidates ----
+
+  getTaskRuns(taskId: string): TaskRun[] {
+    const rows = this.db.prepare("SELECT * FROM task_runs WHERE task_id = ? ORDER BY created_at ASC").all(taskId) as Record<string, unknown>[]
+    return rows.map(rowToTaskRun)
+  }
+
+  getTaskCandidates(taskId: string): TaskCandidate[] {
+    const rows = this.db.prepare("SELECT * FROM task_candidates WHERE task_id = ? ORDER BY created_at ASC").all(taskId) as Record<string, unknown>[]
+    return rows.map(rowToTaskCandidate)
+  }
+
+  getBestOfNSummary(taskId: string): {
+    taskId: string
+    workersTotal: number
+    workersDone: number
+    workersFailed: number
+    reviewersTotal: number
+    reviewersDone: number
+    reviewersFailed: number
+    finalApplierStatus: TaskRun["status"] | "not_started"
+    availableCandidates: number
+    selectedCandidates: number
+  } {
+    const task = this.getTask(taskId)
+    if (!task) throw new Error("Task not found")
+
+    const workersTotal = this.db.prepare("SELECT COUNT(*) AS cnt FROM task_runs WHERE task_id = ? AND phase = 'worker'").get(taskId) as { cnt: number }
+    const workersDone = this.db.prepare("SELECT COUNT(*) AS cnt FROM task_runs WHERE task_id = ? AND phase = 'worker' AND status = 'done'").get(taskId) as { cnt: number }
+    const workersFailed = this.db.prepare("SELECT COUNT(*) AS cnt FROM task_runs WHERE task_id = ? AND phase = 'worker' AND status = 'failed'").get(taskId) as { cnt: number }
+
+    const reviewersTotal = this.db.prepare("SELECT COUNT(*) AS cnt FROM task_runs WHERE task_id = ? AND phase = 'reviewer'").get(taskId) as { cnt: number }
+    const reviewersDone = this.db.prepare("SELECT COUNT(*) AS cnt FROM task_runs WHERE task_id = ? AND phase = 'reviewer' AND status = 'done'").get(taskId) as { cnt: number }
+    const reviewersFailed = this.db.prepare("SELECT COUNT(*) AS cnt FROM task_runs WHERE task_id = ? AND phase = 'reviewer' AND status = 'failed'").get(taskId) as { cnt: number }
+
+    const finalRun = this.db
+      .prepare("SELECT status FROM task_runs WHERE task_id = ? AND phase = 'final_applier' ORDER BY created_at DESC LIMIT 1")
+      .get(taskId) as { status?: TaskRun["status"] } | null
+
+    const availableCandidates = this.db
+      .prepare("SELECT COUNT(*) AS cnt FROM task_candidates WHERE task_id = ? AND status = 'available'")
+      .get(taskId) as { cnt: number }
+    const selectedCandidates = this.db
+      .prepare("SELECT COUNT(*) AS cnt FROM task_candidates WHERE task_id = ? AND status = 'selected'")
+      .get(taskId) as { cnt: number }
+
+    return {
+      taskId,
+      workersTotal: workersTotal.cnt ?? 0,
+      workersDone: workersDone.cnt ?? 0,
+      workersFailed: workersFailed.cnt ?? 0,
+      reviewersTotal: reviewersTotal.cnt ?? 0,
+      reviewersDone: reviewersDone.cnt ?? 0,
+      reviewersFailed: reviewersFailed.cnt ?? 0,
+      finalApplierStatus: finalRun?.status ?? "not_started",
+      availableCandidates: availableCandidates.cnt ?? 0,
+      selectedCandidates: selectedCandidates.cnt ?? 0,
+    }
   }
 
   // ---- workflow runs ----
@@ -1339,6 +1652,33 @@ export class PiKanbanDB {
     return this.getSessionMessages(sessionId)
   }
 
+  getSessionTimelineEntries(sessionId: string): TimelineEntry[] {
+    const messages = this.getSessionMessages(sessionId)
+    if (messages.length === 0) return []
+
+    const base = messages[0]?.timestamp ?? 0
+    return messages.map((message) => {
+      const textContent = typeof message.contentJson?.text === "string"
+        ? message.contentJson.text
+        : JSON.stringify(message.contentJson)
+      const summarySource = textContent.length > 180 ? `${textContent.slice(0, 177)}...` : textContent
+
+      return {
+        id: message.id,
+        timestamp: message.timestamp,
+        relativeTime: Math.max(0, message.timestamp - base),
+        role: message.role,
+        messageType: message.messageType,
+        summary: summarySource || message.messageType,
+        hasToolCalls: message.messageType === "tool_call" || message.messageType === "tool_result" || Boolean(message.toolName),
+        hasEdits: Boolean(message.editDiff || message.editFilePath),
+        modelProvider: message.modelProvider,
+        modelId: message.modelId,
+        agentName: message.agentName,
+      }
+    })
+  }
+
   getSessionMessagesByType(sessionId: string, messageType: MessageType): SessionMessage[] {
     return this.getSessionMessages(sessionId, { messageType })
   }
@@ -1445,6 +1785,32 @@ export class PiKanbanDB {
     this.db.prepare(`UPDATE session_messages SET ${sets.join(", ")} WHERE id = ?`).run(...values)
     const row = this.db.prepare("SELECT * FROM session_messages WHERE id = ?").get(id) as Record<string, unknown> | null
     return row ? rowToSessionMessage(row) : null
+  }
+
+  getSessionMessageViewsByTask(taskId: string): SessionMessage[] {
+    const rows = this.db
+      .prepare(
+        `
+        SELECT * FROM session_messages
+        WHERE task_id = ?
+        ORDER BY timestamp ASC, id ASC
+        `,
+      )
+      .all(taskId) as Record<string, unknown>[]
+    return rows.map(rowToSessionMessage)
+  }
+
+  getSessionMessageViewsByTaskRun(taskRunId: string): SessionMessage[] {
+    const rows = this.db
+      .prepare(
+        `
+        SELECT * FROM session_messages
+        WHERE task_run_id = ?
+        ORDER BY timestamp ASC, id ASC
+        `,
+      )
+      .all(taskRunId) as Record<string, unknown>[]
+    return rows.map(rowToSessionMessage)
   }
 
   // ---- options ----

@@ -1,9 +1,15 @@
 import type {
+  BestOfNConfig,
+  BestOfNSubstage,
   CreateSessionMessageInput,
+  ExecutionPhase,
+  ExecutionStrategy,
   MessageType,
   Options,
   SessionMessage,
   Task,
+  TaskCandidate,
+  TaskRun,
   TaskStatus,
   ThinkingLevel,
   WorkflowRun,
@@ -11,7 +17,24 @@ import type {
   WorkflowRunStatus,
 } from "../types.ts"
 
-export type { CreateSessionMessageInput, MessageType, Options, SessionMessage, Task, TaskStatus, ThinkingLevel, WorkflowRun, WorkflowRunKind, WorkflowRunStatus }
+export type {
+  BestOfNConfig,
+  BestOfNSubstage,
+  CreateSessionMessageInput,
+  ExecutionPhase,
+  ExecutionStrategy,
+  MessageType,
+  Options,
+  SessionMessage,
+  Task,
+  TaskCandidate,
+  TaskRun,
+  TaskStatus,
+  ThinkingLevel,
+  WorkflowRun,
+  WorkflowRunKind,
+  WorkflowRunStatus,
+}
 
 export type PiSessionKind =
   | "task"
@@ -212,6 +235,16 @@ export interface CreateTaskInput {
   deleteWorktree?: boolean
   requirements?: string[]
   thinkingLevel?: ThinkingLevel
+  executionPhase?: ExecutionPhase
+  awaitingPlanApproval?: boolean
+  planRevisionCount?: number
+  executionStrategy?: ExecutionStrategy
+  bestOfNConfig?: BestOfNConfig | null
+  bestOfNSubstage?: BestOfNSubstage
+  skipPermissionAsking?: boolean
+  maxReviewRunsOverride?: number | null
+  smartRepairHints?: string | null
+  reviewActivity?: "idle" | "running"
 }
 
 export interface UpdateTaskInput {
@@ -236,6 +269,18 @@ export interface UpdateTaskInput {
   reviewCount?: number
   completedAt?: number | null
   thinkingLevel?: ThinkingLevel
+  executionPhase?: ExecutionPhase
+  awaitingPlanApproval?: boolean
+  planRevisionCount?: number
+  executionStrategy?: ExecutionStrategy
+  bestOfNConfig?: BestOfNConfig | null
+  bestOfNSubstage?: BestOfNSubstage
+  skipPermissionAsking?: boolean
+  maxReviewRunsOverride?: number | null
+  smartRepairHints?: string | null
+  reviewActivity?: "idle" | "running"
+  isArchived?: boolean
+  archivedAt?: number | null
 }
 
 export interface PromptRenderResult {
