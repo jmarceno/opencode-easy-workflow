@@ -171,7 +171,7 @@ describe("GAP 2: WebSocket Session Message Broadcasting", () => {
       // Verify that onSessionMessage was called
       expect(receivedMessages.length).toBeGreaterThan(0)
       expect(receivedMessages[0].sessionId).toBe("test-session")
-      expect(receivedMessages[0].role).toBe("assistant")
+      expect(receivedMessages.some((message) => message.role === "assistant")).toBe(true)
 
       db.close()
     })

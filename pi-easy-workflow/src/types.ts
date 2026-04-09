@@ -261,12 +261,14 @@ export type MessageType =
 
 export interface SessionMessage {
   id: number
+  seq: number
   messageId: string | null
   sessionId: string
   taskId: string | null
   taskRunId: string | null
   timestamp: number
   role: MessageRole
+  eventName: string | null
   messageType: MessageType
   contentJson: Record<string, any>
   modelProvider: string | null
@@ -274,7 +276,12 @@ export interface SessionMessage {
   agentName: string | null
   promptTokens: number | null
   completionTokens: number | null
+  cacheReadTokens: number | null
+  cacheWriteTokens: number | null
   totalTokens: number | null
+  costJson: Record<string, any> | null
+  costTotal: number | null
+  toolCallId: string | null
   toolName: string | null
   toolArgsJson: Record<string, any> | null
   toolResultJson: Record<string, any> | null
@@ -287,12 +294,14 @@ export interface SessionMessage {
 }
 
 export interface CreateSessionMessageInput {
+  seq?: number
   messageId?: string | null
   sessionId: string
   taskId?: string | null
   taskRunId?: string | null
   timestamp?: number
   role: MessageRole
+  eventName?: string | null
   messageType: MessageType
   contentJson: Record<string, any>
   modelProvider?: string | null
@@ -300,7 +309,12 @@ export interface CreateSessionMessageInput {
   agentName?: string | null
   promptTokens?: number | null
   completionTokens?: number | null
+  cacheReadTokens?: number | null
+  cacheWriteTokens?: number | null
   totalTokens?: number | null
+  costJson?: Record<string, any> | null
+  costTotal?: number | null
+  toolCallId?: string | null
   toolName?: string | null
   toolArgsJson?: Record<string, any> | null
   toolResultJson?: Record<string, any> | null
@@ -324,4 +338,19 @@ export interface TimelineEntry {
   modelProvider: string | null
   modelId: string | null
   agentName: string | null
+}
+
+export interface SessionUsageRollup {
+  sessionId: string
+  messageCount: number
+  tokenizedMessageCount: number
+  costedMessageCount: number
+  firstTimestamp: number | null
+  lastTimestamp: number | null
+  promptTokens: number
+  completionTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  totalTokens: number
+  totalCost: number
 }

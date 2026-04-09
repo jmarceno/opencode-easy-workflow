@@ -18,6 +18,7 @@ export type {
   SessionIORecord,
   SessionIORecordType,
   SessionIOStream,
+  SessionUsageRollup,
   SessionMessageQueryOptions,
   UpdateTaskCandidateInput,
   UpdateTaskRunInput,

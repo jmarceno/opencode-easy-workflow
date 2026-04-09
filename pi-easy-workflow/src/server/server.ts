@@ -790,6 +790,12 @@ export class PiKanbanServer {
       return json(this.db.getSessionTimelineEntries(params.id))
     })
 
+    this.router.get("/api/sessions/:id/usage", ({ params, json }) => {
+      const session = this.db.getWorkflowSession(params.id)
+      if (!session) return json({ error: "Session not found" }, 404)
+      return json(this.db.getSessionUsageRollup(params.id))
+    })
+
     this.router.get("/api/sessions/:id/io", ({ params, url, json }) => {
       const session = this.db.getWorkflowSession(params.id)
       if (!session) return json({ error: "Session not found" }, 404)
@@ -839,6 +845,7 @@ export class PiKanbanServer {
           taskId: session.taskId,
           taskRunId: session.taskRunId,
           role: body?.role ?? "assistant",
+          eventName: body?.eventName ?? body?.type ?? null,
           messageType: body?.messageType ?? "text",
           contentJson: body?.contentJson ?? { text: String(body?.text ?? "") },
           modelProvider: body?.modelProvider ?? null,

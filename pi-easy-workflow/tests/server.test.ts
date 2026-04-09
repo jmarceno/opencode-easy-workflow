@@ -205,6 +205,12 @@ describe("PiKanbanServer API", () => {
         role: "assistant",
         messageType: "assistant_response",
         contentJson: { text: "hello from session" },
+        promptTokens: 120,
+        completionTokens: 30,
+        cacheReadTokens: 10,
+        cacheWriteTokens: 5,
+        totalTokens: 165,
+        costTotal: 0.125,
       })
 
       db.getRawHandle().prepare(
@@ -226,6 +232,18 @@ describe("PiKanbanServer API", () => {
       expect(sessionMessagesRes.response.status).toBe(200)
       expect(Array.isArray(sessionMessagesRes.data)).toBe(true)
       expect(sessionMessagesRes.data.length).toBe(1)
+
+      const sessionUsageRes = await api(`/api/sessions/${session.id}/usage`)
+      expect(sessionUsageRes.response.status).toBe(200)
+      expect(sessionUsageRes.data.sessionId).toBe(session.id)
+      expect(sessionUsageRes.data.messageCount).toBe(1)
+      expect(sessionUsageRes.data.tokenizedMessageCount).toBe(1)
+      expect(sessionUsageRes.data.promptTokens).toBe(120)
+      expect(sessionUsageRes.data.completionTokens).toBe(30)
+      expect(sessionUsageRes.data.cacheReadTokens).toBe(10)
+      expect(sessionUsageRes.data.cacheWriteTokens).toBe(5)
+      expect(sessionUsageRes.data.totalTokens).toBe(165)
+      expect(sessionUsageRes.data.totalCost).toBe(0.125)
 
       const taskRunsRes = await api(`/api/tasks/${taskId}/runs`)
       expect(taskRunsRes.response.status).toBe(200)

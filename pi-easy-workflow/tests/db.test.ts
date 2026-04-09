@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite"
 import { afterEach, describe, expect, it } from "bun:test"
 import { mkdtempSync, rmSync } from "fs"
 import { join } from "path"
@@ -143,6 +144,7 @@ describe("PiKanbanDB", () => {
     })
 
     expect(created.id).toBeGreaterThan(0)
+    expect(created.seq).toBe(1)
     expect(created.messageType).toBe("assistant_response")
 
     const updated = db.updateSessionMessage(created.id, {
@@ -160,6 +162,92 @@ describe("PiKanbanDB", () => {
     expect(filtered.length).toBe(1)
 
     db.close()
+  })
+
+  it("computes per-session token and cost rollups", () => {
+    const { db } = createTempDb()
+
+    db.createWorkflowSession({
+      id: "session-usage",
+      sessionKind: "task",
+      cwd: "/tmp/work",
+    })
+
+    db.createSessionMessage({
+      sessionId: "session-usage",
+      timestamp: 100,
+      role: "assistant",
+      eventName: "message_end",
+      messageType: "assistant_response",
+      contentJson: { text: "first" },
+      promptTokens: 100,
+      completionTokens: 20,
+      cacheReadTokens: 5,
+      cacheWriteTokens: 2,
+      totalTokens: 127,
+      costTotal: 0.12,
+    })
+
+    db.createSessionMessage({
+      sessionId: "session-usage",
+      timestamp: 120,
+      role: "assistant",
+      eventName: "message_end",
+      messageType: "assistant_response",
+      contentJson: { text: "second" },
+      promptTokens: 40,
+      completionTokens: 10,
+      cacheReadTokens: 3,
+      cacheWriteTokens: 1,
+      totalTokens: 54,
+      costTotal: 0.05,
+    })
+
+    db.createSessionMessage({
+      sessionId: "session-usage",
+      timestamp: 130,
+      role: "system",
+      eventName: "agent_end",
+      messageType: "step_finish",
+      contentJson: { text: "done" },
+    })
+
+    const rollup = db.getSessionUsageRollup("session-usage")
+    expect(rollup.sessionId).toBe("session-usage")
+    expect(rollup.messageCount).toBe(3)
+    expect(rollup.tokenizedMessageCount).toBe(2)
+    expect(rollup.costedMessageCount).toBe(2)
+    expect(rollup.firstTimestamp).toBe(100)
+    expect(rollup.lastTimestamp).toBe(130)
+    expect(rollup.promptTokens).toBe(140)
+    expect(rollup.completionTokens).toBe(30)
+    expect(rollup.cacheReadTokens).toBe(8)
+    expect(rollup.cacheWriteTokens).toBe(3)
+    expect(rollup.totalTokens).toBe(181)
+    expect(rollup.totalCost).toBeCloseTo(0.17, 10)
+
+    db.close()
+  })
+
+  it("creates a pi-native session_messages schema", () => {
+    const { db, dbPath } = createTempDb()
+    db.close()
+
+    const sqlite = new Database(dbPath, { readonly: true })
+    const columns = sqlite.prepare("PRAGMA table_info(session_messages)").all() as Array<{ name: string }>
+    const names = columns.map((column) => column.name)
+
+    expect(names.includes("seq")).toBe(true)
+    expect(names.includes("event_name")).toBe(true)
+    expect(names.includes("cache_read_tokens")).toBe(true)
+    expect(names.includes("cache_write_tokens")).toBe(true)
+    expect(names.includes("cost_json")).toBe(true)
+    expect(names.includes("cost_total")).toBe(true)
+    expect(names.includes("tool_call_id")).toBe(true)
+    expect(names.includes("task_id")).toBe(false)
+    expect(names.includes("task_run_id")).toBe(false)
+
+    sqlite.close(false)
   })
 
   it("supports best-of-n task runs and candidates mutation APIs", () => {

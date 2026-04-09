@@ -9,6 +9,7 @@ import {
   type MessageType,
   type Options,
   type SessionMessage,
+  type SessionUsageRollup,
   type Task,
   type TaskCandidate,
   type TaskRun,
@@ -49,6 +50,7 @@ import type {
   UpsertPromptTemplateInput,
 } from "./db/types.ts"
 import { renderTemplate } from "./prompts/renderer.ts"
+import { projectPiEventToSessionMessage } from "./runtime/message-projection.ts"
 
 const DEFAULT_OPTIONS: Options = {
   commitPrompt: DEFAULT_COMMIT_PROMPT,
@@ -455,6 +457,22 @@ function asMessageType(value: unknown): MessageType {
   return valid.includes(value as MessageType) ? (value as MessageType) : "text"
 }
 
+function pickString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === "string" && value.length > 0) return value
+  }
+  return null
+}
+
+const SESSION_MESSAGE_SELECT = `
+  SELECT
+    sm.*,
+    ws.task_id AS task_id,
+    ws.task_run_id AS task_run_id
+  FROM session_messages sm
+  LEFT JOIN workflow_sessions ws ON ws.id = sm.session_id
+`
+
 function rowToTask(row: Record<string, unknown>): Task {
   return {
     id: String(row.id),
@@ -602,12 +620,14 @@ function rowToSessionIORecord(row: Record<string, unknown>): SessionIORecord {
 function rowToSessionMessage(row: Record<string, unknown>): SessionMessage {
   return {
     id: Number(row.id),
+    seq: Number(row.seq ?? 0),
     messageId: row.message_id ? String(row.message_id) : null,
     sessionId: String(row.session_id),
     taskId: row.task_id ? String(row.task_id) : null,
     taskRunId: row.task_run_id ? String(row.task_run_id) : null,
     timestamp: Number(row.timestamp),
     role: String(row.role) as SessionMessage["role"],
+    eventName: row.event_name ? String(row.event_name) : null,
     messageType: asMessageType(row.message_type),
     contentJson: parseJSON<Record<string, unknown>>(row.content_json, {}),
     modelProvider: row.model_provider ? String(row.model_provider) : null,
@@ -615,7 +635,12 @@ function rowToSessionMessage(row: Record<string, unknown>): SessionMessage {
     agentName: row.agent_name ? String(row.agent_name) : null,
     promptTokens: row.prompt_tokens === null || row.prompt_tokens === undefined ? null : Number(row.prompt_tokens),
     completionTokens: row.completion_tokens === null || row.completion_tokens === undefined ? null : Number(row.completion_tokens),
+    cacheReadTokens: row.cache_read_tokens === null || row.cache_read_tokens === undefined ? null : Number(row.cache_read_tokens),
+    cacheWriteTokens: row.cache_write_tokens === null || row.cache_write_tokens === undefined ? null : Number(row.cache_write_tokens),
     totalTokens: row.total_tokens === null || row.total_tokens === undefined ? null : Number(row.total_tokens),
+    costJson: parseJSON<Record<string, unknown> | null>(row.cost_json, null),
+    costTotal: row.cost_total === null || row.cost_total === undefined ? null : Number(row.cost_total),
+    toolCallId: row.tool_call_id ? String(row.tool_call_id) : null,
     toolName: row.tool_name ? String(row.tool_name) : null,
     toolArgsJson: parseJSON<Record<string, unknown> | null>(row.tool_args_json, null),
     toolResultJson: parseJSON<Record<string, unknown> | null>(row.tool_result_json, null),
@@ -891,6 +916,119 @@ const MIGRATIONS: Migration[] = [
       `CREATE INDEX IF NOT EXISTS idx_task_candidates_worker_run_id ON task_candidates(worker_run_id);`,
     ],
   },
+  {
+    version: 3,
+    description: "Rebuild session_messages into pi-native event schema",
+    statements: [
+      `
+      CREATE TABLE session_messages_v3 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        seq INTEGER NOT NULL,
+        message_id TEXT,
+        session_id TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        role TEXT NOT NULL,
+        event_name TEXT,
+        message_type TEXT NOT NULL,
+        content_json TEXT NOT NULL,
+        model_provider TEXT,
+        model_id TEXT,
+        agent_name TEXT,
+        prompt_tokens INTEGER,
+        completion_tokens INTEGER,
+        cache_read_tokens INTEGER,
+        cache_write_tokens INTEGER,
+        total_tokens INTEGER,
+        cost_json TEXT,
+        cost_total REAL,
+        tool_call_id TEXT,
+        tool_name TEXT,
+        tool_args_json TEXT,
+        tool_result_json TEXT,
+        tool_status TEXT,
+        edit_diff TEXT,
+        edit_file_path TEXT,
+        session_status TEXT,
+        workflow_phase TEXT,
+        raw_event_json TEXT,
+        FOREIGN KEY(session_id) REFERENCES workflow_sessions(id) ON DELETE CASCADE,
+        UNIQUE(session_id, seq)
+      );
+      `,
+      `
+      INSERT INTO session_messages_v3 (
+        id,
+        seq,
+        message_id,
+        session_id,
+        timestamp,
+        role,
+        event_name,
+        message_type,
+        content_json,
+        model_provider,
+        model_id,
+        agent_name,
+        prompt_tokens,
+        completion_tokens,
+        cache_read_tokens,
+        cache_write_tokens,
+        total_tokens,
+        cost_json,
+        cost_total,
+        tool_call_id,
+        tool_name,
+        tool_args_json,
+        tool_result_json,
+        tool_status,
+        edit_diff,
+        edit_file_path,
+        session_status,
+        workflow_phase,
+        raw_event_json
+      )
+      SELECT
+        id,
+        ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY timestamp ASC, id ASC),
+        message_id,
+        session_id,
+        timestamp,
+        role,
+        NULL,
+        message_type,
+        content_json,
+        model_provider,
+        model_id,
+        agent_name,
+        prompt_tokens,
+        completion_tokens,
+        NULL,
+        NULL,
+        total_tokens,
+        NULL,
+        NULL,
+        NULL,
+        tool_name,
+        tool_args_json,
+        tool_result_json,
+        tool_status,
+        edit_diff,
+        edit_file_path,
+        session_status,
+        workflow_phase,
+        raw_event_json
+      FROM session_messages;
+      `,
+      `DROP TABLE session_messages;`,
+      `ALTER TABLE session_messages_v3 RENAME TO session_messages;`,
+      `CREATE INDEX idx_session_messages_session_id ON session_messages(session_id);`,
+      `CREATE INDEX idx_session_messages_timestamp ON session_messages(timestamp);`,
+      `CREATE INDEX idx_session_messages_session_timestamp ON session_messages(session_id, timestamp);`,
+      `CREATE INDEX idx_session_messages_session_seq ON session_messages(session_id, seq);`,
+      `CREATE INDEX idx_session_messages_event_name ON session_messages(event_name);`,
+      `CREATE INDEX idx_session_messages_tool_call_id ON session_messages(tool_call_id);`,
+    ],
+  },
 ]
 
 export class PiKanbanDB {
@@ -906,6 +1044,7 @@ export class PiKanbanDB {
     this.db.exec("PRAGMA foreign_keys = ON")
 
     runMigrations(this.db, MIGRATIONS)
+    this.normalizeSessionMessages()
     this.seedDefaultOptions()
     this.seedPromptTemplates()
   }
@@ -1182,7 +1321,16 @@ export class PiKanbanDB {
     const sessionsCount = this.db.prepare("SELECT COUNT(*) AS cnt FROM workflow_sessions WHERE task_id = ?").get(taskId) as { cnt: number }
     if ((sessionsCount?.cnt ?? 0) > 0) return true
 
-    const messagesCount = this.db.prepare("SELECT COUNT(*) AS cnt FROM session_messages WHERE task_id = ?").get(taskId) as { cnt: number }
+    const messagesCount = this.db
+      .prepare(
+        `
+        SELECT COUNT(*) AS cnt
+        FROM session_messages sm
+        INNER JOIN workflow_sessions ws ON ws.id = sm.session_id
+        WHERE ws.task_id = ?
+        `,
+      )
+      .get(taskId) as { cnt: number }
     if ((messagesCount?.cnt ?? 0) > 0) return true
 
     return false
@@ -1773,26 +1921,143 @@ export class PiKanbanDB {
     return row ? rowToSessionIORecord(row) : null
   }
 
+  private getNextSessionMessageSeq(sessionId: string): number {
+    const row = this.db
+      .prepare("SELECT COALESCE(MAX(seq), 0) AS max_seq FROM session_messages WHERE session_id = ?")
+      .get(sessionId) as { max_seq: number }
+    return Number(row.max_seq ?? 0) + 1
+  }
+
+  private getSessionMessageRow(id: number): Record<string, unknown> | null {
+    return this.db
+      .prepare(`${SESSION_MESSAGE_SELECT} WHERE sm.id = ?`)
+      .get(id) as Record<string, unknown> | null
+  }
+
+  private normalizeSessionMessages(): void {
+    const rows = this.db
+      .prepare(
+        `
+        SELECT * FROM session_messages
+        ORDER BY session_id ASC, seq ASC, timestamp ASC, id ASC
+        `,
+      )
+      .all() as Record<string, unknown>[]
+
+    if (rows.length === 0) return
+
+    const update = this.db.prepare(`
+      UPDATE session_messages
+      SET
+        seq = ?,
+        message_id = ?,
+        timestamp = ?,
+        role = ?,
+        event_name = ?,
+        message_type = ?,
+        content_json = ?,
+        model_provider = ?,
+        model_id = ?,
+        agent_name = ?,
+        prompt_tokens = ?,
+        completion_tokens = ?,
+        cache_read_tokens = ?,
+        cache_write_tokens = ?,
+        total_tokens = ?,
+        cost_json = ?,
+        cost_total = ?,
+        tool_call_id = ?,
+        tool_name = ?,
+        tool_args_json = ?,
+        tool_result_json = ?,
+        tool_status = ?,
+        edit_diff = ?,
+        edit_file_path = ?,
+        session_status = ?,
+        workflow_phase = ?,
+        raw_event_json = ?
+      WHERE id = ?
+    `)
+
+    const tx = this.db.transaction((records: Record<string, unknown>[]) => {
+      let currentSessionId = ""
+      let seq = 0
+
+      for (const row of records) {
+        const sessionId = String(row.session_id)
+        if (sessionId !== currentSessionId) {
+          currentSessionId = sessionId
+          seq = 0
+        }
+        seq += 1
+
+        const rawEventJson = parseJSON<Record<string, unknown> | null>(row.raw_event_json, null)
+        const legacyContent = parseJSON<Record<string, unknown>>(row.content_json, {})
+        const projected = rawEventJson
+          ? projectPiEventToSessionMessage({ event: rawEventJson, sessionId })
+          : null
+
+        const timestamp = projected?.timestamp
+          ?? (row.timestamp === null || row.timestamp === undefined ? nowUnix() : Number(row.timestamp))
+
+        update.run(
+          seq,
+          projected?.messageId ?? (row.message_id ? String(row.message_id) : null),
+          timestamp,
+          projected?.role ?? String(row.role ?? "system"),
+          projected?.eventName ?? pickString(legacyContent.eventName, legacyContent.eventType, legacyContent.method) ?? null,
+          projected?.messageType ?? asMessageType(row.message_type),
+          JSON.stringify(projected?.contentJson ?? legacyContent),
+          projected?.modelProvider ?? (row.model_provider ? String(row.model_provider) : null),
+          projected?.modelId ?? (row.model_id ? String(row.model_id) : null),
+          projected?.agentName ?? (row.agent_name ? String(row.agent_name) : null),
+          projected?.promptTokens ?? (row.prompt_tokens === null || row.prompt_tokens === undefined ? null : Number(row.prompt_tokens)),
+          projected?.completionTokens ?? (row.completion_tokens === null || row.completion_tokens === undefined ? null : Number(row.completion_tokens)),
+          projected?.cacheReadTokens ?? (row.cache_read_tokens === null || row.cache_read_tokens === undefined ? null : Number(row.cache_read_tokens)),
+          projected?.cacheWriteTokens ?? (row.cache_write_tokens === null || row.cache_write_tokens === undefined ? null : Number(row.cache_write_tokens)),
+          projected?.totalTokens ?? (row.total_tokens === null || row.total_tokens === undefined ? null : Number(row.total_tokens)),
+          projected?.costJson ? JSON.stringify(projected.costJson) : row.cost_json ?? null,
+          projected?.costTotal ?? (row.cost_total === null || row.cost_total === undefined ? null : Number(row.cost_total)),
+          projected?.toolCallId ?? (row.tool_call_id ? String(row.tool_call_id) : null),
+          projected?.toolName ?? (row.tool_name ? String(row.tool_name) : null),
+          projected?.toolArgsJson ? JSON.stringify(projected.toolArgsJson) : row.tool_args_json ?? null,
+          projected?.toolResultJson ? JSON.stringify(projected.toolResultJson) : row.tool_result_json ?? null,
+          projected?.toolStatus ?? (row.tool_status ? String(row.tool_status) : null),
+          projected?.editDiff ?? (row.edit_diff ? String(row.edit_diff) : null),
+          projected?.editFilePath ?? (row.edit_file_path ? String(row.edit_file_path) : null),
+          projected?.sessionStatus ?? (row.session_status ? String(row.session_status) : null),
+          projected?.workflowPhase ?? (row.workflow_phase ? String(row.workflow_phase) : null),
+          rawEventJson ? JSON.stringify(rawEventJson) : row.raw_event_json ?? null,
+          Number(row.id),
+        )
+      }
+    })
+
+    tx(rows)
+  }
+
   // ---- normalized session messages ----
 
   createSessionMessage(input: CreateSessionMessageInput): SessionMessage {
+    const seq = input.seq ?? this.getNextSessionMessageSeq(input.sessionId)
     const timestamp = input.timestamp ?? nowUnix()
     const result = this.db
       .prepare(`
         INSERT INTO session_messages (
-          message_id, session_id, task_id, task_run_id, timestamp, role, message_type,
+          seq, message_id, session_id, timestamp, role, event_name, message_type,
           content_json, model_provider, model_id, agent_name, prompt_tokens,
-          completion_tokens, total_tokens, tool_name, tool_args_json, tool_result_json,
+          completion_tokens, cache_read_tokens, cache_write_tokens, total_tokens,
+          cost_json, cost_total, tool_call_id, tool_name, tool_args_json, tool_result_json,
           tool_status, edit_diff, edit_file_path, session_status, workflow_phase, raw_event_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
+        seq,
         input.messageId ?? null,
         input.sessionId,
-        input.taskId ?? null,
-        input.taskRunId ?? null,
         timestamp,
         input.role,
+        input.eventName ?? null,
         input.messageType,
         JSON.stringify(input.contentJson),
         input.modelProvider ?? null,
@@ -1800,7 +2065,12 @@ export class PiKanbanDB {
         input.agentName ?? null,
         input.promptTokens ?? null,
         input.completionTokens ?? null,
+        input.cacheReadTokens ?? null,
+        input.cacheWriteTokens ?? null,
         input.totalTokens ?? null,
+        input.costJson ? JSON.stringify(input.costJson) : null,
+        input.costTotal ?? null,
+        input.toolCallId ?? null,
         input.toolName ?? null,
         input.toolArgsJson ? JSON.stringify(input.toolArgsJson) : null,
         input.toolResultJson ? JSON.stringify(input.toolResultJson) : null,
@@ -1812,7 +2082,7 @@ export class PiKanbanDB {
         input.rawEventJson ? JSON.stringify(input.rawEventJson) : null,
       )
 
-    const row = this.db.prepare("SELECT * FROM session_messages WHERE id = ?").get(result.lastInsertRowid) as Record<string, unknown>
+    const row = this.getSessionMessageRow(Number(result.lastInsertRowid)) as Record<string, unknown>
     return rowToSessionMessage(row)
   }
 
@@ -1824,22 +2094,22 @@ export class PiKanbanDB {
       const rows = this.db
         .prepare(
           `
-          SELECT * FROM session_messages
-          WHERE session_id = ? AND message_type = ?
-          ORDER BY timestamp ASC, id ASC
+          ${SESSION_MESSAGE_SELECT}
+          WHERE sm.session_id = ? AND sm.message_type = ?
+          ORDER BY sm.seq ASC, sm.id ASC
           LIMIT ? OFFSET ?
           `,
         )
-        .all(sessionId, options.messageType, limit, offset) as Record<string, unknown>[]
+      .all(sessionId, options.messageType, limit, offset) as Record<string, unknown>[]
       return rows.map(rowToSessionMessage)
     }
 
     const rows = this.db
       .prepare(
         `
-        SELECT * FROM session_messages
-        WHERE session_id = ?
-        ORDER BY timestamp ASC, id ASC
+        ${SESSION_MESSAGE_SELECT}
+        WHERE sm.session_id = ?
+        ORDER BY sm.seq ASC, sm.id ASC
         LIMIT ? OFFSET ?
         `,
       )
@@ -1882,21 +2152,55 @@ export class PiKanbanDB {
     return this.getSessionMessages(sessionId, { messageType })
   }
 
+  getSessionUsageRollup(sessionId: string): SessionUsageRollup {
+    const row = this.db
+      .prepare(
+        `
+        SELECT
+          COUNT(*) AS message_count,
+          COUNT(total_tokens) AS tokenized_message_count,
+          COUNT(cost_total) AS costed_message_count,
+          MIN(timestamp) AS first_timestamp,
+          MAX(timestamp) AS last_timestamp,
+          COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+          COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+          COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+          COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+          COALESCE(SUM(total_tokens), 0) AS total_tokens,
+          COALESCE(SUM(cost_total), 0) AS total_cost
+        FROM session_messages
+        WHERE session_id = ?
+        `,
+      )
+      .get(sessionId) as Record<string, unknown>
+
+    return {
+      sessionId,
+      messageCount: Number(row.message_count ?? 0),
+      tokenizedMessageCount: Number(row.tokenized_message_count ?? 0),
+      costedMessageCount: Number(row.costed_message_count ?? 0),
+      firstTimestamp: row.first_timestamp === null || row.first_timestamp === undefined ? null : Number(row.first_timestamp),
+      lastTimestamp: row.last_timestamp === null || row.last_timestamp === undefined ? null : Number(row.last_timestamp),
+      promptTokens: Number(row.prompt_tokens ?? 0),
+      completionTokens: Number(row.completion_tokens ?? 0),
+      cacheReadTokens: Number(row.cache_read_tokens ?? 0),
+      cacheWriteTokens: Number(row.cache_write_tokens ?? 0),
+      totalTokens: Number(row.total_tokens ?? 0),
+      totalCost: Number(row.total_cost ?? 0),
+    }
+  }
+
   updateSessionMessage(id: number, updates: Partial<CreateSessionMessageInput>): SessionMessage | null {
     const sets: string[] = []
     const values: any[] = []
 
+    if (updates.seq !== undefined) {
+      sets.push("seq = ?")
+      values.push(updates.seq)
+    }
     if (updates.messageId !== undefined) {
       sets.push("message_id = ?")
       values.push(updates.messageId)
-    }
-    if (updates.taskId !== undefined) {
-      sets.push("task_id = ?")
-      values.push(updates.taskId)
-    }
-    if (updates.taskRunId !== undefined) {
-      sets.push("task_run_id = ?")
-      values.push(updates.taskRunId)
     }
     if (updates.timestamp !== undefined) {
       sets.push("timestamp = ?")
@@ -1905,6 +2209,10 @@ export class PiKanbanDB {
     if (updates.role !== undefined) {
       sets.push("role = ?")
       values.push(updates.role)
+    }
+    if (updates.eventName !== undefined) {
+      sets.push("event_name = ?")
+      values.push(updates.eventName)
     }
     if (updates.messageType !== undefined) {
       sets.push("message_type = ?")
@@ -1934,9 +2242,29 @@ export class PiKanbanDB {
       sets.push("completion_tokens = ?")
       values.push(updates.completionTokens)
     }
+    if (updates.cacheReadTokens !== undefined) {
+      sets.push("cache_read_tokens = ?")
+      values.push(updates.cacheReadTokens)
+    }
+    if (updates.cacheWriteTokens !== undefined) {
+      sets.push("cache_write_tokens = ?")
+      values.push(updates.cacheWriteTokens)
+    }
     if (updates.totalTokens !== undefined) {
       sets.push("total_tokens = ?")
       values.push(updates.totalTokens)
+    }
+    if (updates.costJson !== undefined) {
+      sets.push("cost_json = ?")
+      values.push(updates.costJson ? JSON.stringify(updates.costJson) : null)
+    }
+    if (updates.costTotal !== undefined) {
+      sets.push("cost_total = ?")
+      values.push(updates.costTotal)
+    }
+    if (updates.toolCallId !== undefined) {
+      sets.push("tool_call_id = ?")
+      values.push(updates.toolCallId)
     }
     if (updates.toolName !== undefined) {
       sets.push("tool_name = ?")
@@ -1976,13 +2304,13 @@ export class PiKanbanDB {
     }
 
     if (sets.length === 0) {
-      const row = this.db.prepare("SELECT * FROM session_messages WHERE id = ?").get(id) as Record<string, unknown> | null
+      const row = this.getSessionMessageRow(id)
       return row ? rowToSessionMessage(row) : null
     }
 
     values.push(id)
     this.db.prepare(`UPDATE session_messages SET ${sets.join(", ")} WHERE id = ?`).run(...values)
-    const row = this.db.prepare("SELECT * FROM session_messages WHERE id = ?").get(id) as Record<string, unknown> | null
+    const row = this.getSessionMessageRow(id)
     return row ? rowToSessionMessage(row) : null
   }
 
@@ -1990,9 +2318,9 @@ export class PiKanbanDB {
     const rows = this.db
       .prepare(
         `
-        SELECT * FROM session_messages
-        WHERE task_id = ?
-        ORDER BY timestamp ASC, id ASC
+        ${SESSION_MESSAGE_SELECT}
+        WHERE ws.task_id = ?
+        ORDER BY sm.seq ASC, sm.id ASC
         `,
       )
       .all(taskId) as Record<string, unknown>[]
@@ -2003,9 +2331,9 @@ export class PiKanbanDB {
     const rows = this.db
       .prepare(
         `
-        SELECT * FROM session_messages
-        WHERE task_run_id = ?
-        ORDER BY timestamp ASC, id ASC
+        ${SESSION_MESSAGE_SELECT}
+        WHERE ws.task_run_id = ?
+        ORDER BY sm.seq ASC, sm.id ASC
         `,
       )
       .all(taskRunId) as Record<string, unknown>[]
