@@ -1,0 +1,3450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Easy Workflow Kanban</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.20.1/cdn/themes/dark.css" />
+<script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.20.1/cdn/shoelace-autoloader.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0d1117; --surface: #161b22; --surface2: #21262d; --border: #30363d;
+  --text: #e6edf3; --text-dim: #8b949e; --accent: #2f81f7; --accent-hover: #388bfd;
+  --green: #238636; --green-hover: #2ea043; --yellow: #d29922; --red: #da3633;
+  --orange: #db6d28; --radius: 8px; --shadow: 0 2px 8px rgba(0,0,0,.3); --log-panel-height: 180px;
+}
+
+/* Shoelace Theme Overrides - GitHub Dark Palette */
+sl-button, sl-icon-button, sl-input, sl-select, sl-textarea, sl-checkbox, sl-switch, sl-dialog, sl-badge, sl-tag, sl-spinner, sl-progress-bar, sl-progress-ring, sl-tab-group, sl-tab {
+  --sl-color-primary-50: #79c0ff;
+  --sl-color-primary-100: #6eb5f5;
+  --sl-color-primary-200: #5eaae9;
+  --sl-color-primary-300: #4e90db;
+  --sl-color-primary-400: #3f7ecc;
+  --sl-color-primary-500: #2f81f7;
+  --sl-color-primary-600: #1f6feb;
+  --sl-color-primary-700: #1a5fd4;
+  --sl-color-primary-800: #154fbd;
+  --sl-color-primary-900: #103fa6;
+  --sl-color-primary-font: #ffffff;
+
+  --sl-color-success-50: #7ee787;
+  --sl-color-success-100: #6fd97c;
+  --sl-color-success-200: #60cb71;
+  --sl-color-success-300: #52bd66;
+  --sl-color-success-400: #43af5b;
+  --sl-color-success-500: #238636;
+  --sl-color-success-600: #1e7730;
+  --sl-color-success-700: #19682a;
+  --sl-color-success-800: #145924;
+  --sl-color-success-900: #0f4a1e;
+  --sl-color-success-font: #ffffff;
+
+  --sl-color-warning-50: #f2cc60;
+  --sl-color-warning-100: #e6c455;
+  --sl-color-warning-200: #dabc4a;
+  --sl-color-warning-300: #ceb43f;
+  --sl-color-warning-400: #c2ac34;
+  --sl-color-warning-500: #d29922;
+  --sl-color-warning-600: #c78d1e;
+  --sl-color-warning-700: #bc811a;
+  --sl-color-warning-800: #b17516;
+  --sl-color-warning-900: #a66912;
+  --sl-color-warning-font: #000000;
+
+  --sl-color-danger-50: #ff7b72;
+  --sl-color-danger-100: #f26b62;
+  --sl-color-danger-200: #e65b52;
+  --sl-color-danger-300: #da4b42;
+  --sl-color-danger-400: #ce3b32;
+  --sl-color-danger-500: #da3633;
+  --sl-color-danger-600: #c4302d;
+  --sl-color-danger-700: #b82a27;
+  --sl-color-danger-800: #ac2421;
+  --sl-color-danger-900: #a01e1b;
+  --sl-color-danger-font: #ffffff;
+
+  --sl-color-neutral-0: #e6edf3;
+  --sl-color-neutral-50: #8b949e;
+  --sl-color-neutral-100: #7d868f;
+  --sl-color-neutral-200: #6f767f;
+  --sl-color-neutral-300: #616870;
+  --sl-color-neutral-400: #535a61;
+  --sl-color-neutral-500: #454b52;
+  --sl-color-neutral-600: #383d43;
+  --sl-color-neutral-700: #2a2f34;
+  --sl-color-neutral-800: #21262d;
+  --sl-color-neutral-900: #161b22;
+  --sl-color-neutral-950: #0d1117;
+  --sl-color-neutral-font: #e6edf3;
+
+  --sl-color-neutral-1000: #161b22;
+  --sl-color-neutral-1100: #21262d;
+  --sl-color-neutral-1200: #30363d;
+
+  --sl-color-text: #e6edf3;
+  --sl-color-text-muted: #8b949e;
+  --sl-color-bg: #0d1117;
+  --sl-color-bg-subtle: #161b22;
+  --sl-color-bg-default: #21262d;
+  --sl-color-bg-hover: #30363d;
+  --sl-color-bg-active: #454b52;
+
+  --sl-panel-background-color: #161b22;
+  --sl-panel-border-color: #30363d;
+  --sl-input-background-color: #0d1117;
+  --sl-input-border-color: #30363d;
+  --sl-input-border-radius-medium: 8px;
+  --sl-input-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --sl-input-height-medium: 38px;
+  --sl-select-background-color: #0d1117;
+  --sl-select-border-color: #30363d;
+  --sl-button-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --sl-button-border-radius-medium: 8px;
+  --sl-dialog-backdrop-background-color: rgba(0,0,0,.6);
+}
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+html { scrollbar-color: var(--border) var(--surface); }
+body, .board, .column-body, .log-body, .modal-body, .req-list, .output-content {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+body::-webkit-scrollbar,
+.board::-webkit-scrollbar,
+.column-body::-webkit-scrollbar,
+.log-body::-webkit-scrollbar,
+.modal-body::-webkit-scrollbar,
+.req-list::-webkit-scrollbar,
+.output-content::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+body::-webkit-scrollbar-track,
+.board::-webkit-scrollbar-track,
+.column-body::-webkit-scrollbar-track,
+.log-body::-webkit-scrollbar-track,
+.modal-body::-webkit-scrollbar-track,
+.req-list::-webkit-scrollbar-track,
+.output-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+body::-webkit-scrollbar-thumb,
+.board::-webkit-scrollbar-thumb,
+.column-body::-webkit-scrollbar-thumb,
+.log-body::-webkit-scrollbar-thumb,
+.modal-body::-webkit-scrollbar-thumb,
+.req-list::-webkit-scrollbar-thumb,
+.output-content::-webkit-scrollbar-thumb {
+  background: rgba(139, 148, 158, 0.35);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+body::-webkit-scrollbar-thumb:hover,
+.board::-webkit-scrollbar-thumb:hover,
+.column-body::-webkit-scrollbar-thumb:hover,
+.log-body::-webkit-scrollbar-thumb:hover,
+.modal-body::-webkit-scrollbar-thumb:hover,
+.req-list::-webkit-scrollbar-thumb:hover,
+.output-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(139, 148, 158, 0.6);
+  background-clip: content-box;
+}
+
+/* Top bar */
+.topbar { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 12px 24px; background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 100; }
+.topbar h1 { font-size: 18px; font-weight: 600; order: 2; }
+.topbar-title { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 240px; }
+.topbar-title h1 { order: 0; }
+.topbar-heading { display: inline-flex; align-items: center; gap: 8px; }
+.topbar-actions { display:flex; align-items:center; gap:12px; flex-wrap:wrap; justify-content:flex-end; }
+.shortcut-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; color: var(--text-dim); font-size: 11px; }
+.shortcut-item { display: inline-flex; align-items: center; gap: 4px; }
+.shortcut-key { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace; color: var(--text); font-weight: 700; border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; background: var(--surface2); }
+.run-panel { margin: 12px 16px 0; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); overflow: hidden; }
+.run-panel summary { list-style: none; cursor: pointer; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; font-weight: 600; color: var(--text); }
+.run-panel summary::-webkit-details-marker { display: none; }
+.run-panel-body { padding: 0 16px 16px; display: flex; flex-direction: column; gap: 10px; }
+.run-panel-empty { color: var(--text-dim); font-size: 13px; padding-top: 4px; }
+.run-panel-count { color: var(--text-dim); font-size: 12px; font-weight: 500; }
+.run-item { border: 1px solid var(--border); border-radius: 10px; background: var(--surface2); padding: 12px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.run-item-main { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.run-item-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.run-item-meta { font-size: 12px; color: var(--text-dim); display: flex; flex-wrap: wrap; gap: 8px; }
+.run-item-error { font-size: 12px; color: var(--red); white-space: pre-wrap; }
+.run-item-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.run-status { text-transform: uppercase; letter-spacing: .04em; font-size: 11px; font-weight: 700; }
+.run-status.running { color: #7ee787; }
+.run-status.stopping { color: var(--yellow); }
+.run-status.paused { color: #79c0ff; }
+.run-status.failed { color: var(--red); }
+.run-status.completed { color: var(--text-dim); }
+.btn { padding: 6px 16px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface2); color: var(--text); cursor: pointer; font-size: 13px; font-weight: 500; transition: all .15s; }
+.btn:hover { border-color: var(--text-dim); }
+.btn-primary { background: var(--green); border-color: var(--green); color: #fff; }
+.btn-primary:hover { background: var(--green-hover); }
+.btn-primary.running { background: var(--red); border-color: var(--red); }
+.btn-primary.running:hover { background: #b62324; }
+.btn-danger { background: var(--red); border-color: var(--red); color: #fff; }
+.btn-danger:hover { background: #b62324; }
+.btn-sm { padding: 3px 10px; font-size: 12px; }
+sl-button.btn { display: inline-flex; align-items: center; justify-content: center; }
+sl-button::part(base) {
+  min-height: 38px;
+  border-radius: 8px;
+  font-weight: 600;
+  padding: 0 14px;
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease, box-shadow .15s ease;
+}
+sl-button::part(label) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  text-align: center;
+}
+sl-button[size="small"]::part(base) {
+  min-height: 30px;
+  padding: 0 10px;
+}
+sl-icon-button::part(base) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Board */
+.board { display: grid; grid-template-columns: repeat(5, minmax(200px, 1fr)); grid-template-rows: minmax(0, 1fr); gap: 12px; padding: 16px; flex: 1; min-height: 0; min-width: 0; max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+.column { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.column-header { padding: 12px 16px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--text-dim); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.column-header .count { background: var(--surface2); border-radius: 12px; padding: 2px 8px; font-size: 11px; }
+.column-header-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.column[data-status="template"] .column-header { background: rgba(47,129,247,.12); color: #79c0ff; }
+.column[data-status="backlog"] .column-header { background: rgba(210,153,34,.12); color: #f2cc60; }
+.column[data-status="executing"] .column-header { background: rgba(35,134,54,.14); color: #7ee787; }
+.column[data-status="review"] .column-header { background: rgba(139,92,246,.14); color: #c4b5fd; }
+.column[data-status="done"] .column-header { background: rgba(56,189,248,.14); color: #7dd3fc; }
+.column-body { flex: 1; min-height: 0; padding: 8px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
+.column-body.drag-over { background: rgba(47,125,247,.08); }
+
+/* Cards */
+.card { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; cursor: default; transition: border-color .15s; min-width: 0; position: relative; }
+.card:hover { border-color: var(--text-dim); }
+.card.dragging { opacity: .5; }
+.card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.card-title { font-size: 14px; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); text-decoration: none; }
+.card-title.has-session { color: var(--accent); cursor: pointer; }
+.card-title.has-session:hover { text-decoration: underline; }
+.card-title[data-tooltip]:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 12px;
+  top: 100%;
+  margin-top: 4px;
+  background: var(--text);
+  color: var(--bg);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: normal;
+  z-index: 1000;
+  max-width: 280px;
+  word-wrap: break-word;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  pointer-events: none;
+}
+.card-idx { font-size: 11px; background: var(--surface); border-radius: 4px; padding: 2px 6px; color: var(--text-dim); flex-shrink: 0; }
+.card-actions { display: flex; gap: 4px; justify-content: flex-end; margin-top: 4px; }
+.card-actions button { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 16px; padding: 4px 6px; border-radius: 4px; }
+.card-actions button:hover { color: var(--text); background: var(--surface); }
+.card-actions button.action-text { font-size: 11px; border: 1px solid var(--border); background: var(--surface); padding: 2px 8px; }
+.card-actions button.action-text:hover { border-color: var(--accent); color: var(--accent); }
+.card-meta { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.card-inline-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.card-note { font-size: 12px; color: var(--red); margin-top: 8px; }
+.badge { font-size: 11px; padding: 2px 6px; border-radius: 4px; background: var(--surface); color: var(--text-dim); display: inline-flex; align-items: center; gap: 4px; }
+.badge-dep { background: rgba(47,125,247,.15); color: var(--accent); }
+.badge-review { background: rgba(210,153,34,.15); color: var(--yellow); }
+.badge-review-warn { background: rgba(218,54,51,.15); color: var(--red); }
+.badge-stuck { background: rgba(218,54,51,.15); color: var(--red); }
+.badge-plan { background: rgba(136,98,246,.15); color: #8b5cf6; }
+.badge-approval { background: rgba(210,153,34,.15); color: var(--yellow); }
+.badge-template { background: rgba(47,125,247,.15); color: var(--accent); }
+.badge-bestofn { background: rgba(219,109,40,.15); color: var(--orange); }
+.badge-workers { background: rgba(47,129,247,.15); color: #79c0ff; }
+.badge-reviewers { background: rgba(136,98,246,.15); color: #8b5cf6; }
+.badge-final { background: rgba(35,134,54,.15); color: #7ee787; }
+.badge-warning { background: rgba(210,153,34,.15); color: var(--yellow); }
+sl-badge.badge { font-size: 11px; --sl-font-size-small: 11px; }
+
+/* Best-of-n config section */
+.bon-config-section { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin-top: 12px; background: var(--bg); }
+.bon-config-section h4 { font-size: 13px; margin-bottom: 10px; color: var(--text); }
+.bon-slot-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
+.bon-slot-row input[type="number"] { width: 60px; }
+.bon-slot-row select { flex: 1; }
+.bon-slot-row textarea { flex: 1; min-height: 40px; }
+.bon-remove-btn { background: none; border: none; color: var(--red); cursor: pointer; font-size: 16px; padding: 4px; }
+.bon-remove-btn:hover { color: #ff7b72; }
+.bon-add-btn { background: var(--surface2); border: 1px dashed var(--border); border-radius: 4px; color: var(--text-dim); cursor: pointer; padding: 4px 12px; font-size: 12px; width: 100%; }
+.bon-add-btn:hover { border-color: var(--accent); color: var(--accent); }
+.bon-validation-error { color: var(--red); font-size: 12px; margin-top: 4px; }
+
+/* Detail modal */
+.modal-detail-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.modal-detail-tab { padding: 8px 16px; font-size: 13px; cursor: pointer; border: none; background: none; color: var(--text-dim); border-bottom: 2px solid transparent; }
+.modal-detail-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.modal-detail-tab:hover { color: var(--text); }
+.run-list { display: flex; flex-direction: column; gap: 8px; }
+.run-item { border: 1px solid var(--border); border-radius: 6px; padding: 10px; background: var(--bg); }
+.run-item-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.run-item-phase { font-size: 12px; font-weight: 600; text-transform: uppercase; }
+.run-item-phase.worker { color: #79c0ff; }
+.run-item-phase.reviewer { color: #8b5cf6; }
+.run-item-phase.final_applier { color: #7ee787; }
+.run-item-model { font-size: 11px; color: var(--text-dim); }
+.run-item-status { font-size: 11px; padding: 2px 6px; border-radius: 4px; }
+.run-item-status.pending { background: var(--surface2); color: var(--text-dim); }
+.run-item-status.running { background: rgba(47,125,247,.15); color: var(--accent); }
+.run-item-status.done { background: rgba(35,134,54,.15); color: #7ee787; }
+.run-item-status.failed { background: rgba(218,54,51,.15); color: var(--red); }
+.run-item-summary { font-size: 12px; color: var(--text-dim); margin-top: 4px; white-space: pre-wrap; }
+.run-item-actions { display: flex; gap: 8px; margin-top: 8px; }
+.candidate-list { display: flex; flex-direction: column; gap: 8px; }
+.candidate-item { border: 1px solid var(--border); border-radius: 6px; padding: 10px; background: var(--bg); }
+.candidate-item.selected { border-color: var(--green); }
+.candidate-header { display: flex; justify-content: space-between; align-items: center; }
+.candidate-id { font-size: 11px; color: var(--text-dim); }
+.candidate-files { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+
+/* Collapsible output */
+.output-toggle { font-size: 12px; color: var(--accent); cursor: pointer; background: none; border: none; padding: 4px 0; }
+.output-toggle:hover { text-decoration: underline; }
+.output-content { font-size: 12px; color: var(--text-dim); background: var(--bg); border-radius: 4px; padding: 8px; margin-top: 6px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; display: none; }
+.output-content.open { display: block; }
+
+/* Executing spinner */
+.spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--text-dim); border-top-color: var(--accent); border-radius: 50%; animation: spin .6s linear infinite; margin-right: 6px; }
+.spinner sl-spinner { --indicator-width: 2px; --track-width: 2px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Attention icon */
+.attention { color: var(--red); font-size: 14px; margin-left: 4px; }
+
+/* Add task button */
+.add-task-btn { width: 100%; padding: 8px; border: 1px dashed var(--border); border-radius: var(--radius); background: none; color: var(--text-dim); cursor: pointer; font-size: 13px; margin-top: auto; }
+.add-task-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Template icon button */
+sl-icon-button.add-task-btn { width: 100%; margin-top: auto; padding: 8px; border: 1px dashed var(--border); border-radius: var(--radius); }
+sl-icon-button.add-task-btn::part(base) { width: 100%; justify-content: center; color: var(--text-dim); background: none; }
+sl-icon-button.add-task-btn:hover::part(base) { border-color: var(--accent); color: var(--accent); }
+
+/* Archive all button (done panel) */
+.archive-all-btn { width: 100%; padding: 8px; border: 1px dashed rgba(139,148,158,.3); border-radius: var(--radius); background: rgba(139,148,158,.08); color: rgba(139,148,158,.8); cursor: pointer; font-size: 13px; margin-top: auto; }
+.archive-all-btn:hover { border-color: var(--text-dim); color: var(--text); background: rgba(139,148,158,.14); }
+
+/* Modal overlay */
+.modal-overlay { position: fixed; inset: 0; padding: 20px; background: rgba(0,0,0,.72); backdrop-filter: blur(4px); z-index: 200; display: flex; align-items: center; justify-content: center; }
+.modal-overlay.hidden { display: none; }
+.modal { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; width: min(640px, calc(100vw - 40px)); max-height: min(880px, calc(100vh - 40px)); display: flex; flex-direction: column; overflow: hidden; box-shadow: var(--shadow); }
+.modal-options { width: min(560px, calc(100vw - 40px)); }
+.modal-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-shrink: 0; }
+.modal-header h2 { font-size: 16px; font-weight: 600; }
+.modal-close { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 18px; padding: 4px; border-radius: 4px; }
+.modal-close:hover { color: var(--text); background: var(--surface2); }
+.modal-body { padding: 20px; overflow-y: auto; flex: 1; min-height: 0; }
+.modal-footer { padding: 12px 20px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; flex-shrink: 0; background: linear-gradient(180deg, rgba(22,27,34,.96), #161b22); }
+.modal-options .modal-body { padding: 16px 18px; }
+sl-dialog::part(base) { --width: 520px; }
+sl-dialog::part(panel) { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); }
+sl-dialog::part(header) { background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 20px; }
+sl-dialog::part(title) { font-size: 16px; font-weight: 600; color: var(--text); }
+sl-dialog::part(body) { padding: 20px; color: var(--text); }
+sl-dialog::part(footer) { padding: 12px 20px; border-top: 1px solid var(--border); }
+sl-dialog::part(close-button) { color: var(--text-dim); }
+sl-dialog::part(close-button):hover { color: var(--text); background: var(--surface2); }
+
+/* Form */
+.form-group { margin-bottom: 14px; }
+.form-group { position: relative; z-index: 0; }
+.form-group:focus-within { z-index: 8; }
+.form-group label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 4px; color: var(--text-dim); }
+.label-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.label-row label { margin-bottom: 0; }
+.model-search,
+.bon-slot-row input[type="number"],
+.bon-slot-row input[type="text"],
+.bon-slot-row select {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+}
+.model-search::placeholder,
+.bon-slot-row input::placeholder {
+  color: var(--text-dim);
+}
+.model-search:focus,
+.bon-slot-row input:focus,
+.bon-slot-row select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(47, 129, 247, 0.16);
+}
+.form-group sl-input::part(form-control),
+.form-group sl-select::part(form-control),
+.form-group sl-textarea::part(form-control) {
+  width: 100%;
+}
+.form-group sl-input::part(base),
+.form-group sl-textarea::part(base),
+.form-group sl-select::part(combobox) {
+  min-height: 38px;
+  border-radius: var(--radius);
+  border-color: var(--border);
+  background: var(--bg);
+  box-shadow: none;
+}
+.form-group sl-textarea::part(base) {
+  min-height: 112px;
+  overflow: hidden;
+}
+.form-group sl-input::part(input),
+.form-group sl-textarea::part(textarea),
+.form-group sl-select::part(display-input) {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+  padding-inline: 12px;
+}
+.form-group sl-textarea::part(textarea) {
+  padding: 12px;
+  min-height: 112px;
+  resize: none;
+  vertical-align: top;
+}
+.form-group sl-input::part(input)::placeholder,
+.form-group sl-textarea::part(textarea)::placeholder {
+  color: var(--text-dim);
+}
+.form-group sl-input::part(base):focus-within,
+.form-group sl-textarea::part(base):focus-within,
+.form-group sl-select::part(combobox):focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(47, 129, 247, 0.16);
+}
+.form-group sl-select::part(listbox) {
+  background: var(--surface);
+  border-color: var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.form-group sl-select::part(panel) {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+.form-group sl-select::part(menu) {
+  background: var(--surface);
+}
+.form-group sl-select::part(display-input) {
+  color: var(--text);
+}
+sl-option {
+  display: block;
+  background: var(--surface);
+}
+sl-option::part(base) {
+  display: flex;
+  width: 100%;
+  padding: 8px 12px;
+  color: var(--text);
+  background: var(--surface);
+}
+sl-option::part(base):hover {
+  background: rgba(47, 129, 247, 0.16);
+}
+sl-option[aria-selected="true"]::part(base),
+sl-option[variant~="checked"]::part(base) {
+  background: var(--accent);
+  color: #fff;
+}
+.help-btn {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text-dim);
+  cursor: help;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.help-btn sl-icon { font-size: 11px; }
+.help-btn:hover { color: var(--text); border-color: var(--accent); }
+.form-group input[type="text"],
+.form-group input[type="number"],
+.form-group textarea,
+.form-group select { width: 100%; padding: 8px 10px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 13px; font-family: inherit; }
+.form-group textarea { min-height: 100px; resize: vertical; }
+.form-group input:focus, .form-group textarea:focus, .form-group select:focus { outline: none; border-color: var(--accent); }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.checkbox-group { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; }
+.checkbox-group sl-checkbox,
+.inline-checkbox {
+  width: auto;
+  max-width: 100%;
+}
+.checkbox-group sl-checkbox::part(base),
+.inline-checkbox::part(base) {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: auto;
+  min-height: 0;
+}
+.checkbox-group sl-checkbox::part(control),
+.inline-checkbox::part(control) {
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  flex: 0 0 auto;
+  border-radius: 5px;
+}
+.checkbox-group sl-checkbox::part(label),
+.inline-checkbox::part(label) {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.35;
+  font-size: 13px;
+}
+.checkbox-group sl-checkbox::part(control--checked),
+.inline-checkbox::part(control--checked) {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.form-group sl-input, .form-group sl-select, .form-group sl-textarea { width: 100%; }
+.form-group sl-select { position: relative; z-index: 2; }
+
+/* Multi-select for requirements */
+.req-list { max-height: 150px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); padding: 6px; }
+.req-item { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 4px; font-size: 13px; cursor: pointer; }
+.req-item:hover { background: var(--surface2); }
+.req-item input { accent-color: var(--accent); }
+
+/* Log panel */
+.log-panel { height: var(--log-panel-height); border-top: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; min-height: 120px; transition: height 0.2s ease, min-height 0.2s ease; }
+.log-panel.collapsed { height: auto; min-height: auto; }
+.log-panel.collapsed .log-body { display: none; }
+.log-header { padding: 8px 14px; font-size: 12px; font-weight: 600; color: var(--text-dim); border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: .4px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; }
+.log-body { flex: 1; overflow-y: auto; padding: 8px 14px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace; font-size: 12px; line-height: 1.5; }
+.log-item { color: var(--text-dim); margin-bottom: 4px; white-space: pre-wrap; word-break: break-word; }
+.log-item.info { color: var(--text-dim); }
+.log-item.success { color: #7ee787; }
+.log-item.error { color: #ff7b72; }
+
+/* Toast */
+.toast-container { position: fixed; bottom: calc(var(--log-panel-height) + 16px); right: 16px; z-index: 300; display: flex; flex-direction: column; gap: 8px; }
+.toast { padding: 10px 16px; border-radius: var(--radius); font-size: 13px; box-shadow: var(--shadow); animation: slideIn .2s ease; }
+.toast-error { background: var(--red); color: #fff; }
+.toast-success { background: var(--green); color: #fff; }
+.toast-info { background: var(--accent); color: #fff; }
+@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } }
+
+/* Connection indicator */
+.conn-status { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.conn-status.connected { background: var(--green); }
+.conn-status.disconnected { background: var(--red); }
+.topbar-status-dot { width: 9px; height: 9px; box-shadow: 0 0 0 3px rgba(139, 148, 158, 0.12); }
+.model-search { margin-bottom: 6px; }
+
+.options-btn::part(base) {
+  background: #c9d1d9;
+  border-color: #a4adb8;
+  color: #111827;
+}
+.options-btn::part(base):hover {
+  background: #b8c1cb;
+  border-color: #b8c1cb;
+  color: #111827;
+}
+
+sl-tooltip::part(body) {
+  max-width: 320px;
+  background: rgba(22, 27, 34, 0.98);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 8px 10px;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 500;
+  position: relative;
+  z-index: 10000;
+}
+sl-tooltip {
+  --sl-z-index-tooltip: 10000;
+}
+
+@media (max-width: 980px) {
+  .topbar { flex-wrap: wrap; gap: 10px; padding: 10px 12px; }
+  .topbar-title { order: 3; width: 100%; }
+  .topbar-actions { width: 100%; justify-content: center; }
+  .run-item { flex-direction: column; }
+  .board { grid-template-columns: 1fr; overflow-y: auto; }
+  .log-panel { height: 160px; }
+  .modal-overlay { padding: 12px; }
+  .modal, .modal-options { width: min(100vw - 24px, 640px); max-height: calc(100vh - 24px); }
+  .form-row, .checkbox-group { grid-template-columns: 1fr; }
+}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/fuse.js@7.1.0"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
+</head>
+<body>
+
+<div class="topbar">
+  <sl-button variant="success" id="startBtn" onclick="toggleExecution()">Start Workflow</sl-button>
+  <div class="topbar-title">
+    <h1 class="topbar-heading"><span>Easy Workflow Kanban</span><span class="conn-status disconnected topbar-status-dot" id="connStatus"></span></h1>
+    <div class="shortcut-list" aria-label="Keyboard shortcuts">
+      <span class="shortcut-item"><span class="shortcut-key">T</span> Create a new template</span>
+      <span class="shortcut-item"><span class="shortcut-key">B</span> Create a new backlog task</span>
+      <span class="shortcut-item"><span class="shortcut-key">S</span> Start a workflow run</span>
+      <span class="shortcut-item"><span class="shortcut-key">D</span> Archive all done tasks</span>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <sl-button class="options-btn" onclick="openOptionsModal()">Options</sl-button>
+    <sl-checkbox class="inline-checkbox" id="showGraphChk">Show execution graph</sl-checkbox>
+    <sl-checkbox class="inline-checkbox" id="telegramNotifyChk" title="Enable Telegram notifications for task status changes">🔔 Telegram</sl-checkbox>
+  </div>
+</div>
+
+<details class="run-panel" id="runPanel" open>
+  <summary>
+    <span>Workflow Runs</span>
+    <span class="run-panel-count" id="runPanelCount">0 active</span>
+  </summary>
+  <div class="run-panel-body" id="runPanelBody">
+    <div class="run-panel-empty">No workflow runs yet.</div>
+  </div>
+</details>
+
+<div class="board">
+  <div class="column" data-status="template">
+    <div class="column-header">
+      <div class="column-header-main">
+        <span>Templates</span>
+        <sl-icon-button class="help-btn" type="button" title="Reusable task blueprints. Keep common prompts and settings here, then deploy them into the backlog when you need a new task." aria-label="Templates column help" name="question-circle"></sl-icon-button>
+      </div>
+      <span class="count" id="count-template">0</span>
+    </div>
+    <div class="column-body" id="col-template">
+      <sl-icon-button class="add-task-btn" onclick="openTemplateTaskModal()" title="Add Template" aria-label="Add Template" name="file-text"></sl-icon-button>
+    </div>
+  </div>
+  <div class="column" data-status="backlog">
+    <div class="column-header">
+      <div class="column-header-main">
+        <span>Backlog</span>
+        <sl-icon-button class="help-btn" type="button" title="Ready-to-run tasks waiting for execution. Add, edit, reorder, and set dependencies here before starting work." aria-label="Backlog column help" name="question-circle"></sl-icon-button>
+      </div>
+      <span class="count" id="count-backlog">0</span>
+    </div>
+    <div class="column-body" id="col-backlog" ondrop="handleDrop(event,'backlog')" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)">
+      <button class="add-task-btn" onclick="openTaskModal()">+ Add Task</button>
+    </div>
+  </div>
+  <div class="column" data-status="executing">
+    <div class="column-header">
+      <div class="column-header-main">
+        <span>Executing</span>
+        <sl-icon-button class="help-btn" type="button" title="Tasks currently being worked on by the agent. Use this column to monitor active runs and open their live sessions." aria-label="Executing column help" name="question-circle"></sl-icon-button>
+      </div>
+      <span class="count" id="count-executing">0</span>
+    </div>
+    <div class="column-body" id="col-executing"></div>
+  </div>
+  <div class="column" data-status="review">
+    <div class="column-header">
+      <div class="column-header-main">
+        <span>Review</span>
+        <sl-icon-button class="help-btn" type="button" title="Tasks that need human attention. Review outputs here, approve plans, or inspect stuck and failed work before deciding the next step." aria-label="Review column help" name="question-circle"></sl-icon-button>
+      </div>
+      <span class="count" id="count-review">0</span>
+    </div>
+    <div class="column-body" id="col-review"></div>
+  </div>
+  <div class="column" data-status="done">
+    <div class="column-header">
+      <div class="column-header-main">
+        <span>Done</span>
+        <sl-icon-button class="help-btn" type="button" title="Completed tasks. Use this column as the final state once the work and any needed review are finished." aria-label="Done column help" name="question-circle"></sl-icon-button>
+      </div>
+      <span class="count" id="count-done">0</span>
+    </div>
+    <div class="column-body" id="col-done"></div>
+  </div>
+</div>
+
+<!-- Task Modal -->
+<div class="modal-overlay hidden" id="taskModal" data-close-on-overlay="true">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="taskModalTitle">Add Task</h2>
+      <sl-icon-button class="modal-close" onclick="closeTaskModal()" name="x"></sl-icon-button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="taskId">
+      <div class="form-group">
+        <div class="label-row">
+          <label for="taskName">Name</label>
+          <sl-icon-button class="help-btn" type="button" title="Short task title shown on the card. Make it specific enough to identify the work at a glance." aria-label="Task name help" name="question-circle"></sl-icon-button>
+        </div>
+        <sl-input type="text" id="taskName" placeholder="Task name"></sl-input>
+      </div>
+      <div class="form-group">
+        <div class="label-row">
+          <label for="taskPrompt">Prompt</label>
+          <sl-icon-button class="help-btn" type="button" title="The main instructions for the agent. Describe the change, bug, or outcome you want it to produce." aria-label="Task prompt help" name="question-circle"></sl-icon-button>
+        </div>
+        <sl-textarea id="taskPrompt" placeholder="What should this task do?"></sl-textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group" x-data="modelPicker('taskPlanModel')" x-init="attach()">
+          <div class="label-row">
+            <label for="taskPlanModel">Plan Model</label>
+            <sl-icon-button class="help-btn" type="button" title="Model used for planning steps before implementation. Use this when you want a specific model to reason about the approach first." aria-label="Task plan model help" name="question-circle"></sl-icon-button>
+          </div>
+          <input type="text" id="taskPlanModel" class="model-search" placeholder="Type model name..." list="taskPlanModel-suggestions" x-model="query" @focus="refreshSuggestions()" @input="refreshSuggestions()" @blur="commit()">
+          <datalist id="taskPlanModel-suggestions">
+            <template x-for="match in matches" :key="match.value + '-' + match.providerId">
+              <option :value="match.value" :label="match.labelWithProvider"></option>
+            </template>
+          </datalist>
+        </div>
+        <div class="form-group" x-data="modelPicker('taskExecModel')" x-init="attach()">
+          <div class="label-row">
+            <label for="taskExecModel">Execution Model</label>
+            <sl-icon-button class="help-btn" type="button" title="Model used for the actual implementation work. Set this when execution should run on a different model than planning." aria-label="Task execution model help" name="question-circle"></sl-icon-button>
+          </div>
+          <input type="text" id="taskExecModel" class="model-search" placeholder="Type model name..." list="taskExecModel-suggestions" x-model="query" @focus="refreshSuggestions()" @input="refreshSuggestions()" @blur="commit()">
+          <datalist id="taskExecModel-suggestions">
+            <template x-for="match in matches" :key="match.value + '-' + match.providerId">
+              <option :value="match.value" :label="match.labelWithProvider"></option>
+            </template>
+          </datalist>
+        </div>
+      </div>
+      <div class="form-group">
+        <div class="label-row">
+          <label for="taskThinkingLevel">Thinking Level</label>
+          <sl-icon-button class="help-btn" type="button" title="Controls how much reasoning effort the agent should spend. Higher levels can improve harder tasks but usually take longer." aria-label="Task thinking level help" name="question-circle"></sl-icon-button>
+        </div>
+        <sl-select id="taskThinkingLevel">
+          <sl-option value="default">Default</sl-option>
+          <sl-option value="low">Low</sl-option>
+          <sl-option value="medium">Medium</sl-option>
+          <sl-option value="high">High</sl-option>
+        </sl-select>
+      </div>
+      <div class="form-group">
+        <div class="label-row">
+          <label for="taskExecutionStrategy">Execution Strategy</label>
+          <sl-icon-button class="help-btn" type="button" title="Standard runs a single execution. Best of N runs multiple candidates in parallel and picks or synthesizes the best result." aria-label="Execution strategy help" name="question-circle"></sl-icon-button>
+        </div>
+        <sl-select id="taskExecutionStrategy">
+          <sl-option value="standard">Standard</sl-option>
+          <sl-option value="best_of_n">Best of N</sl-option>
+        </sl-select>
+      </div>
+      <div class="bon-config-section" id="bonConfigSection" style="display:none;">
+        <h4>Best of N Configuration</h4>
+        <div id="bonValidationErrors"></div>
+        
+        <div class="form-group">
+          <div class="label-row">
+            <label>Workers</label>
+          </div>
+          <div id="bonWorkersList"></div>
+          <button type="button" class="bon-add-btn" onclick="addBonWorkerSlot()">+ Add Worker Slot</button>
+        </div>
+        
+        <div class="form-group">
+          <div class="label-row">
+            <label>Reviewers</label>
+          </div>
+          <div id="bonReviewersList"></div>
+          <button type="button" class="bon-add-btn" onclick="addBonReviewerSlot()">+ Add Reviewer Slot</button>
+        </div>
+        
+        <div class="form-group" x-data="modelPicker('bonFinalApplierModel')" x-init="attach()">
+          <div class="label-row">
+            <label for="bonFinalApplierModel">Final Applier Model</label>
+          </div>
+          <input type="text" id="bonFinalApplierModel" class="model-search" placeholder="Type model name..." list="bonFinalApplierModel-suggestions" x-model="query" @focus="refreshSuggestions()" @input="refreshSuggestions()" @blur="commit()">
+          <datalist id="bonFinalApplierModel-suggestions">
+            <template x-for="match in matches" :key="match.value + '-' + match.providerId">
+              <option :value="match.value" :label="match.labelWithProvider"></option>
+            </template>
+          </datalist>
+        </div>
+        
+        <div class="form-group">
+          <div class="label-row">
+            <label for="bonFinalApplierSuffix">Final Applier Suffix (optional)</label>
+          </div>
+          <sl-textarea id="bonFinalApplierSuffix" placeholder="Additional instructions for the final applier..."></sl-textarea>
+        </div>
+        
+        <div class="form-row">
+          <div class="form-group">
+            <div class="label-row">
+              <label for="bonSelectionMode">Selection Mode</label>
+            </div>
+            <sl-select id="bonSelectionMode">
+              <sl-option value="pick_best">Pick Best</sl-option>
+              <sl-option value="synthesize">Synthesize</sl-option>
+              <sl-option value="pick_or_synthesize">Pick or Synthesize</sl-option>
+            </sl-select>
+          </div>
+          <div class="form-group">
+            <div class="label-row">
+              <label for="bonMinSuccessful">Min Successful Workers</label>
+            </div>
+            <sl-input type="number" id="bonMinSuccessful" min="1" max="8" value="1"></sl-input>
+          </div>
+        </div>
+        
+        <div class="form-group">
+          <div class="label-row">
+            <label for="bonVerificationCmd">Verification Command (optional)</label>
+          </div>
+          <sl-input type="text" id="bonVerificationCmd" placeholder="e.g. npm test"></sl-input>
+        </div>
+      </div>
+      <div class="form-group">
+        <div class="label-row">
+          <label for="taskBranch">Branch</label>
+          <sl-icon-button class="help-btn" type="button" title="Git branch the task should run against. Pick the branch where changes should be created or reviewed." aria-label="Task branch help" name="question-circle"></sl-icon-button>
+        </div>
+        <sl-select id="taskBranch"></sl-select>
+      </div>
+      <div class="form-group">
+        <div class="checkbox-group">
+          <sl-checkbox id="taskPlanmode" title="Create a plan first and wait for approval before full execution continues.">Plan Mode</sl-checkbox>
+          <sl-checkbox id="taskAutoApprovePlan" title="When plan mode is enabled, automatically accept generated plans and continue directly to implementation.">Auto-approve plan</sl-checkbox>
+          <sl-checkbox id="taskReview" checked title="Run an automated review pass after execution so the task can be checked before completion.">Review</sl-checkbox>
+          <sl-checkbox id="taskAutoCommit" checked title="Allow the workflow to create a git commit automatically when the task finishes successfully.">Auto-commit</sl-checkbox>
+          <sl-checkbox id="taskDeleteWorktree" checked title="Remove the temporary worktree after the task finishes. Disable this if you want to inspect files afterward.">Delete Worktree</sl-checkbox>
+          <sl-checkbox id="taskSkipPermissionAsking" title="Task will use a more autonomous agent configuration, reducing permission prompts during execution.">Skip Permission Asking</sl-checkbox>
+        </div>
+      </div>
+      <div class="form-group">
+        <div class="label-row">
+          <label for="taskReqs">Requirements (dependencies)</label>
+          <sl-icon-button class="help-btn" type="button" title="Tasks that must be completed before this one should run. Use dependencies to enforce execution order." aria-label="Task requirements help" name="question-circle"></sl-icon-button>
+        </div>
+        <div class="req-list" id="taskReqs"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <sl-button onclick="closeTaskModal()">Cancel</sl-button>
+      <sl-button variant="success" id="taskSaveBtn" onclick="saveTask()">Save</sl-button>
+    </div>
+  </div>
+</div>
+
+<!-- Options Modal -->
+<div class="modal-overlay hidden" id="optionsModal" data-close-on-overlay="true">
+  <div class="modal modal-options">
+    <div class="modal-header">
+      <h2>Options</h2>
+      <sl-icon-button class="modal-close" onclick="closeOptionsModal()" name="x"></sl-icon-button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <div class="label-row">
+          <label for="optBranch">Default Branch</label>
+          <sl-icon-button class="help-btn" type="button" title="Default git branch for new tasks when a task-specific branch is not selected." aria-label="Default branch help" name="question-circle"></sl-icon-button>
+        </div>
+        <sl-select id="optBranch"></sl-select>
+      </div>
+      <div class="form-row">
+        <div class="form-group" x-data="modelPicker('optPlanModel')" x-init="attach()">
+          <div class="label-row">
+            <label for="optPlanModel">Plan Model (global)</label>
+            <sl-icon-button class="help-btn" type="button" title="Default planning model for new tasks. Individual tasks can override this value." aria-label="Global plan model help" name="question-circle"></sl-icon-button>
+          </div>
+          <input type="text" id="optPlanModel" class="model-search" placeholder="Type model name..." list="optPlanModel-suggestions" x-model="query" @focus="refreshSuggestions()" @input="refreshSuggestions()" @blur="commit()">
+          <datalist id="optPlanModel-suggestions">
+            <template x-for="match in matches" :key="match.value + '-' + match.providerId">
+              <option :value="match.value" :label="match.labelWithProvider"></option>
+            </template>
+          </datalist>
+        </div>
+        <div class="form-group" x-data="modelPicker('optExecModel')" x-init="attach()">
+          <div class="label-row">
+            <label for="optExecModel">Execution Model (global)</label>
+            <sl-icon-button class="help-btn" type="button" title="Default execution model for new tasks. Individual tasks can override this value." aria-label="Global execution model help" name="question-circle"></sl-icon-button>
+          </div>
+          <input type="text" id="optExecModel" class="model-search" placeholder="Type model name..." list="optExecModel-suggestions" x-model="query" @focus="refreshSuggestions()" @input="refreshSuggestions()" @blur="commit()">
+          <datalist id="optExecModel-suggestions">
+            <template x-for="match in matches" :key="match.value + '-' + match.providerId">
+              <option :value="match.value" :label="match.labelWithProvider"></option>
+            </template>
+          </datalist>
+        </div>
+      </div>
+      <div class="form-group" x-data="modelPicker('optReviewModel')" x-init="attach()">
+        <div class="label-row">
+          <label for="optReviewModel">Review Model</label>
+          <sl-icon-button class="help-btn" type="button" title="Model used by the workflow-review agent. This is stored in the database and used for all review operations." aria-label="Review model help" name="question-circle"></sl-icon-button>
+        </div>
+        <input type="text" id="optReviewModel" class="model-search" placeholder="Type model name..." list="optReviewModel-suggestions" x-model="query" @focus="refreshSuggestions()" @input="refreshSuggestions()" @blur="commit()">
+        <datalist id="optReviewModel-suggestions">
+          <template x-for="match in matches" :key="match.value + '-' + match.providerId">
+            <option :value="match.value" :label="match.labelWithProvider"></option>
+          </template>
+        </datalist>
+      </div>
+      <div class="form-group" x-data="modelPicker('optRepairModel')" x-init="attach()">
+        <div class="label-row">
+          <label for="optRepairModel">Repair Model</label>
+          <sl-icon-button class="help-btn" type="button" title="Model used by the workflow-repair agent for state repair analysis." aria-label="Repair model help" name="question-circle"></sl-icon-button>
+        </div>
+        <input type="text" id="optRepairModel" class="model-search" placeholder="Type model name..." list="optRepairModel-suggestions" x-model="query" @focus="refreshSuggestions()" @input="refreshSuggestions()" @blur="commit()">
+        <datalist id="optRepairModel-suggestions">
+          <template x-for="match in matches" :key="match.value + '-' + match.providerId">
+            <option :value="match.value" :label="match.labelWithProvider"></option>
+          </template>
+        </datalist>
+      </div>
+      <div class="form-group">
+        <div class="label-row">
+          <label for="optThinkingLevel">Thinking Level (global default)</label>
+          <sl-icon-button class="help-btn" type="button" title="Default reasoning effort for new tasks. Higher levels are better for harder work but can be slower." aria-label="Global thinking level help" name="question-circle"></sl-icon-button>
+        </div>
+        <sl-select id="optThinkingLevel">
+          <sl-option value="default">Default</sl-option>
+          <sl-option value="low">Low</sl-option>
+          <sl-option value="medium">Medium</sl-option>
+          <sl-option value="high">High</sl-option>
+        </sl-select>
+      </div>
+      <div class="form-group">
+        <div class="label-row">
+          <label for="optCommand">Pre-execution Command</label>
+          <sl-icon-button class="help-btn" type="button" title="Command to run before task execution begins, such as installing dependencies or preparing the workspace." aria-label="Pre-execution command help" name="question-circle"></sl-icon-button>
+        </div>
+        <sl-input type="text" id="optCommand" placeholder="e.g. npm install"></sl-input>
+      </div>
+      <div class="form-group">
+        <div class="label-row">
+          <label for="optParallel">Parallel Tasks</label>
+          <sl-icon-button class="help-btn" type="button" title="Maximum number of tasks the workflow should execute at the same time." aria-label="Parallel tasks help" name="question-circle"></sl-icon-button>
+        </div>
+        <sl-input type="number" id="optParallel" min="1" max="10" value="1"></sl-input>
+      </div>
+      <div class="form-group">
+        <div class="label-row">
+          <label for="optMaxReviews">Maximum Review Runs</label>
+          <sl-icon-button class="help-btn" type="button" title="Maximum number of review cycles for a task before it gets stuck. Can be overridden per-task." aria-label="Max reviews help" name="question-circle"></sl-icon-button>
+        </div>
+        <sl-input type="number" id="optMaxReviews" min="1" max="10" value="2"></sl-input>
+      </div>
+      <div class="form-group">
+        <div class="label-row">
+          <label>Session Cleanup (global)</label>
+          <sl-icon-button class="help-btn" type="button" title="Automatically delete OpenCode sessions after task/review runs finish. Enable only if you do not need session history for debugging." aria-label="Session cleanup help" name="question-circle"></sl-icon-button>
+        </div>
+        <div class="checkbox-group">
+          <sl-checkbox id="optAutoDeleteNormalSessions" title="Delete normal execution sessions for tasks, worker runs, and final applier runs after they finish.">Auto-delete normal sessions</sl-checkbox>
+          <sl-checkbox id="optAutoDeleteReviewSessions" title="Delete review sessions after each review pass (review loop + best-of-n reviewers).">Auto-delete review sessions</sl-checkbox>
+        </div>
+      </div>
+      <div class="form-group">
+        <div class="label-row">
+          <label for="optCommitPrompt">Commit Prompt <span style="font-weight:normal;color:var(--text-dim)">({{base_ref}} will be replaced at runtime)</span></label>
+          <sl-icon-button class="help-btn" type="button" title="Instructions used when the workflow asks the agent to prepare a git commit. Use {{base_ref}} anywhere you want the current base branch inserted automatically." aria-label="Commit prompt help" name="question-circle"></sl-icon-button>
+        </div>
+        <sl-textarea id="optCommitPrompt" style="min-height:180px;font-family:monospace;font-size:12px" placeholder="Instructions for committing changes..."></sl-textarea>
+      </div>
+      <div class="form-group">
+        <div class="label-row">
+          <label for="optExtraPrompt">Extra Prompt <span style="font-weight:normal;color:var(--text-dim)">(added to every prompt)</span></label>
+          <sl-icon-button class="help-btn" type="button" title="Additional instructions that will be appended to every task prompt sent to the agent." aria-label="Extra prompt help" name="question-circle"></sl-icon-button>
+        </div>
+        <sl-textarea id="optExtraPrompt" style="min-height:100px;font-family:monospace;font-size:12px" placeholder="Additional context or instructions for all tasks..."></sl-textarea>
+      </div>
+      <div class="form-group telegram-section">
+        <div class="label-row">
+          <label>Telegram Notifications</label>
+          <sl-icon-button class="help-btn" type="button" title="Send a Telegram message when a task changes state. Leave both fields empty to disable notifications." aria-label="Telegram notifications help" name="question-circle"></sl-icon-button>
+        </div>
+        <sl-checkbox id="optTelegramEnabled" class="inline-checkbox" style="margin-bottom:8px;">Enable Telegram notifications</sl-checkbox>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div>
+            <label for="optTelegramBotToken" style="display:block;font-size:12px;color:var(--text-dim);margin-bottom:4px;">Bot Token</label>
+            <sl-input type="password" id="optTelegramBotToken" placeholder="123456789:ABCdefGhIJKlmNoPQRsTUVwxYZ" style="width:100%;"></sl-input>
+          </div>
+          <div>
+            <label for="optTelegramChatId" style="display:block;font-size:12px;color:var(--text-dim);margin-bottom:4px;">Chat ID</label>
+            <sl-input type="text" id="optTelegramChatId" placeholder="-1001234567890 or @channel_name" style="width:100%;"></sl-input>
+          </div>
+        </div>
+        <div id="telegramTestStatus" style="font-size:12px;margin-top:6px;display:none;"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <sl-button onclick="closeOptionsModal()">Cancel</sl-button>
+      <sl-button variant="success" onclick="saveOptions()">Save</sl-button>
+    </div>
+  </div>
+</div>
+
+<!-- Execution Graph Modal -->
+<div class="modal-overlay hidden" id="graphModal" data-close-on-overlay="true">
+  <div class="modal" style="width:600px;">
+    <div class="modal-header">
+      <h2>Execution Graph Preview</h2>
+      <sl-icon-button class="modal-close" onclick="closeGraphModal()" name="x"></sl-icon-button>
+    </div>
+    <div class="modal-body" id="graphModalBody">
+      <div id="graphContent"></div>
+    </div>
+    <div class="modal-footer">
+      <sl-button onclick="closeGraphModal()">Cancel</sl-button>
+      <sl-button variant="success" onclick="confirmExecution()">Confirm &amp; Start</sl-button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="approveModal" data-close-on-overlay="true">
+  <div class="modal" style="width:440px;">
+    <div class="modal-header">
+      <h2 id="approveModalTitle">Approve Plan</h2>
+      <sl-icon-button class="modal-close" onclick="closeApproveModal()" name="x"></sl-icon-button>
+    </div>
+    <div class="modal-body">
+      <div id="approveModalTaskName" style="margin-bottom:12px;font-size:14px;color:var(--text);"></div>
+      <label for="approveMessage" style="display:block;margin-bottom:6px;font-size:13px;color:var(--text-dim);">Message to agent (optional)</label>
+      <sl-textarea id="approveMessage" rows="3" placeholder="Add guidance or feedback for the agent..."></sl-textarea>
+    </div>
+    <div class="modal-footer">
+      <sl-button onclick="closeApproveModal()">Cancel</sl-button>
+      <sl-button variant="success" id="approveConfirmBtn" onclick="confirmApprovePlan()">Approve and Run</sl-button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="revisionModal" data-close-on-overlay="true">
+  <div class="modal" style="width:440px;">
+    <div class="modal-header">
+      <h2>Request Plan Changes</h2>
+      <sl-icon-button class="modal-close" onclick="closeRevisionModal()" name="x"></sl-icon-button>
+    </div>
+    <div class="modal-body">
+      <div id="revisionModalTaskName" style="margin-bottom:12px;font-size:14px;color:var(--text);"></div>
+      <label for="revisionFeedback" style="display:block;margin-bottom:6px;font-size:13px;color:var(--text-dim);">What should be changed?</label>
+      <sl-textarea id="revisionFeedback" rows="4" placeholder="Describe the changes you want in the plan..."></sl-textarea>
+    </div>
+    <div class="modal-footer">
+      <sl-button onclick="closeRevisionModal()">Cancel</sl-button>
+      <sl-button variant="warning" onclick="confirmRequestRevision()">Send Feedback</sl-button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="startSingleModal" data-close-on-overlay="true">
+  <div class="modal" style="width:440px;">
+    <div class="modal-header">
+      <h2>Start Single Task</h2>
+      <sl-icon-button class="modal-close" onclick="closeStartSingleModal()" name="x"></sl-icon-button>
+    </div>
+    <div class="modal-body">
+      <div id="startSingleTaskName" style="margin-bottom:12px;font-size:14px;color:var(--text);"></div>
+      <div id="startSingleDeps" style="font-size:13px;color:var(--text-dim);"></div>
+    </div>
+    <div class="modal-footer">
+      <sl-button onclick="closeStartSingleModal()">Cancel</sl-button>
+      <sl-button variant="success" id="startSingleConfirmBtn" onclick="confirmStartSingle()">Start Task</sl-button>
+    </div>
+  </div>
+</div>
+
+<div class="log-panel collapsed" id="logPanel">
+  <div class="log-header">
+    <span>Event Log</span>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <sl-icon-button id="logPanelToggle" name="chevron-expand" onclick="toggleLogPanel()" title="Toggle event log"></sl-icon-button>
+      <sl-button size="small" onclick="clearLogs()">Clear</sl-button>
+    </div>
+  </div>
+  <div class="log-body" id="eventLog"></div>
+</div>
+
+<div class="toast-container" id="toasts"></div>
+
+<script>
+const API = location.origin
+let allTasks = []
+let allRuns = []
+let allOptions = {}
+let availableBranches = []
+let currentGitBranch = null
+let ws = null
+let reconnectTimer = null
+let dragTaskId = null
+let eventLogs = []
+const MAX_LOG_ENTRIES = 500
+let bonSummaryByTask = {}
+let taskModalMode = 'create'
+let taskModalCreateStatus = 'backlog'
+let modelCatalog = { providers: [] }
+let modelSearchIndex = []
+let modelFuse = null
+const MODEL_INPUT_IDS = [
+  'taskPlanModel',
+  'taskExecModel',
+  'optPlanModel',
+  'optExecModel',
+  'optReviewModel',
+  'optRepairModel',
+  'bonFinalApplierModel',
+]
+
+let bonWorkers = []
+let bonReviewers = []
+
+function getConsumedRunSlots() {
+  return allRuns.filter((run) => run.status === 'running' || run.status === 'stopping').length
+}
+
+function getTaskRunLock(taskId) {
+  return allRuns.find((run) => (run.status === 'running' || run.status === 'stopping') && run.currentTaskId === taskId) || null
+}
+
+function getRunProgressLabel(run) {
+  const total = Array.isArray(run.taskOrder) ? run.taskOrder.length : 0
+  const completed = Math.min(run.currentTaskIndex || 0, total)
+  if (total === 0) return 'No tasks'
+  return `${completed}/${total} tasks complete`
+}
+
+function getTaskName(taskId) {
+  return allTasks.find((task) => task.id === taskId)?.name || taskId || 'Unknown task'
+}
+
+function addBonWorkerSlot(model = 'default', count = 1, suffix = '') {
+  bonWorkers.push({ model, count, suffix })
+  renderBonWorkerSlots()
+}
+
+function removeBonWorkerSlot(index) {
+  bonWorkers.splice(index, 1)
+  renderBonWorkerSlots()
+}
+
+function renderBonWorkerSlots() {
+  const container = document.getElementById('bonWorkersList')
+  container.innerHTML = ''
+  for (let i = 0; i < bonWorkers.length; i++) {
+    const slot = bonWorkers[i]
+    const row = document.createElement('div')
+    row.className = 'bon-slot-row'
+    row.innerHTML = `
+      <input type="number" min="1" max="4" value="${slot.count}" onchange="bonWorkers[${i}].count = parseInt(this.value) || 1">
+      <select onchange="bonWorkers[${i}].model = this.value">
+        ${getModelOptions(slot.model)}
+      </select>
+      <input type="text" placeholder="Suffix (optional)" value="${slot.suffix || ''}" onchange="bonWorkers[${i}].suffix = this.value">
+      <button type="button" class="bon-remove-btn" onclick="removeBonWorkerSlot(${i})">\u2715</button>
+    `
+    container.appendChild(row)
+  }
+}
+
+function addBonReviewerSlot(model = 'default', count = 1, suffix = '') {
+  bonReviewers.push({ model, count, suffix })
+  renderBonReviewerSlots()
+}
+
+function removeBonReviewerSlot(index) {
+  bonReviewers.splice(index, 1)
+  renderBonReviewerSlots()
+}
+
+function renderBonReviewerSlots() {
+  const container = document.getElementById('bonReviewersList')
+  container.innerHTML = ''
+  for (let i = 0; i < bonReviewers.length; i++) {
+    const slot = bonReviewers[i]
+    const row = document.createElement('div')
+    row.className = 'bon-slot-row'
+    row.innerHTML = `
+      <input type="number" min="1" max="4" value="${slot.count}" onchange="bonReviewers[${i}].count = parseInt(this.value) || 1">
+      <select onchange="bonReviewers[${i}].model = this.value">
+        ${getModelOptions(slot.model)}
+      </select>
+      <input type="text" placeholder="Suffix (optional)" value="${slot.suffix || ''}" onchange="bonReviewers[${i}].suffix = this.value">
+      <button type="button" class="bon-remove-btn" onclick="removeBonReviewerSlot(${i})">\u2715</button>
+    `
+    container.appendChild(row)
+  }
+}
+
+function getModelOptions(selected = 'default') {
+  let html = '<option value="default">default</option>'
+  for (const provider of modelCatalog?.providers || []) {
+    for (const model of provider.models || []) {
+      const selectedAttr = model.value === selected ? ' selected' : ''
+      html += `<option value="${model.value}"${selectedAttr}>${model.label}</option>`
+    }
+  }
+  return html
+}
+
+function validateBonConfig() {
+  const errors = []
+  if (bonWorkers.length === 0) {
+    errors.push('Add at least one worker slot')
+  }
+  const totalWorkers = bonWorkers.reduce((sum, w) => sum + (w.count || 1), 0)
+  if (totalWorkers > 8) {
+    errors.push(`Total workers (${totalWorkers}) exceeds maximum of 8`)
+  }
+  const minSuccess = parseInt(document.getElementById('bonMinSuccessful')?.value || '1', 10)
+  if (minSuccess > totalWorkers) {
+    errors.push('Minimum successful workers cannot exceed total workers')
+  }
+  return errors
+}
+
+function updateBonConfigVisibility() {
+  const strategy = document.getElementById('taskExecutionStrategy')?.value || 'standard'
+  const section = document.getElementById('bonConfigSection')
+  if (section) {
+    section.style.display = strategy === 'best_of_n' ? 'block' : 'none'
+  }
+}
+
+// ---- API helpers ----
+async function api(path, method = 'GET', body) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } }
+  if (body) opts.body = JSON.stringify(body)
+  const res = await fetch(API + path, opts)
+  if (!res.ok) {
+    let errorMessage = `Request failed (${res.status})`
+    const responseText = await res.text()
+    if (responseText) {
+      try {
+        const parsed = JSON.parse(responseText)
+        if (parsed && typeof parsed.error === 'string' && parsed.error.trim()) {
+          errorMessage = parsed.error
+        } else {
+          errorMessage = responseText
+        }
+      } catch {
+        errorMessage = responseText
+      }
+    }
+    throw new Error(errorMessage)
+  }
+  return res.status === 204 ? null : res.json()
+}
+
+async function loadTasks() {
+  try {
+    allTasks = await api('/api/tasks')
+    await refreshBonSummaries()
+    renderBoard()
+  } catch (e) { showToast('Failed to load tasks: ' + e.message, 'error') }
+}
+
+async function loadRuns() {
+  try {
+    allRuns = await api('/api/runs')
+    renderRunPanel()
+    renderBoard()
+    updateStartBtn()
+  } catch (e) { showToast('Failed to load workflow runs: ' + e.message, 'error') }
+}
+
+function renderRunPanel() {
+  const body = document.getElementById('runPanelBody')
+  const count = document.getElementById('runPanelCount')
+  const consumed = getConsumedRunSlots()
+  count.textContent = `${consumed}/${allOptions.parallelTasks || 1} active`
+  body.innerHTML = ''
+
+  if (!Array.isArray(allRuns) || allRuns.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'run-panel-empty'
+    empty.textContent = 'No workflow runs yet.'
+    body.appendChild(empty)
+    return
+  }
+
+  for (const run of allRuns.slice(0, 10)) {
+    const item = document.createElement('div')
+    item.className = 'run-item'
+
+    const main = document.createElement('div')
+    main.className = 'run-item-main'
+
+    const title = document.createElement('div')
+    title.className = 'run-item-title'
+    title.textContent = run.displayName || `${run.kind} (${run.id})`
+    main.appendChild(title)
+
+    const meta = document.createElement('div')
+    meta.className = 'run-item-meta'
+    const currentTask = run.currentTaskId ? `Current: ${getTaskName(run.currentTaskId)}` : 'Current: idle'
+    meta.innerHTML = `<span class="run-status ${run.status}">${run.status}</span><span>${run.kind}</span><span>${getRunProgressLabel(run)}</span><span>${currentTask}</span>`
+    main.appendChild(meta)
+
+    if (run.errorMessage) {
+      const error = document.createElement('div')
+      error.className = 'run-item-error'
+      error.textContent = run.errorMessage
+      main.appendChild(error)
+    }
+
+    const actions = document.createElement('div')
+    actions.className = 'run-item-actions'
+
+    if (run.status === 'running' || run.status === 'stopping') {
+      const pauseBtn = document.createElement('sl-button')
+      pauseBtn.size = 'small'
+      pauseBtn.textContent = 'Pause'
+      pauseBtn.disabled = run.status === 'stopping'
+      pauseBtn.onclick = () => pauseRun(run.id)
+      actions.appendChild(pauseBtn)
+
+      const stopBtn = document.createElement('sl-button')
+      stopBtn.size = 'small'
+      stopBtn.variant = 'danger'
+      stopBtn.textContent = 'Stop'
+      stopBtn.disabled = run.status === 'stopping'
+      stopBtn.onclick = () => stopRun(run.id)
+      actions.appendChild(stopBtn)
+    }
+
+    if (run.status === 'paused') {
+      const resumeBtn = document.createElement('sl-button')
+      resumeBtn.size = 'small'
+      resumeBtn.variant = 'success'
+      resumeBtn.textContent = 'Resume'
+      resumeBtn.onclick = () => resumeRun(run.id)
+      actions.appendChild(resumeBtn)
+
+      const stopBtn = document.createElement('sl-button')
+      stopBtn.size = 'small'
+      stopBtn.variant = 'danger'
+      stopBtn.textContent = 'Stop'
+      stopBtn.onclick = () => stopRun(run.id)
+      actions.appendChild(stopBtn)
+    }
+
+    item.appendChild(main)
+    item.appendChild(actions)
+    body.appendChild(item)
+  }
+}
+
+async function refreshBonSummaries(taskIds) {
+  const targetTaskIds = Array.isArray(taskIds)
+    ? taskIds
+    : allTasks.filter((t) => t.executionStrategy === 'best_of_n').map((t) => t.id)
+
+  if (targetTaskIds.length === 0) {
+    bonSummaryByTask = {}
+    return
+  }
+
+  const uniqueTaskIds = [...new Set(targetTaskIds)]
+  const updates = await Promise.all(uniqueTaskIds.map(async (taskId) => {
+    try {
+      const summary = await api(`/api/tasks/${taskId}/best-of-n-summary`)
+      return { taskId, summary }
+    } catch (e) {
+      addLogEntry(`Failed to refresh best-of-n summary for ${taskId}: ${e.message}`, 'error')
+      return { taskId, summary: null }
+    }
+  }))
+
+  const next = { ...bonSummaryByTask }
+  for (const update of updates) {
+    if (update.summary) {
+      next[update.taskId] = update.summary
+    }
+  }
+  bonSummaryByTask = next
+}
+
+async function loadOptions() {
+  try {
+    allOptions = await api('/api/options')
+    const showGraphCheckbox = document.getElementById('showGraphChk')
+    if (showGraphCheckbox) {
+      showGraphCheckbox.checked = allOptions.showExecutionGraph !== false
+    }
+    const telegramNotifyCheckbox = document.getElementById('telegramNotifyChk')
+    if (telegramNotifyCheckbox) {
+      telegramNotifyCheckbox.checked = allOptions.telegramNotificationsEnabled !== false
+    }
+  } catch (e) { showToast('Failed to load options: ' + e.message, 'error') }
+}
+
+async function persistShowExecutionGraphPreference() {
+  const checkbox = document.getElementById('showGraphChk')
+  if (!checkbox) return
+  try {
+    allOptions = await api('/api/options', 'PUT', {
+      showExecutionGraph: !!checkbox.checked,
+    })
+  } catch (e) {
+    checkbox.checked = allOptions.showExecutionGraph !== false
+    showToast('Failed to save graph preference: ' + e.message, 'error')
+  }
+}
+
+async function persistTelegramNotificationPreference() {
+  const checkbox = document.getElementById('telegramNotifyChk')
+  if (!checkbox) return
+  try {
+    allOptions = await api('/api/options', 'PUT', {
+      telegramNotificationsEnabled: !!checkbox.checked,
+    })
+  } catch (e) {
+    checkbox.checked = allOptions.telegramNotificationsEnabled !== false
+    showToast('Failed to save telegram preference: ' + e.message, 'error')
+  }
+}
+
+async function loadBranches() {
+  try {
+    const data = await api('/api/branches')
+    if (data.error) {
+      availableBranches = []
+      showToast('Failed to load branches: ' + data.error, 'error')
+      return
+    }
+    const branches = Array.isArray(data.branches) ? data.branches.filter(Boolean) : []
+    currentGitBranch = typeof data.current === 'string' && data.current ? data.current : null
+    if (currentGitBranch && !branches.includes(currentGitBranch)) branches.unshift(currentGitBranch)
+    availableBranches = branches
+  } catch (e) {
+    availableBranches = []
+    showToast('Failed to load branches: ' + e.message, 'error')
+  }
+}
+
+async function loadModels() {
+  try {
+    const data = await api('/api/models')
+    if (data.error) {
+      showToast('Failed to load models: ' + data.error, 'error')
+      modelCatalog = { providers: [] }
+      rebuildModelSearchIndex()
+      window.dispatchEvent(new Event('easyworkflow:model-catalog-updated'))
+      return
+    }
+    // Handle warning (e.g., OpenCode server still initializing)
+    if (data.warning) {
+      console.warn('[Kanban] Model catalog warning:', data.warning)
+      modelCatalog = { providers: data.providers || [], defaults: data.defaults || {} }
+      rebuildModelSearchIndex()
+      window.dispatchEvent(new Event('easyworkflow:model-catalog-updated'))
+      // Show info toast instead of error - models will load when ready
+      showToast(data.warning, 'info')
+      return
+    }
+    modelCatalog = data
+    rebuildModelSearchIndex()
+    window.dispatchEvent(new Event('easyworkflow:model-catalog-updated'))
+  } catch (e) {
+    modelCatalog = { providers: [] }
+    rebuildModelSearchIndex()
+    window.dispatchEvent(new Event('easyworkflow:model-catalog-updated'))
+    showToast('Failed to load models: ' + e.message, 'error')
+  }
+}
+
+function rebuildModelSearchIndex() {
+  const entries = [{
+    value: 'default',
+    label: 'default',
+    providerId: 'default',
+    providerName: 'default',
+    labelWithProvider: 'default',
+  }]
+  for (const provider of modelCatalog?.providers || []) {
+    for (const model of provider.models || []) {
+      if (!model || !model.value) continue
+      const providerName = provider.name || provider.id || ''
+      const label = model.label || model.value
+      entries.push({
+        value: model.value,
+        label,
+        providerId: provider.id || providerName || 'unknown',
+        providerName,
+        labelWithProvider: providerName ? `${label} (${providerName})` : label,
+      })
+    }
+  }
+  modelSearchIndex = entries
+  if (typeof Fuse === 'function') {
+    modelFuse = new Fuse(entries, {
+      includeScore: true,
+      threshold: 0.4,
+      ignoreLocation: true,
+      keys: ['value', 'label', 'providerId', 'providerName', 'labelWithProvider'],
+    })
+  } else {
+    modelFuse = null
+  }
+}
+
+function getModelSuggestions(query, limit = 12) {
+  const q = (query || '').trim()
+  if (!q) return modelSearchIndex.slice(0, limit)
+  if (modelFuse) {
+    return modelFuse.search(q, { limit }).map(result => result.item)
+  }
+  const lower = q.toLowerCase()
+  return modelSearchIndex
+    .filter(model => model.labelWithProvider.toLowerCase().includes(lower) || model.value.toLowerCase().includes(lower))
+    .slice(0, limit)
+}
+
+function normalizeModelInputValue(rawValue) {
+  const value = (rawValue || '').trim()
+  if (!value) return 'default'
+
+  const exactValue = modelSearchIndex.find(model => model.value.toLowerCase() === value.toLowerCase())
+  if (exactValue) return exactValue.value
+
+  const exactLabel = modelSearchIndex.find(model => model.label.toLowerCase() === value.toLowerCase())
+  if (exactLabel) return exactLabel.value
+
+  if (modelFuse) {
+    const [topMatch] = modelFuse.search(value, { limit: 1 })
+    if (topMatch && typeof topMatch.score === 'number' && topMatch.score <= 0.2) {
+      return topMatch.item.value
+    }
+  }
+  return value
+}
+
+function resetModelInput(inputId, selectedValue) {
+  const input = document.getElementById(inputId)
+  if (!input) return
+  input.value = selectedValue || 'default'
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
+window.modelPicker = function modelPicker(inputId) {
+  return {
+    query: 'default',
+    matches: [],
+    attach() {
+      const input = document.getElementById(inputId)
+      this.query = (input?.value || 'default').trim() || 'default'
+      this.refreshSuggestions()
+      window.addEventListener('easyworkflow:model-catalog-updated', () => {
+        this.refreshSuggestions()
+      })
+    },
+    refreshSuggestions() {
+      this.matches = getModelSuggestions(this.query)
+    },
+    commit() {
+      this.query = normalizeModelInputValue(this.query)
+      this.refreshSuggestions()
+    },
+  }
+}
+
+function addLogEntry(message, variant = 'info') {
+  const ts = new Date().toLocaleTimeString()
+  eventLogs.push({ ts, message, variant })
+  if (eventLogs.length > MAX_LOG_ENTRIES) eventLogs = eventLogs.slice(-MAX_LOG_ENTRIES)
+  renderLogs()
+}
+
+function renderLogs() {
+  const container = document.getElementById('eventLog')
+  container.innerHTML = ''
+  for (const entry of eventLogs) {
+    const line = document.createElement('div')
+    line.className = `log-item ${entry.variant}`
+    line.textContent = `[${entry.ts}] ${entry.message}`
+    container.appendChild(line)
+  }
+  container.scrollTop = container.scrollHeight
+}
+
+function clearLogs() {
+  eventLogs = []
+  renderLogs()
+}
+
+const LOG_PANEL_STORAGE_KEY = 'easy-workflow:log-panel-collapsed'
+let logPanelCollapsed = true
+
+function toggleLogPanel() {
+  const panel = document.getElementById('logPanel')
+  const toggle = document.getElementById('logPanelToggle')
+  logPanelCollapsed = !logPanelCollapsed
+  if (logPanelCollapsed) {
+    panel.classList.add('collapsed')
+    toggle.setAttribute('name', 'chevron-expand')
+  } else {
+    panel.classList.remove('collapsed')
+    toggle.setAttribute('name', 'chevron-contract')
+  }
+  localStorage.setItem(LOG_PANEL_STORAGE_KEY, logPanelCollapsed ? '1' : '0')
+  updateToastPosition()
+}
+
+function initLogPanel() {
+  const stored = localStorage.getItem(LOG_PANEL_STORAGE_KEY)
+  if (stored === null) {
+    // Default to collapsed on first visit
+    logPanelCollapsed = true
+  } else {
+    logPanelCollapsed = stored === '1'
+  }
+  const panel = document.getElementById('logPanel')
+  const toggle = document.getElementById('logPanelToggle')
+  if (logPanelCollapsed) {
+    panel.classList.add('collapsed')
+    toggle.setAttribute('name', 'chevron-expand')
+  } else {
+    panel.classList.remove('collapsed')
+    toggle.setAttribute('name', 'chevron-contract')
+  }
+  updateToastPosition()
+}
+
+function updateToastPosition() {
+  const toastContainer = document.getElementById('toasts')
+  if (!toastContainer) return
+  if (logPanelCollapsed) {
+    toastContainer.style.bottom = '16px'
+  } else {
+    toastContainer.style.bottom = ''
+  }
+}
+
+function getFallbackBranch() {
+  const preferred = allOptions.branch
+  if (preferred && availableBranches.includes(preferred)) return preferred
+  if (currentGitBranch && availableBranches.includes(currentGitBranch)) return currentGitBranch
+  return availableBranches[0] || ''
+}
+
+function populateBranchSelect(selectId, selectedBranch) {
+  const select = document.getElementById(selectId)
+  if (!select) return
+  const branches = availableBranches.filter(Boolean)
+  const desired = selectedBranch && branches.includes(selectedBranch)
+    ? selectedBranch
+    : getFallbackBranch()
+
+  select.innerHTML = ''
+  if (branches.length === 0) {
+    const opt = document.createElement('sl-option')
+    opt.value = ''
+    opt.textContent = 'No branches found'
+    select.appendChild(opt)
+    select.value = ''
+    return
+  }
+
+  for (const branch of branches) {
+    const opt = document.createElement('sl-option')
+    opt.value = branch
+    opt.textContent = branch
+    select.appendChild(opt)
+  }
+  select.value = desired || branches[0]
+}
+
+const MODAL_CLOSE_HANDLERS = {
+  taskModal: closeTaskModal,
+  optionsModal: closeOptionsModal,
+  graphModal: closeGraphModal,
+  approveModal: closeApproveModal,
+  revisionModal: closeRevisionModal,
+  startSingleModal: closeStartSingleModal,
+  bonDetailModal: closeBonDetailModal,
+}
+
+function getOpenModalIds() {
+  return Object.keys(MODAL_CLOSE_HANDLERS).filter((id) => {
+    const el = document.getElementById(id)
+    return el && !el.classList.contains('hidden')
+  })
+}
+
+function closeTopmostModal() {
+  const openIds = getOpenModalIds()
+  const topmostId = openIds[openIds.length - 1]
+  if (!topmostId) return false
+  MODAL_CLOSE_HANDLERS[topmostId]?.()
+  return true
+}
+
+function attachModalOverlayHandlers() {
+  for (const overlay of document.querySelectorAll('.modal-overlay[data-close-on-overlay="true"]')) {
+    overlay.addEventListener('mousedown', (event) => {
+      if (event.target !== overlay) return
+      const close = MODAL_CLOSE_HANDLERS[overlay.id]
+      if (typeof close === 'function') close()
+    })
+  }
+}
+
+function logTaskTransition(prevTask, nextTask) {
+  if (!prevTask || prevTask.status !== nextTask.status) {
+    if (nextTask.status === 'executing') addLogEntry(`Task started: ${nextTask.name}`)
+    if (nextTask.status === 'done') addLogEntry(`Task completed: ${nextTask.name}`, 'success')
+    if (nextTask.status === 'failed' || nextTask.status === 'stuck') {
+      const suffix = nextTask.errorMessage ? ` - ${nextTask.errorMessage}` : ''
+      addLogEntry(`Task failed: ${nextTask.name}${suffix}`, 'error')
+    }
+  }
+}
+
+// ---- WebSocket ----
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  ws = new WebSocket(`${proto}//${location.host}/ws`)
+  ws.onopen = () => {
+    document.getElementById('connStatus').className = 'conn-status connected'
+    addLogEntry('WebSocket connected')
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+  }
+  ws.onclose = () => {
+    document.getElementById('connStatus').className = 'conn-status disconnected'
+    addLogEntry('WebSocket disconnected', 'error')
+    reconnectTimer = setTimeout(connectWS, 2000)
+  }
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data)
+    switch (msg.type) {
+      case 'task_created':
+        allTasks.push(msg.payload)
+        addLogEntry(`Task created: ${msg.payload.name}`)
+        renderBoard()
+        break
+      case 'task_updated':
+        const previous = allTasks.find(t => t.id === msg.payload.id)
+        const ui = allTasks.findIndex(t => t.id === msg.payload.id)
+        if (ui >= 0) allTasks[ui] = msg.payload; else allTasks.push(msg.payload)
+        logTaskTransition(previous, msg.payload)
+        if (msg.payload.executionStrategy === 'best_of_n') {
+          refreshBonSummaries([msg.payload.id]).finally(() => renderBoard())
+        } else {
+          renderBoard()
+        }
+        break
+      case 'task_deleted':
+        addLogEntry(`Task deleted: ${allTasks.find(t => t.id === msg.payload.id)?.name || msg.payload.id}`)
+        delete bonSummaryByTask[msg.payload.id]
+        allTasks = allTasks.filter(t => t.id !== msg.payload.id); renderBoard(); break
+      case 'task_archived':
+        addLogEntry(`Task archived: ${allTasks.find(t => t.id === msg.payload.id)?.name || msg.payload.id}`)
+        delete bonSummaryByTask[msg.payload.id]
+        allTasks = allTasks.filter(t => t.id !== msg.payload.id); renderBoard(); break
+      case 'task_reordered': addLogEntry('Task order updated'); loadTasks(); break
+      case 'options_updated': addLogEntry('Options updated'); loadOptions(); break
+      case 'execution_started': loadRuns(); break
+      case 'execution_stopped': loadRuns(); break
+      case 'execution_complete': loadRuns(); break
+      case 'run_created':
+      case 'run_updated': {
+        const index = allRuns.findIndex((run) => run.id === msg.payload.id)
+        if (index >= 0) allRuns[index] = msg.payload
+        else allRuns.unshift(msg.payload)
+        renderRunPanel()
+        renderBoard()
+        updateStartBtn()
+        break
+      }
+      case 'agent_output':
+        const t = allTasks.find(t2 => t2.id === msg.payload.taskId)
+        if (t) { t.agentOutput = (t.agentOutput || '') + msg.payload.output; renderBoard() }
+        break
+      case 'error': showToast(msg.payload.message, 'error'); break
+      case 'plan_revision_requested':
+        loadTasks()
+        break
+      case 'task_run_created':
+      case 'task_run_updated':
+      case 'task_candidate_created':
+      case 'task_candidate_updated':
+        if (msg.payload?.taskId) {
+          refreshBonSummaries([msg.payload.taskId]).finally(() => renderBoard())
+        }
+        break
+    }
+  }
+}
+
+function updateStartBtn() {
+  const btn = document.getElementById('startBtn')
+  const limit = allOptions.parallelTasks || 1
+  const consumed = getConsumedRunSlots()
+  btn.textContent = `Start Workflow (${consumed}/${limit})`
+  btn.variant = 'success'
+}
+
+function isTaskMutationLocked(task) {
+  return !!getTaskRunLock(task.id)
+}
+
+function hasPlanOutput(task) {
+  return /\[plan\]\s*[\s\S]*?(?=\n\[[a-z0-9-]+\]|$)/.test(task.agentOutput || '')
+}
+
+function isAnomalousReviewTask(task) {
+  return task.status === 'review'
+    && task.awaitingPlanApproval !== true
+    && task.executionStrategy !== 'best_of_n'
+    && !!(task.agentOutput && task.agentOutput.trim())
+}
+
+function isOrphanExecutingTask(task) {
+  return !getTaskRunLock(task.id) && task.status === 'executing'
+}
+
+function canSendTaskToExecution(task) {
+  return task.planmode === true
+    && hasPlanOutput(task)
+    && task.executionPhase !== 'implementation_done'
+    && (task.status === 'review' || task.status === 'executing' || task.status === 'failed' || task.status === 'stuck')
+}
+
+function canRepairTaskToDone(task) {
+  return task.status !== 'done'
+    && task.executionStrategy !== 'best_of_n'
+    && task.awaitingPlanApproval !== true
+    && !!(task.agentOutput && task.agentOutput.trim())
+}
+
+// ---- Rendering ----
+function renderBoard() {
+  const groups = { template: [], backlog: [], executing: [], review: [], done: [] }
+  for (const t of allTasks) {
+    if (t.status === 'template') groups.template.push(t)
+    else if (t.status === 'backlog') groups.backlog.push(t)
+    else if (t.status === 'executing') groups.executing.push(t)
+    else if (t.status === 'review') groups.review.push(t)
+    else if (t.status === 'done') groups.done.push(t)
+    else if (t.status === 'failed' || t.status === 'stuck') groups.review.push(t)
+  }
+  for (const [status, tasks] of Object.entries(groups)) {
+    if (status === 'done') {
+      // Sort done tasks by most recently completed first
+      tasks.sort((a, b) => {
+        // Primary: completedAt descending (most recent first)
+        const aCompleted = a.completedAt ?? 0
+        const bCompleted = b.completedAt ?? 0
+        if (bCompleted !== aCompleted) return bCompleted - aCompleted
+        // Fallback: updatedAt descending
+        const aUpdated = a.updatedAt ?? 0
+        const bUpdated = b.updatedAt ?? 0
+        if (bUpdated !== aUpdated) return bUpdated - aUpdated
+        // Fallback: idx ascending (legacy/repaired tasks)
+        return a.idx - b.idx
+      })
+    } else {
+      tasks.sort((a, b) => a.idx - b.idx)
+    }
+  }
+  for (const status of ['template', 'backlog', 'executing', 'review', 'done']) {
+    document.getElementById(`count-${status}`).textContent = groups[status].length
+    const col = document.getElementById(`col-${status}`)
+    col.innerHTML = ''
+    for (const task of groups[status]) {
+      col.appendChild(renderCard(task, status))
+    }
+    if (status === 'template' || status === 'backlog') {
+      if (status === 'template') {
+        const btn = document.createElement('sl-icon-button')
+        btn.className = 'add-task-btn'
+        btn.setAttribute('name', 'file-text')
+        btn.setAttribute('title', 'Add Template')
+        btn.setAttribute('aria-label', 'Add Template')
+        btn.onclick = () => openTemplateTaskModal()
+        col.appendChild(btn)
+      } else {
+        const btn = document.createElement('button')
+        btn.className = 'add-task-btn'
+        btn.textContent = '+ Add Task'
+        btn.onclick = () => openTaskModal()
+        col.appendChild(btn)
+      }
+    }
+    if (status === 'done') {
+      const btn = document.createElement('button')
+      btn.className = 'archive-all-btn'
+      btn.textContent = 'Archive All'
+      btn.onclick = () => archiveAllDone()
+      col.appendChild(btn)
+    }
+  }
+}
+
+function renderCard(task, colStatus) {
+  const card = document.createElement('div')
+  card.className = 'card'
+  card.dataset.id = task.id
+
+  if (colStatus === 'backlog') {
+    card.draggable = !isTaskMutationLocked(task)
+    card.ondragstart = (e) => { dragTaskId = task.id; card.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move' }
+    card.ondragend = () => { card.classList.remove('dragging'); dragTaskId = null }
+  }
+
+  // Header
+  const header = document.createElement('div')
+  header.className = 'card-header'
+
+  const title = task.sessionUrl && colStatus !== 'backlog' && colStatus !== 'template'
+    ? document.createElement('a')
+    : document.createElement('span')
+  title.className = 'card-title'
+  title.textContent = task.name
+  title.dataset.tooltip = task.name
+  if (task.sessionUrl && colStatus !== 'backlog' && colStatus !== 'template') {
+    title.href = task.sessionUrl
+    title.target = '_blank'
+    title.rel = 'noopener noreferrer'
+    title.classList.add('has-session')
+  }
+  header.appendChild(title)
+
+  const idx = document.createElement('span')
+  idx.className = 'card-idx'
+  idx.textContent = `#${task.idx + 1}`
+  header.appendChild(idx)
+
+  if (task.status === 'executing') {
+    const spinner = document.createElement('span')
+    spinner.className = 'spinner'
+    header.insertBefore(spinner, title)
+  }
+  if (task.status === 'review' && task.reviewActivity === 'running') {
+    const spinner = document.createElement('span')
+    spinner.className = 'spinner'
+    header.insertBefore(spinner, title)
+    const label = document.createElement('span')
+    label.style.cssText = 'font-size:10px;color:var(--accent);margin-right:4px;'
+    label.textContent = 'reviewing'
+    header.insertBefore(label, spinner)
+  }
+  if (task.status === 'stuck') {
+    const att = document.createElement('span')
+    att.className = 'attention'
+    att.textContent = '\u26A0'
+    header.appendChild(att)
+  }
+
+  // Actions
+  const actions = document.createElement('div')
+  actions.className = 'card-actions'
+
+  const editBtn = document.createElement('button')
+  editBtn.textContent = '\u270F'
+  editBtn.title = task.status === 'template'
+    ? 'Edit Template'
+    : (task.status === 'backlog' ? 'Edit Task' : 'View Task')
+  editBtn.onclick = () => openTaskModal(task.id)
+  actions.appendChild(editBtn)
+
+  if (task.status === 'template') {
+    const deployBtn = document.createElement('button')
+    deployBtn.className = 'action-text'
+    deployBtn.textContent = 'Deploy'
+    deployBtn.title = 'Deploy to Backlog'
+    deployBtn.onclick = () => openTemplateDeployModal(task.id)
+    actions.appendChild(deployBtn)
+  }
+  
+  const showInlineActionBar = !isTaskMutationLocked(task) && (task.status === 'review' || task.status === 'executing' || task.status === 'failed' || task.status === 'stuck')
+
+  // Reset to backlog (stuck, failed, done, review)
+  if (!showInlineActionBar && !isTaskMutationLocked(task) && (task.status === 'stuck' || task.status === 'failed' || task.status === 'done' || task.status === 'review')) {
+    const resetBtn = document.createElement('button')
+    resetBtn.textContent = '\u21BB'
+    resetBtn.title = 'Reset to Backlog'
+    resetBtn.onclick = () => resetTask(task.id)
+    actions.appendChild(resetBtn)
+  }
+  
+  // Archive button (not while executing, but always for done tasks)
+  if (!showInlineActionBar && (((!isTaskMutationLocked(task) && task.status !== 'executing')) || task.status === 'done')) {
+    const delBtn = document.createElement('button')
+    delBtn.textContent = '\u2715'
+    delBtn.title = 'Archive Task'
+    delBtn.onclick = () => archiveTask(task.id)
+    actions.appendChild(delBtn)
+  }
+  
+  // Mark Done for stuck tasks
+  if (task.status === 'stuck') {
+    const doneBtn = document.createElement('button')
+    doneBtn.textContent = '\u2713'
+    doneBtn.title = 'Mark as Done'
+    doneBtn.style.color = 'var(--green)'
+    doneBtn.onclick = () => markStuckDone(task.id)
+    actions.appendChild(doneBtn)
+  }
+
+  if (!isTaskMutationLocked(task) && isAnomalousReviewTask(task)) {
+    const doneBtn = document.createElement('button')
+    doneBtn.textContent = '\u2713'
+    doneBtn.title = 'Mark as Done'
+    doneBtn.style.color = 'var(--green)'
+    doneBtn.onclick = () => markReviewDone(task.id)
+    actions.appendChild(doneBtn)
+  }
+
+  // Start single task button for backlog tasks
+  if (task.status === 'backlog' && !getTaskRunLock(task.id)) {
+    const startBtn = document.createElement('button')
+    startBtn.textContent = '\u25B6'
+    startBtn.title = 'Start this task and its dependencies'
+    startBtn.style.color = 'var(--green)'
+    startBtn.onclick = () => openStartSingleModal(task.id, task.name)
+    actions.appendChild(startBtn)
+  }
+
+  // Convert to template for backlog tasks
+  if (task.status === 'backlog' && !isTaskMutationLocked(task)) {
+    const templateBtn = document.createElement('button')
+    templateBtn.className = 'action-text'
+    templateBtn.textContent = '\u{1F4D6}'
+    templateBtn.title = 'Convert to Template'
+    templateBtn.onclick = () => convertTaskToTemplate(task.id)
+    actions.appendChild(templateBtn)
+  }
+
+  card.appendChild(header)
+  card.appendChild(actions)
+
+  // Meta badges
+  const meta = document.createElement('div')
+  meta.className = 'card-meta'
+  if (task.planmode) {
+    const b = document.createElement('span')
+    b.className = 'badge badge-plan'
+    b.textContent = 'plan'
+    meta.appendChild(b)
+  }
+  if (task.status === 'review' && task.awaitingPlanApproval && task.executionPhase === 'plan_complete_waiting_approval') {
+    const b = document.createElement('span')
+    b.className = 'badge badge-approval'
+    b.textContent = 'plan approval pending'
+    meta.appendChild(b)
+  }
+  if (task.planRevisionCount > 0) {
+    const b = document.createElement('span')
+    b.className = 'badge badge-warning'
+    b.textContent = `revision ${task.planRevisionCount}`
+    meta.appendChild(b)
+  }
+  if (task.status === 'template') {
+    const b = document.createElement('span')
+    b.className = 'badge badge-template'
+    b.textContent = 'template'
+    meta.appendChild(b)
+  }
+  if (task.review) {
+    const b = document.createElement('span')
+    const effectiveMax = task.maxReviewRunsOverride ?? allOptions.maxReviews ?? 2
+    const isNearLimit = task.reviewCount >= effectiveMax - 1
+    const isAtLimit = task.reviewCount >= effectiveMax
+    if (task.status === 'stuck' || isAtLimit) {
+      b.className = 'badge badge-review-warn'
+      b.textContent = `review ${task.reviewCount}/${effectiveMax}`
+    } else if (isNearLimit) {
+      b.className = 'badge badge-warning'
+      b.textContent = `review ${task.reviewCount}/${effectiveMax}`
+    } else {
+      b.className = 'badge badge-review'
+      b.textContent = `review ${task.reviewCount}/${effectiveMax}`
+    }
+    meta.appendChild(b)
+  }
+  if (task.status === 'review' && task.reviewActivity === 'idle' && !task.awaitingPlanApproval) {
+    const b = document.createElement('span')
+    b.className = 'badge'
+    b.style.background = 'rgba(139,92,246,.15)'
+    b.style.color = '#c4b5fd'
+    b.textContent = 'waiting for human'
+    meta.appendChild(b)
+  }
+  // Safely build numeric dependency badge - handle missing/undefined requirements and orphaned refs
+  const depIds = (task.requirements || [])
+    .map(id => allTasks.find(t => t.id === id))
+    .filter(dep => dep && typeof dep.idx === 'number')
+    .map(dep => `#${dep.idx + 1}`)
+  if (depIds.length > 0) {
+    const b = document.createElement('span')
+    b.className = 'badge badge-dep'
+    b.textContent = `deps: ${depIds.join(', ')}`
+    meta.appendChild(b)
+  }
+  if (task.errorMessage) {
+    const b = document.createElement('span')
+    b.className = 'badge badge-stuck'
+    b.textContent = 'error'
+    meta.appendChild(b)
+  }
+  if (task.branch) {
+    const b = document.createElement('span')
+    b.className = 'badge'
+    b.textContent = `branch: ${task.branch}`
+    meta.appendChild(b)
+  }
+  if (task.thinkingLevel && task.thinkingLevel !== 'default') {
+    const b = document.createElement('span')
+    b.className = 'badge'
+    b.textContent = `thinking: ${task.thinkingLevel}`
+    meta.appendChild(b)
+  }
+  if (task.deleteWorktree === false) {
+    const b = document.createElement('span')
+    b.className = 'badge'
+    b.textContent = 'keep worktree'
+    meta.appendChild(b)
+  }
+  if (task.executionStrategy === 'best_of_n') {
+    const bonSummary = bonSummaryByTask[task.id] || null
+    const b = document.createElement('span')
+    b.className = 'badge badge-bestofn'
+    b.textContent = 'best-of-n'
+    meta.appendChild(b)
+    if (task.bestOfNSubstage && task.bestOfNSubstage !== 'idle') {
+      const stageMap = {
+        'workers_running': 'workers running',
+        'reviewers_running': 'reviewers running',
+        'final_apply_running': 'final apply',
+        'blocked_for_manual_review': 'manual review',
+        'completed': 'completed',
+      }
+      const b2 = document.createElement('span')
+      b2.className = 'badge badge-' + (task.bestOfNSubstage === 'completed' ? 'final' : 'workers')
+      b2.textContent = stageMap[task.bestOfNSubstage] || task.bestOfNSubstage
+      meta.appendChild(b2)
+    }
+    if (bonSummary) {
+      const b3 = document.createElement('span')
+      b3.className = 'badge badge-workers'
+      b3.textContent = `workers ${bonSummary.workersDone}/${bonSummary.workersTotal}`
+      meta.appendChild(b3)
+
+      const b4 = document.createElement('span')
+      b4.className = 'badge badge-reviewers'
+      b4.textContent = `reviewers ${bonSummary.reviewersDone}/${bonSummary.reviewersTotal}`
+      meta.appendChild(b4)
+    } else {
+      if (task.bestOfNConfig?.workers) {
+        const totalWorkers = task.bestOfNConfig.workers.reduce((sum, w) => sum + w.count, 0)
+        const b3 = document.createElement('span')
+        b3.className = 'badge badge-workers'
+        b3.textContent = `workers ${totalWorkers}`
+        meta.appendChild(b3)
+      }
+      if (task.bestOfNConfig?.reviewers?.length > 0) {
+        const totalReviewers = task.bestOfNConfig.reviewers.reduce((sum, r) => sum + r.count, 0)
+        const b4 = document.createElement('span')
+        b4.className = 'badge badge-reviewers'
+        b4.textContent = `reviewers ${totalReviewers}`
+        meta.appendChild(b4)
+      }
+    }
+  }
+  if (task.executionStrategy === 'best_of_n' && task.status !== 'template' && task.status !== 'backlog') {
+    const viewRunsBtn = document.createElement('button')
+    viewRunsBtn.className = 'btn btn-sm'
+    viewRunsBtn.textContent = 'View Runs'
+    viewRunsBtn.style.marginTop = '4px'
+    viewRunsBtn.onclick = (e) => {
+      e.stopPropagation()
+      openBestOfNDetailModal(task.id)
+    }
+    card.appendChild(viewRunsBtn)
+  }
+  if (meta.children.length > 0) card.appendChild(meta)
+
+  if (task.status === 'review' && task.awaitingPlanApproval && task.executionPhase === 'plan_complete_waiting_approval' && !hasPlanOutput(task)) {
+    const note = document.createElement('div')
+    note.className = 'card-note'
+    note.textContent = 'Plan approval is unavailable because no captured [plan] block exists. Use Smart Repair or Reset.'
+    card.appendChild(note)
+  }
+
+  if (isOrphanExecutingTask(task)) {
+    const note = document.createElement('div')
+    note.className = 'card-note'
+    note.textContent = 'OpenCode session may have dropped. Click on card title to verify, no action is needed if the session is still active, otherwise use Send to Exec, Repair Done, Smart Repair, or Reset.'
+    card.appendChild(note)
+  }
+
+  if (showInlineActionBar) {
+    const actionBar = document.createElement('div')
+    actionBar.className = 'card-inline-actions'
+
+    if (task.status === 'review' && task.awaitingPlanApproval && task.executionPhase === 'plan_complete_waiting_approval' && hasPlanOutput(task)) {
+      const approvePlanBtn = document.createElement('button')
+      approvePlanBtn.className = 'btn btn-sm btn-primary'
+      approvePlanBtn.textContent = 'Approve Plan'
+      approvePlanBtn.onclick = () => approvePlan(task.id)
+      actionBar.appendChild(approvePlanBtn)
+
+      const requestChangesBtn = document.createElement('button')
+      requestChangesBtn.className = 'btn btn-sm'
+      requestChangesBtn.textContent = 'Request Changes'
+      requestChangesBtn.style.borderColor = 'var(--orange)'
+      requestChangesBtn.style.color = 'var(--orange)'
+      requestChangesBtn.onclick = () => openRevisionModal(task.id)
+      actionBar.appendChild(requestChangesBtn)
+    }
+
+    if (task.status === 'review' && isAnomalousReviewTask(task)) {
+      const doneBtn = document.createElement('button')
+      doneBtn.className = 'btn btn-sm btn-primary'
+      doneBtn.textContent = 'Mark Done'
+      doneBtn.onclick = () => markReviewDone(task.id)
+      actionBar.appendChild(doneBtn)
+    }
+
+    if (canSendTaskToExecution(task)) {
+      const resumeBtn = document.createElement('button')
+      resumeBtn.className = 'btn btn-sm btn-primary'
+      resumeBtn.textContent = 'Send to Execution'
+      resumeBtn.onclick = () => repairTaskState(task.id, 'queue_implementation')
+      actionBar.appendChild(resumeBtn)
+    }
+
+    if (canRepairTaskToDone(task) && task.status !== 'stuck') {
+      const doneRepairBtn = document.createElement('button')
+      doneRepairBtn.className = 'btn btn-sm'
+      doneRepairBtn.textContent = 'Repair Done'
+      doneRepairBtn.onclick = () => repairTaskState(task.id, 'mark_done')
+      actionBar.appendChild(doneRepairBtn)
+    }
+
+    const smartRepairBtn = document.createElement('button')
+    smartRepairBtn.className = 'btn btn-sm'
+    smartRepairBtn.textContent = 'Smart Repair'
+    smartRepairBtn.onclick = () => repairTaskState(task.id, 'smart')
+    actionBar.appendChild(smartRepairBtn)
+
+    if (task.status === 'stuck') {
+      // Check if this looks like a review-limit-exceeded stuck state
+      const isReviewStuck = task.errorMessage && task.errorMessage.includes('Max reviews')
+      const continueBtn = document.createElement('button')
+      continueBtn.className = 'btn btn-sm btn-success'
+      continueBtn.textContent = 'Continue with More Reviews'
+      continueBtn.onclick = () => continueWithMoreReviews(task.id)
+      actionBar.appendChild(continueBtn)
+
+      const doneBtn = document.createElement('button')
+      doneBtn.className = 'btn btn-sm btn-primary'
+      doneBtn.textContent = 'Mark Done'
+      doneBtn.onclick = () => markStuckDone(task.id)
+      actionBar.appendChild(doneBtn)
+    }
+
+    card.appendChild(actionBar)
+  }
+
+  // Agent output (collapsible)
+  if (task.agentOutput && (task.status === 'executing' || task.status === 'review' || task.status === 'done' || task.status === 'stuck' || task.status === 'failed')) {
+    const toggle = document.createElement('button')
+    toggle.className = 'output-toggle'
+    toggle.textContent = '\u25B6 Agent Output'
+    const content = document.createElement('div')
+    content.className = 'output-content'
+    content.textContent = task.agentOutput.slice(-5000)
+    toggle.onclick = () => {
+      content.classList.toggle('open')
+      toggle.textContent = content.classList.contains('open') ? '\u25BC Agent Output' : '\u25B6 Agent Output'
+    }
+    card.appendChild(toggle)
+    card.appendChild(content)
+  }
+
+  if (task.completedAt) {
+    const date = document.createElement('div')
+    date.style.cssText = 'font-size:11px;color:var(--text-dim);margin-top:4px;'
+    date.textContent = 'Completed: ' + new Date(task.completedAt * 1000).toLocaleString()
+    card.appendChild(date)
+  }
+
+  return card
+}
+
+// ---- Drag and Drop ----
+function handleDragOver(e) { e.preventDefault(); e.currentTarget.classList.add('drag-over') }
+function handleDragLeave(e) { e.currentTarget.classList.remove('drag-over') }
+async function handleDrop(e, targetStatus) {
+  e.preventDefault()
+  e.currentTarget.classList.remove('drag-over')
+  if (!dragTaskId) return
+
+  const task = allTasks.find(t => t.id === dragTaskId)
+  if (!task) return
+  if (isTaskMutationLocked(task)) {
+    showToast('This task is currently executing and cannot be moved.', 'error')
+    return
+  }
+  
+  // Prevent dropping on same column
+  if (task.status === targetStatus) return
+  
+  // Define allowed transitions
+  const canMoveToDone = ['stuck', 'review'].includes(task.status)
+  const canMoveToBacklog = ['stuck', 'failed', 'done', 'review'].includes(task.status)
+  const canMoveToReview = ['backlog', 'stuck', 'failed'].includes(task.status)
+  
+  try {
+    if (targetStatus === 'done' && canMoveToDone) {
+      if (task.status === 'stuck') {
+        await markStuckDone(task.id)
+      } else {
+        await api(`/api/tasks/${task.id}`, 'PATCH', { 
+          status: 'done', 
+          completedAt: Math.floor(Date.now() / 1000) 
+        })
+        showToast('Task moved to Done', 'success')
+      }
+    } else if (targetStatus === 'backlog' && canMoveToBacklog) {
+      await resetTask(task.id)
+    } else if (targetStatus === 'review' && canMoveToReview) {
+      await api(`/api/tasks/${task.id}`, 'PATCH', { status: 'review' })
+      showToast('Task moved to Review', 'success')
+    } else {
+      showToast(`Cannot move task from ${task.status} to ${targetStatus}`, 'error')
+    }
+    await loadTasks()
+  } catch (e) { 
+    showToast('Move failed: ' + e.message, 'error') 
+  }
+}
+
+// ---- Task CRUD ----
+function openTemplateTaskModal() {
+  openTaskModal(null, { createStatus: 'template' })
+}
+
+function openTemplateDeployModal(taskId) {
+  const templateTask = allTasks.find(t => t.id === taskId)
+  if (!templateTask || templateTask.status !== 'template') return
+  openTaskModal(null, { createStatus: 'backlog', mode: 'deploy', seedTask: templateTask })
+}
+
+function openTaskModal(taskId, options = {}) {
+  const modal = document.getElementById('taskModal')
+  const title = document.getElementById('taskModalTitle')
+  const saveBtn = document.getElementById('taskSaveBtn')
+  const createStatus = options.createStatus === 'template' ? 'template' : 'backlog'
+  const seedTask = options.seedTask || null
+  const explicitMode = options.mode || null
+  let viewOnly = false
+  let currentReqs = []
+  let reqExcludeId = null
+
+  bonWorkers = []
+  bonReviewers = []
+
+  if (taskId) {
+    const task = allTasks.find(t => t.id === taskId)
+    if (!task) return
+    viewOnly = !(task.status === 'backlog' || task.status === 'template')
+    taskModalMode = viewOnly ? 'view' : 'edit'
+    taskModalCreateStatus = task.status === 'template' ? 'template' : 'backlog'
+    title.textContent = viewOnly ? 'View Task' : (task.status === 'template' ? 'Edit Template' : 'Edit Task')
+    document.getElementById('taskId').value = task.id
+    document.getElementById('taskName').value = task.name
+    document.getElementById('taskPrompt').value = task.prompt
+    populateBranchSelect('taskBranch', task.branch || getFallbackBranch())
+    document.getElementById('taskBranch').value = task.branch || getFallbackBranch()
+    resetModelInput('taskPlanModel', task.planModel)
+    resetModelInput('taskExecModel', task.executionModel)
+    document.getElementById('taskPlanmode').checked = task.planmode
+    document.getElementById('taskAutoApprovePlan').checked = task.autoApprovePlan === true
+    document.getElementById('taskReview').checked = task.review
+    document.getElementById('taskAutoCommit').checked = task.autoCommit
+    document.getElementById('taskDeleteWorktree').checked = task.deleteWorktree !== false
+    document.getElementById('taskSkipPermissionAsking').checked = task.skipPermissionAsking === true
+    document.getElementById('taskThinkingLevel').value = task.thinkingLevel || 'default'
+    currentReqs = task.requirements || []
+    reqExcludeId = task.id
+
+    if (task.executionStrategy === 'best_of_n' && task.bestOfNConfig) {
+      document.getElementById('taskExecutionStrategy').value = 'best_of_n'
+      bonWorkers = (task.bestOfNConfig.workers || []).map(w => ({ model: w.model, count: w.count, suffix: w.taskSuffix || '' }))
+      bonReviewers = (task.bestOfNConfig.reviewers || []).map(r => ({ model: r.model, count: r.count, suffix: r.taskSuffix || '' }))
+      if (task.bestOfNConfig.finalApplier) {
+        resetModelInput('bonFinalApplierModel', task.bestOfNConfig.finalApplier.model)
+        document.getElementById('bonFinalApplierSuffix').value = task.bestOfNConfig.finalApplier.taskSuffix || ''
+      }
+      document.getElementById('bonSelectionMode').value = task.bestOfNConfig.selectionMode || 'pick_best'
+      document.getElementById('bonMinSuccessful').value = task.bestOfNConfig.minSuccessfulWorkers || 1
+      document.getElementById('bonVerificationCmd').value = task.bestOfNConfig.verificationCommand || ''
+    } else {
+      document.getElementById('taskExecutionStrategy').value = 'standard'
+      resetModelInput('bonFinalApplierModel', 'default')
+      document.getElementById('bonFinalApplierSuffix').value = ''
+      document.getElementById('bonSelectionMode').value = 'pick_best'
+      document.getElementById('bonMinSuccessful').value = '1'
+      document.getElementById('bonVerificationCmd').value = ''
+    }
+  } else if (seedTask) {
+    taskModalMode = explicitMode || 'deploy'
+    taskModalCreateStatus = createStatus
+    title.textContent = 'Deploy Template'
+    document.getElementById('taskId').value = ''
+    document.getElementById('taskName').value = seedTask.name
+    document.getElementById('taskPrompt').value = seedTask.prompt
+    populateBranchSelect('taskBranch', seedTask.branch || getFallbackBranch())
+    document.getElementById('taskBranch').value = seedTask.branch || getFallbackBranch()
+    resetModelInput('taskPlanModel', seedTask.planModel || 'default')
+    resetModelInput('taskExecModel', seedTask.executionModel || 'default')
+    document.getElementById('taskPlanmode').checked = seedTask.planmode
+    document.getElementById('taskAutoApprovePlan').checked = seedTask.autoApprovePlan === true
+    document.getElementById('taskReview').checked = seedTask.review
+    document.getElementById('taskAutoCommit').checked = seedTask.autoCommit
+    document.getElementById('taskDeleteWorktree').checked = seedTask.deleteWorktree !== false
+    document.getElementById('taskSkipPermissionAsking').checked = seedTask.skipPermissionAsking === true
+    document.getElementById('taskThinkingLevel').value = seedTask.thinkingLevel || 'default'
+    currentReqs = seedTask.requirements || []
+    reqExcludeId = seedTask.id
+    document.getElementById('taskExecutionStrategy').value = 'standard'
+    resetModelInput('bonFinalApplierModel', 'default')
+  } else {
+    taskModalMode = explicitMode || 'create'
+    taskModalCreateStatus = createStatus
+    title.textContent = createStatus === 'template' ? 'Add Template' : 'Add Task'
+    document.getElementById('taskId').value = ''
+    document.getElementById('taskName').value = ''
+    document.getElementById('taskPrompt').value = ''
+    populateBranchSelect('taskBranch', getFallbackBranch())
+    document.getElementById('taskBranch').value = getFallbackBranch()
+    resetModelInput('taskPlanModel', 'default')
+    resetModelInput('taskExecModel', 'default')
+    document.getElementById('taskPlanmode').checked = false
+    document.getElementById('taskAutoApprovePlan').checked = false
+    document.getElementById('taskReview').checked = true
+    document.getElementById('taskAutoCommit').checked = true
+    document.getElementById('taskDeleteWorktree').checked = true
+    document.getElementById('taskSkipPermissionAsking').checked = true
+    document.getElementById('taskThinkingLevel').value = 'default'
+    document.getElementById('taskExecutionStrategy').value = 'standard'
+    resetModelInput('bonFinalApplierModel', 'default')
+    document.getElementById('bonFinalApplierSuffix').value = ''
+    document.getElementById('bonSelectionMode').value = 'pick_best'
+    document.getElementById('bonMinSuccessful').value = '1'
+    document.getElementById('bonVerificationCmd').value = ''
+  }
+
+  renderBonWorkerSlots()
+  renderBonReviewerSlots()
+  updateBonConfigVisibility()
+  document.getElementById('taskExecutionStrategy').onchange = updateBonConfigVisibility
+
+  saveBtn.style.display = viewOnly ? 'none' : ''
+  if (!viewOnly) {
+    saveBtn.textContent = taskModalMode === 'deploy'
+      ? 'Send to Backlog'
+      : (!taskId && taskModalCreateStatus === 'template' ? 'Save Template' : 'Save')
+  }
+
+  setTaskModalReadOnly(viewOnly)
+  renderReqs(reqExcludeId, { readOnly: viewOnly, currentReqs })
+  modal.classList.remove('hidden')
+}
+
+function closeTaskModal() {
+  taskModalMode = 'create'
+  taskModalCreateStatus = 'backlog'
+  document.getElementById('taskModal').classList.add('hidden')
+}
+
+function setTaskModalReadOnly(readOnly) {
+  const body = document.querySelector('#taskModal .modal-body')
+  for (const field of body.querySelectorAll('input, textarea, select')) {
+    if (field.id === 'taskId') continue
+    field.disabled = readOnly
+  }
+}
+
+function renderReqs(excludeId, options = {}) {
+  const readOnly = options.readOnly === true
+  const currentReqs = Array.isArray(options.currentReqs)
+    ? options.currentReqs
+    : (excludeId ? (allTasks.find(t => t.id === excludeId)?.requirements || []) : [])
+  const container = document.getElementById('taskReqs')
+  container.innerHTML = ''
+  const sourceTasks = readOnly
+    ? allTasks.filter(t => t.id !== excludeId)
+    : allTasks.filter(t => t.status === 'backlog' && t.id !== excludeId)
+  if (sourceTasks.length === 0) {
+    container.innerHTML = '<div style="font-size:12px;color:var(--text-dim);padding:4px;">No other tasks</div>'
+    return
+  }
+  for (const t of sourceTasks) {
+    const item = document.createElement('label')
+    item.className = 'req-item'
+    const cb = document.createElement('input')
+    cb.type = 'checkbox'
+    cb.value = t.id
+    cb.checked = currentReqs.includes(t.id)
+    cb.disabled = readOnly
+    item.appendChild(cb)
+    item.appendChild(document.createTextNode(` ${t.name} (#${t.idx + 1})`))
+    container.appendChild(item)
+  }
+}
+
+async function saveTask() {
+  const id = document.getElementById('taskId').value
+  if (id) {
+    const task = allTasks.find(t => t.id === id)
+    if (task && task.status !== 'backlog' && task.status !== 'template') {
+      showToast('Only backlog and template tasks can be edited', 'error')
+      return
+    }
+  }
+
+  const name = document.getElementById('taskName').value.trim()
+  const prompt = document.getElementById('taskPrompt').value.trim()
+  const branch = document.getElementById('taskBranch').value
+  if (!name || !prompt) { showToast('Name and prompt are required', 'error'); return }
+  if (!branch) { showToast('Select a valid branch', 'error'); return }
+
+  const executionStrategy = document.getElementById('taskExecutionStrategy').value || 'standard'
+  
+  if (executionStrategy === 'best_of_n') {
+    const errors = validateBonConfig()
+    if (errors.length > 0) {
+      const errorDiv = document.getElementById('bonValidationErrors')
+      errorDiv.innerHTML = errors.map(e => `<div class="bon-validation-error">${e}</div>`).join('')
+      showToast('Invalid best-of-n configuration: ' + errors.join('; '), 'error')
+      return
+    }
+  }
+
+  const reqs = Array.from(document.querySelectorAll('#taskReqs input:checked')).map(cb => cb.value)
+  const createStatus = taskModalCreateStatus === 'template' ? 'template' : 'backlog'
+  const data = {
+    name,
+    prompt,
+    branch,
+    planModel: normalizeModelInputValue(document.getElementById('taskPlanModel').value),
+    executionModel: normalizeModelInputValue(document.getElementById('taskExecModel').value),
+    planmode: document.getElementById('taskPlanmode').checked,
+    autoApprovePlan: document.getElementById('taskAutoApprovePlan').checked,
+    review: document.getElementById('taskReview').checked,
+    autoCommit: document.getElementById('taskAutoCommit').checked,
+    deleteWorktree: document.getElementById('taskDeleteWorktree').checked,
+    skipPermissionAsking: document.getElementById('taskSkipPermissionAsking').checked,
+    requirements: reqs,
+    thinkingLevel: document.getElementById('taskThinkingLevel').value || 'default',
+    executionStrategy,
+  }
+
+  if (executionStrategy === 'best_of_n') {
+    data.bestOfNConfig = {
+      workers: bonWorkers.map(w => ({ model: w.model, count: w.count || 1, taskSuffix: w.suffix || undefined })),
+      reviewers: bonReviewers.map(r => ({ model: r.model, count: r.count || 1, taskSuffix: r.suffix || undefined })),
+      finalApplier: {
+        model: normalizeModelInputValue(document.getElementById('bonFinalApplierModel').value),
+        taskSuffix: document.getElementById('bonFinalApplierSuffix').value.trim() || undefined,
+      },
+      selectionMode: document.getElementById('bonSelectionMode').value || 'pick_best',
+      minSuccessfulWorkers: parseInt(document.getElementById('bonMinSuccessful').value || '1', 10),
+      verificationCommand: document.getElementById('bonVerificationCmd').value.trim() || undefined,
+    }
+  } else {
+    data.bestOfNConfig = null
+  }
+
+  try {
+    const wasDeploy = !id && taskModalMode === 'deploy'
+    if (id) {
+      await api(`/api/tasks/${id}`, 'PATCH', data)
+    } else {
+      await api('/api/tasks', 'POST', { ...data, status: createStatus })
+    }
+    closeTaskModal()
+    if (wasDeploy) {
+      showToast('Task sent to Backlog', 'success')
+    }
+    await loadTasks()
+  } catch (e) { showToast('Save failed: ' + e.message, 'error') }
+}
+
+async function archiveTask(id) {
+  const task = allTasks.find(t => t.id === id)
+  const taskName = task ? `"${task.name}"` : 'this task'
+  if (!confirm(`Archive ${taskName}? Task history will be preserved.`)) return
+  try {
+    const result = await api(`/api/tasks/${id}`, 'DELETE')
+    await loadTasks()
+    if (result && result.archived) {
+      showToast('Task archived', 'success')
+    } else {
+      showToast('Task deleted', 'success')
+    }
+  } catch (e) { showToast('Archive failed: ' + e.message, 'error') }
+}
+
+async function archiveAllDone() {
+  const doneTasks = allTasks.filter(t => t.status === 'done')
+  if (doneTasks.length === 0) {
+    showToast('No done tasks to archive', 'error')
+    return
+  }
+  if (!confirm(`Archive all ${doneTasks.length} done task(s)? Task history will be preserved.`)) return
+  try {
+    let archived = 0
+    let deleted = 0
+    for (const task of doneTasks) {
+      const result = await api(`/api/tasks/${task.id}`, 'DELETE')
+      if (result && result.archived) {
+        archived++
+      } else {
+        deleted++
+      }
+    }
+    await loadTasks()
+    if (archived > 0 && deleted > 0) {
+      showToast(`Archived ${archived}, deleted ${deleted} task(s)`, 'success')
+    } else if (archived > 0) {
+      showToast('All tasks archived', 'success')
+    } else {
+      showToast('All tasks deleted', 'success')
+    }
+  } catch (e) { showToast('Archive failed: ' + e.message, 'error') }
+}
+
+async function markStuckDone(id) {
+  if (!confirm('Mark this stuck task as done? This will complete the task without further review.')) return
+  try {
+    await api(`/api/tasks/${id}`, 'PATCH', { status: 'done', completedAt: Math.floor(Date.now() / 1000) })
+    await loadTasks()
+    showToast('Task marked as done', 'success')
+  } catch (e) { showToast('Failed: ' + e.message, 'error') }
+}
+
+async function markReviewDone(id) {
+  if (!confirm('Mark this review task as done? Use this when implementation succeeded but task is stuck in review.')) return
+  try {
+    await api(`/api/tasks/${id}`, 'PATCH', {
+      status: 'done',
+      completedAt: Math.floor(Date.now() / 1000),
+      errorMessage: null,
+      awaitingPlanApproval: false,
+    })
+    await loadTasks()
+    showToast('Task marked as done', 'success')
+  } catch (e) { showToast('Failed: ' + e.message, 'error') }
+}
+
+async function repairTaskState(id, action = 'smart') {
+  const verb = action === 'smart' ? 'run Smart Repair on' : `apply ${action} to`
+  if (!confirm(`Repair this task now? This will ${verb} the current task state.`)) return
+  try {
+    const response = await api(`/api/tasks/${id}/repair-state`, 'POST', action === 'smart' ? {} : { action })
+    await loadTasks()
+    const actionLabel = response?.action ? ` (${response.action})` : ''
+    showToast(`Task repaired${actionLabel}`, 'success')
+  } catch (e) { showToast('Repair failed: ' + e.message, 'error') }
+}
+
+async function continueWithMoreReviews(id) {
+  // Fetch current review status
+  let reviewStatus = null
+  try {
+    reviewStatus = await api(`/api/tasks/${id}/review-status`, 'GET')
+  } catch (e) {
+    showToast('Failed to fetch review status: ' + e.message, 'error')
+    return
+  }
+
+  // Create a simple dialog
+  const dialog = document.createElement('div')
+  dialog.style.cssText = `
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center;
+    z-index: 10000;
+  `
+
+  const currentMax = reviewStatus.maxReviewRunsOverride ?? reviewStatus.maxReviewRuns
+  const suggestedCount = Math.max(1, Math.min(5, Math.ceil((currentMax - reviewStatus.reviewCount) / 2) + 1))
+
+  dialog.innerHTML = `
+    <div style="
+      background: var(--bg-secondary, #1e1e2e); border: 1px solid var(--border-color, #3a3a5c);
+      border-radius: 8px; padding: 24px; min-width: 400px; max-width: 500px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    ">
+      <h3 style="margin: 0 0 16px 0; color: var(--text-color, #cdd6f4);">
+        Continue with More Reviews
+      </h3>
+      <p style="margin: 0 0 16px 0; color: var(--text-dim, #6c7086); font-size: 13px;">
+        This task reached its review limit (${reviewStatus.reviewCount}/${currentMax}).
+        Increase the limit and continue execution.
+      </p>
+      <div style="margin-bottom: 16px;">
+        <label style="display: block; margin-bottom: 6px; color: var(--text-color, #cdd6f4); font-size: 13px;">
+          Additional review cycles:
+        </label>
+        <input type="number" id="additionalReviewCount" value="${suggestedCount}" min="1" max="10"
+          style="
+            width: 100%; padding: 8px 12px; border-radius: 4px;
+            border: 1px solid var(--border-color, #3a3a5c);
+            background: var(--bg-primary, #181825); color: var(--text-color, #cdd6f4);
+            font-size: 14px; box-sizing: border-box;
+          "
+        >
+      </div>
+      <div style="margin-bottom: 16px;">
+        <label style="display: block; margin-bottom: 6px; color: var(--text-color, #cdd6f4); font-size: 13px;">
+          Additional instructions for smart repair (optional):
+        </label>
+        <textarea id="smartRepairHints" rows="3" placeholder="Focus on fixing the specific gaps identified in the review..."
+          style="
+            width: 100%; padding: 8px 12px; border-radius: 4px;
+            border: 1px solid var(--border-color, #3a3a5c);
+            background: var(--bg-primary, #181825); color: var(--text-color, #cdd6f4);
+            font-size: 13px; box-sizing: border-box; resize: vertical;
+          "
+        ></textarea>
+      </div>
+      <div style="display: flex; gap: 8px; justify-content: flex-end;">
+        <button id="cancelBtn" style="
+          padding: 8px 16px; border-radius: 4px; border: 1px solid var(--border-color, #3a3a5c);
+          background: transparent; color: var(--text-color, #cdd6f4); cursor: pointer; font-size: 13px;
+        ">Cancel</button>
+        <button id="confirmBtn" style="
+          padding: 8px 16px; border-radius: 4px; border: none;
+          background: #4caf50; color: white; cursor: pointer; font-size: 13px;
+        ">Continue with More Reviews</button>
+      </div>
+    </div>
+  `
+
+  document.body.appendChild(dialog)
+
+  const closeDialog = () => {
+    document.body.removeChild(dialog)
+  }
+
+  dialog.querySelector('#cancelBtn').onclick = closeDialog
+  dialog.onclick = (e) => { if (e.target === dialog) closeDialog() }
+
+  dialog.querySelector('#confirmBtn').onclick = async () => {
+    const additionalCount = parseInt(dialog.querySelector('#additionalReviewCount').value, 10) || 2
+    const smartHints = dialog.querySelector('#smartRepairHints').value.trim()
+
+    closeDialog()
+
+    try {
+      const response = await api(`/api/tasks/${id}/repair-state`, 'POST', {
+        action: 'continue_with_more_reviews',
+        additionalReviewCount: additionalCount,
+        ...(smartHints ? { smartRepairHints: smartHints } : {}),
+      })
+      await loadTasks()
+      showToast(`Review limit increased to ${reviewStatus.reviewCount + additionalCount} and task resumed`, 'success')
+    } catch (e) {
+      showToast('Failed to continue reviews: ' + e.message, 'error')
+    }
+  }
+}
+
+async function resetTask(id) {
+  if (!confirm('Reset this task to backlog? This will clear its output, reviews, and error state.')) return
+  try {
+    await api(`/api/tasks/${id}`, 'PATCH', { 
+      status: 'backlog', 
+      reviewCount: 0, 
+      agentOutput: '', 
+      errorMessage: null,
+      completedAt: null,
+      sessionId: null,
+      sessionUrl: null,
+      worktreeDir: null,
+      executionPhase: 'not_started',
+      awaitingPlanApproval: false,
+    })
+    await loadTasks()
+    showToast('Task reset to backlog', 'success')
+  } catch (e) { showToast('Reset failed: ' + e.message, 'error') }
+}
+
+async function convertTaskToTemplate(id) {
+  if (!confirm('Convert this task to a template? The task will be moved to the Templates lane.')) return
+  try {
+    await api(`/api/tasks/${id}`, 'PATCH', {
+      status: 'template',
+      reviewCount: 0,
+      agentOutput: '',
+      errorMessage: null,
+      completedAt: null,
+      sessionId: null,
+      sessionUrl: null,
+      worktreeDir: null,
+      executionPhase: 'not_started',
+      awaitingPlanApproval: false,
+    })
+    await loadTasks()
+    showToast('Task converted to template', 'success')
+  } catch (e) { showToast('Conversion failed: ' + e.message, 'error') }
+}
+
+let approveModalTaskId = null
+
+function openApproveModal(taskId) {
+  const task = allTasks.find(t => t.id === taskId)
+  if (!task) return
+  approveModalTaskId = taskId
+  document.getElementById('approveModalTitle').textContent = 'Approve Plan'
+  document.getElementById('approveModalTaskName').textContent = task.name
+  document.getElementById('approveMessage').value = ''
+  document.getElementById('approveModal').classList.remove('hidden')
+}
+
+function closeApproveModal() {
+  document.getElementById('approveModal').classList.add('hidden')
+  approveModalTaskId = null
+}
+
+async function confirmApprovePlan() {
+  if (!approveModalTaskId) return
+  const message = document.getElementById('approveMessage').value
+  const taskId = approveModalTaskId
+  closeApproveModal()
+  try {
+    const body = message.trim() ? { message } : {}
+    await api(`/api/tasks/${taskId}/approve-plan`, 'POST', body)
+    addLogEntry(`Plan approved for task: ${allTasks.find(t => t.id === taskId)?.name || taskId}`)
+    await loadTasks()
+    showToast('Plan approved', 'success')
+  } catch (e) { showToast('Approve plan failed: ' + e.message, 'error') }
+}
+
+async function approvePlan(id) {
+  openApproveModal(id)
+}
+
+let revisionModalTaskId = null
+
+function openRevisionModal(taskId) {
+  const task = allTasks.find(t => t.id === taskId)
+  if (!task) return
+  revisionModalTaskId = taskId
+  document.getElementById('revisionModalTaskName').textContent = task.name
+  document.getElementById('revisionFeedback').value = ''
+  document.getElementById('revisionModal').classList.remove('hidden')
+}
+
+function closeRevisionModal() {
+  document.getElementById('revisionModal').classList.add('hidden')
+  revisionModalTaskId = null
+}
+
+async function confirmRequestRevision() {
+  if (!revisionModalTaskId) return
+  const feedback = document.getElementById('revisionFeedback').value.trim()
+  if (!feedback) {
+    showToast('Feedback cannot be empty', 'error')
+    return
+  }
+  const taskId = revisionModalTaskId
+  closeRevisionModal()
+  try {
+    await api(`/api/tasks/${taskId}/request-plan-revision`, 'POST', { feedback })
+    addLogEntry(`Revision requested for task: ${allTasks.find(t => t.id === taskId)?.name || taskId}`)
+    await loadTasks()
+    showToast('Revision requested', 'success')
+  } catch (e) { showToast('Request revision failed: ' + e.message, 'error') }
+}
+
+// ---- Start Single Task ----
+let startSingleModalTaskId = null
+
+function openStartSingleModal(taskId, taskName) {
+  startSingleModalTaskId = taskId
+  const task = allTasks.find(t => t.id === taskId)
+  if (!task) return
+  document.getElementById('startSingleTaskName').textContent = `Start "${taskName}" and its dependency chain?`
+
+  const depIds = task.requirements.filter(depId => allTasks.some(t => t.id === depId && (t.status === 'backlog' || t.executionPhase === 'implementation_pending' || t.executionPhase === 'plan_revision_pending')))
+  const depNames = depIds.map(depId => allTasks.find(t => t.id === depId)?.name).filter(Boolean)
+
+  const depsEl = document.getElementById('startSingleDeps')
+  if (depNames.length > 0) {
+    depsEl.textContent = `Dependencies to run: ${depNames.join(', ')}`
+  } else {
+    depsEl.textContent = 'No dependencies to run.'
+  }
+
+  document.getElementById('startSingleConfirmBtn').textContent = `Start Task`
+  document.getElementById('startSingleModal').classList.remove('hidden')
+}
+
+function closeStartSingleModal() {
+  document.getElementById('startSingleModal').classList.add('hidden')
+  startSingleModalTaskId = null
+}
+
+async function confirmStartSingle() {
+  if (!startSingleModalTaskId) return
+  const taskId = startSingleModalTaskId
+  closeStartSingleModal()
+  try {
+    await api(`/api/tasks/${taskId}/start`, 'POST')
+    addLogEntry(`Started single task: ${allTasks.find(t => t.id === taskId)?.name || taskId}`)
+    await loadRuns()
+    await loadTasks()
+    showToast('Task started', 'success')
+  } catch (e) { showToast('Start task failed: ' + e.message, 'error') }
+}
+
+async function pauseRun(runId) {
+  try {
+    await api(`/api/runs/${runId}/pause`, 'POST')
+    await loadRuns()
+    showToast('Run will pause after the current task', 'success')
+  } catch (e) { showToast('Pause failed: ' + e.message, 'error') }
+}
+
+async function resumeRun(runId) {
+  try {
+    await api(`/api/runs/${runId}/resume`, 'POST')
+    await loadRuns()
+    showToast('Run resumed', 'success')
+  } catch (e) { showToast('Resume failed: ' + e.message, 'error') }
+}
+
+async function stopRun(runId) {
+  try {
+    await api(`/api/runs/${runId}/stop`, 'POST')
+    await loadRuns()
+    showToast('Run will stop after the current task', 'success')
+  } catch (e) { showToast('Stop failed: ' + e.message, 'error') }
+}
+
+// ---- Options ----
+function openOptionsModal() {
+  populateBranchSelect('optBranch', allOptions.branch || getFallbackBranch())
+  document.getElementById('optCommitPrompt').value = allOptions.commitPrompt || ''
+  document.getElementById('optExtraPrompt').value = allOptions.extraPrompt || ''
+  document.getElementById('optBranch').value = allOptions.branch || getFallbackBranch()
+  resetModelInput('optPlanModel', allOptions.planModel || 'default')
+  resetModelInput('optExecModel', allOptions.executionModel || 'default')
+  resetModelInput('optReviewModel', allOptions.reviewModel || 'default')
+  resetModelInput('optRepairModel', allOptions.repairModel || 'default')
+  document.getElementById('optCommand').value = allOptions.command || ''
+  document.getElementById('optParallel').value = allOptions.parallelTasks || 1
+  document.getElementById('optMaxReviews').value = allOptions.maxReviews || 2
+  document.getElementById('optAutoDeleteNormalSessions').checked = !!allOptions.autoDeleteNormalSessions
+  document.getElementById('optAutoDeleteReviewSessions').checked = !!allOptions.autoDeleteReviewSessions
+  document.getElementById('optThinkingLevel').value = allOptions.thinkingLevel || 'default'
+  document.getElementById('optTelegramEnabled').checked = allOptions.telegramNotificationsEnabled !== false
+  document.getElementById('optTelegramBotToken').value = allOptions.telegramBotToken || ''
+  document.getElementById('optTelegramChatId').value = allOptions.telegramChatId || ''
+  const telegramTestStatus = document.getElementById('telegramTestStatus')
+  telegramTestStatus.style.display = 'none'
+  document.getElementById('optionsModal').classList.remove('hidden')
+}
+
+function closeOptionsModal() {
+  document.getElementById('optionsModal').classList.add('hidden')
+}
+
+async function saveOptions() {
+  try {
+    const branch = document.getElementById('optBranch').value
+    if (!branch) {
+      showToast('Select a valid default branch', 'error')
+      return
+    }
+
+    await api('/api/options', 'PUT', {
+      commitPrompt: document.getElementById('optCommitPrompt').value,
+      extraPrompt: document.getElementById('optExtraPrompt').value,
+      branch,
+      planModel: normalizeModelInputValue(document.getElementById('optPlanModel').value),
+      executionModel: normalizeModelInputValue(document.getElementById('optExecModel').value),
+      reviewModel: normalizeModelInputValue(document.getElementById('optReviewModel').value),
+      repairModel: normalizeModelInputValue(document.getElementById('optRepairModel').value),
+      command: document.getElementById('optCommand').value,
+      parallelTasks: parseInt(document.getElementById('optParallel').value, 10) || 1,
+      autoDeleteNormalSessions: document.getElementById('optAutoDeleteNormalSessions').checked,
+      autoDeleteReviewSessions: document.getElementById('optAutoDeleteReviewSessions').checked,
+      thinkingLevel: document.getElementById('optThinkingLevel').value || 'default',
+      telegramNotificationsEnabled: document.getElementById('optTelegramEnabled').checked,
+      telegramBotToken: document.getElementById('optTelegramBotToken').value || '',
+      telegramChatId: document.getElementById('optTelegramChatId').value || '',
+      maxReviews: parseInt(document.getElementById('optMaxReviews').value, 10) || 2,
+    })
+    closeOptionsModal()
+    await loadOptions()
+  } catch (e) { showToast('Options save failed: ' + e.message, 'error') }
+}
+
+// ---- Execution ----
+async function toggleExecution() {
+  try {
+    const showGraph = document.getElementById('showGraphChk').checked
+    if (showGraph) {
+      await openGraphModal()
+    } else {
+      await api('/api/start', 'POST')
+      await loadRuns()
+      await loadTasks()
+      showToast('Workflow run started', 'success')
+    }
+  } catch (e) { showToast('Execution control failed: ' + e.message, 'error') }
+}
+
+async function openGraphModal() {
+  try {
+    const data = await api('/api/execution-graph')
+    if (data.error) {
+      showToast(data.error, 'error')
+      return
+    }
+    renderGraphModal(data)
+    document.getElementById('graphModal').classList.remove('hidden')
+  } catch (e) { showToast('Failed to load execution graph: ' + e.message, 'error') }
+}
+
+function closeGraphModal() {
+  document.getElementById('graphModal').classList.add('hidden')
+}
+
+function renderGraphModal(graph) {
+  const container = document.getElementById('graphContent')
+  container.innerHTML = ''
+
+   const nodes = Array.isArray(graph.nodes) ? graph.nodes : []
+   const totalWorkerRuns = nodes.reduce((sum, node) => sum + (node.expandedWorkerRuns ?? 1), 0)
+   const totalReviewerRuns = nodes.reduce((sum, node) => sum + (node.expandedReviewerRuns ?? 0), 0)
+   const totalFinalApplierRuns = nodes.reduce((sum, node) => sum + (node.hasFinalApplier ? 1 : 0), 0)
+   const totalInternalRuns = nodes.reduce((sum, node) => sum + (node.estimatedRunCount ?? 1), 0)
+
+  const summary = document.createElement('div')
+  summary.style.cssText = 'margin-bottom:16px;font-size:13px;color:var(--text-dim);'
+  summary.textContent = `${graph.totalTasks} task${graph.totalTasks !== 1 ? 's' : ''} in ${graph.batches.length} batch${graph.batches.length !== 1 ? 'es' : ''} (parallel limit: ${graph.parallelLimit})`
+  container.appendChild(summary)
+
+  const runSummary = document.createElement('div')
+  runSummary.style.cssText = 'margin-bottom:16px;font-size:13px;color:var(--text-dim);padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);'
+  runSummary.textContent = `${graph.totalTasks} logical task${graph.totalTasks !== 1 ? 's' : ''}, ${totalWorkerRuns} worker run${totalWorkerRuns !== 1 ? 's' : ''}, ${totalReviewerRuns} reviewer run${totalReviewerRuns !== 1 ? 's' : ''}, ${totalFinalApplierRuns} final applier run${totalFinalApplierRuns !== 1 ? 's' : ''} (${totalInternalRuns} total internal run${totalInternalRuns !== 1 ? 's' : ''})`
+  container.appendChild(runSummary)
+
+  if (totalInternalRuns > 10) {
+    const warning = document.createElement('div')
+    warning.style.cssText = 'margin-bottom:16px;font-size:12px;color:var(--yellow);padding:10px;border:1px solid rgba(210,153,34,.45);border-radius:8px;background:rgba(210,153,34,.12);'
+    warning.textContent = `Warning: this run plan expands to ${totalInternalRuns} internal runs and may increase cost and total runtime.`
+    container.appendChild(warning)
+  }
+
+  const batchesList = document.createElement('div')
+  batchesList.style.cssText = 'display:flex;flex-direction:column;gap:12px;'
+  
+  for (const batch of graph.batches) {
+    const batchDiv = document.createElement('div')
+    batchDiv.style.cssText = 'border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--bg);'
+    
+    const batchHeader = document.createElement('div')
+    batchHeader.style.cssText = 'font-size:12px;font-weight:600;color:var(--accent);margin-bottom:8px;'
+    batchHeader.textContent = `Batch ${batch.idx + 1} (${batch.taskNames.length} task${batch.taskNames.length !== 1 ? 's' : ''})`
+    batchDiv.appendChild(batchHeader)
+
+    const taskList = document.createElement('div')
+    taskList.style.cssText = 'display:flex;flex-direction:column;gap:6px;'
+    
+    for (let i = 0; i < batch.taskNames.length; i++) {
+      const taskName = batch.taskNames[i]
+      const taskId = batch.taskIds[i]
+      const node = nodes.find(n => n.id === taskId)
+      const taskItem = document.createElement('div')
+      taskItem.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0;'
+      
+      const arrow = document.createElement('span')
+      arrow.style.cssText = 'color:var(--text-dim);font-size:12px;'
+      arrow.textContent = '\u25B6'
+      taskItem.appendChild(arrow)
+      
+      const name = document.createElement('span')
+      name.style.cssText = 'font-size:13px;'
+      name.textContent = taskName
+      taskItem.appendChild(name)
+
+      if (node && node.hasFinalApplier) {
+        const details = document.createElement('span')
+        details.style.cssText = 'font-size:11px;color:var(--text-dim);'
+        details.textContent = `(workers: ${node.expandedWorkerRuns || 0}, reviewers: ${node.expandedReviewerRuns || 0}, final applier: 1)`
+        taskItem.appendChild(details)
+      }
+      
+      taskList.appendChild(taskItem)
+    }
+    batchDiv.appendChild(taskList)
+    batchesList.appendChild(batchDiv)
+  }
+  container.appendChild(batchesList)
+
+  const pendingApprovals = graph.pendingApprovals || []
+  if (pendingApprovals.length > 0) {
+    const pendingDiv = document.createElement('div')
+    pendingDiv.style.cssText = 'margin-top:16px;border:1px solid var(--green);border-radius:8px;padding:12px;background:rgba(63,185,80,.08);'
+    
+    const pendingHeader = document.createElement('div')
+    pendingHeader.style.cssText = 'font-size:12px;font-weight:600;color:var(--green);margin-bottom:8px;'
+    pendingHeader.textContent = `Pending Approvals (${pendingApprovals.length})`
+    pendingDiv.appendChild(pendingHeader)
+
+    const pendingList = document.createElement('div')
+    pendingList.style.cssText = 'display:flex;flex-direction:column;gap:6px;'
+    
+    for (const task of pendingApprovals) {
+      const taskItem = document.createElement('div')
+      taskItem.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 0;'
+      
+      const taskInfo = document.createElement('div')
+      taskInfo.style.cssText = 'display:flex;align-items:center;gap:8px;'
+      
+      const arrow = document.createElement('span')
+      arrow.style.cssText = 'color:var(--green);font-size:12px;'
+      arrow.textContent = '\u25B6'
+      taskInfo.appendChild(arrow)
+      
+      const name = document.createElement('span')
+      name.style.cssText = 'font-size:13px;'
+      name.textContent = task.name + (task.planRevisionCount > 0 ? ` (rev ${task.planRevisionCount})` : '')
+      taskInfo.appendChild(name)
+      
+      taskItem.appendChild(taskInfo)
+      
+      const btnGroup = document.createElement('div')
+      btnGroup.style.cssText = 'display:flex;gap:4px;'
+
+      const approveBtn = document.createElement('button')
+      approveBtn.className = 'btn btn-sm'
+      approveBtn.style.cssText = 'border-color:var(--green);color:var(--green);'
+      approveBtn.textContent = 'Approve'
+      approveBtn.onclick = () => openApproveModal(task.id)
+      btnGroup.appendChild(approveBtn)
+
+      const revisionBtn = document.createElement('button')
+      revisionBtn.className = 'btn btn-sm'
+      revisionBtn.style.cssText = 'border-color:var(--orange);color:var(--orange);'
+      revisionBtn.textContent = 'Request Changes'
+      revisionBtn.onclick = () => openRevisionModal(task.id)
+      btnGroup.appendChild(revisionBtn)
+
+      taskItem.appendChild(btnGroup)
+      
+      pendingList.appendChild(taskItem)
+    }
+    pendingDiv.appendChild(pendingList)
+    container.appendChild(pendingDiv)
+  }
+}
+
+async function confirmExecution() {
+  closeGraphModal()
+  try {
+    await api('/api/start', 'POST')
+    await loadRuns()
+    await loadTasks()
+    showToast('Workflow run started', 'success')
+  } catch (e) { showToast('Execution start failed: ' + e.message, 'error') }
+}
+
+function enhanceTooltips() {
+  const tooltipTargets = Array.from(document.querySelectorAll('[title]'))
+  for (const el of tooltipTargets) {
+    if (el.dataset.tooltipEnhanced === 'true') continue
+    const content = (el.getAttribute('title') || '').trim()
+    if (!content) continue
+    const tooltip = document.createElement('sl-tooltip')
+    tooltip.content = content
+    tooltip.hoist = true
+    tooltip.placement = 'top'
+    el.removeAttribute('title')
+    el.dataset.tooltipEnhanced = 'true'
+    const parent = el.parentNode
+    if (!parent) continue
+    parent.insertBefore(tooltip, el)
+    tooltip.appendChild(el)
+  }
+}
+
+let bonDetailModal = null
+
+async function openBestOfNDetailModal(taskId) {
+  if (!bonDetailModal) {
+    bonDetailModal = document.createElement('div')
+    bonDetailModal.className = 'modal-overlay hidden'
+    bonDetailModal.id = 'bonDetailModal'
+    bonDetailModal.dataset.closeOnOverlay = 'true'
+    bonDetailModal.innerHTML = `
+      <div class="modal" style="width:700px;max-height:85vh;">
+        <div class="modal-header">
+          <h2>Best-of-N Details</h2>
+          <sl-icon-button class="modal-close" onclick="closeBonDetailModal()" name="x"></sl-icon-button>
+        </div>
+        <div class="modal-body" id="bonDetailBody">
+          <div id="bonDetailContent"></div>
+        </div>
+        <div class="modal-footer">
+          <sl-button onclick="closeBonDetailModal()">Close</sl-button>
+        </div>
+      </div>
+    `
+    document.body.appendChild(bonDetailModal)
+  }
+  
+  await refreshBonDetailModal(taskId)
+  bonDetailModal.classList.remove('hidden')
+}
+
+function closeBonDetailModal() {
+  if (bonDetailModal) bonDetailModal.classList.add('hidden')
+}
+
+async function refreshBonDetailModal(taskId) {
+  const task = allTasks.find(t => t.id === taskId)
+  if (!task) return
+  
+  const content = document.getElementById('bonDetailContent')
+  
+  try {
+    const [runs, candidates, summary] = await Promise.all([
+      api(`/api/tasks/${taskId}/runs`),
+      api(`/api/tasks/${taskId}/candidates`),
+      api(`/api/tasks/${taskId}/best-of-n-summary`),
+    ])
+    
+    const statusMap = {
+      'pending': 'pending',
+      'running': 'running',
+      'done': 'done',
+      'failed': 'failed',
+      'skipped': 'skipped',
+    }
+    
+    const workers = runs.filter(r => r.phase === 'worker')
+    const reviewers = runs.filter(r => r.phase === 'reviewer')
+    const finalApplier = runs.filter(r => r.phase === 'final_applier')
+    
+    const renderRun = (run, phaseClass, title) => `
+      <div class="run-item">
+        <div class="run-item-header">
+          <span class="run-item-phase ${phaseClass}">${title}</span>
+          <span class="run-item-model">${run.model}</span>
+          <span class="run-item-status ${statusMap[run.status] || 'pending'}">${run.status}</span>
+        </div>
+        ${run.summary ? `<div class="run-item-summary">${run.summary.substring(0, 300)}</div>` : ''}
+        ${run.errorMessage ? `<div class="run-item-summary" style="color:var(--red);">Error: ${run.errorMessage}</div>` : ''}
+        ${run.worktreeDir ? `<div class="run-item-summary">Worktree: ${run.worktreeDir}</div>` : ''}
+        ${run.sessionUrl ? `<div class="run-item-actions"><a href="${run.sessionUrl}" target="_blank" class="btn btn-sm">Open Session</a></div>` : ''}
+      </div>
+    `
+
+    const workerRows = workers.map((w) => renderRun(w, 'worker', `Worker Slot ${w.slotIndex + 1}`)).join('')
+      || '<div class="run-item-summary">No worker runs yet.</div>'
+    const reviewerRows = reviewers.map((r) => renderRun(r, 'reviewer', `Reviewer Slot ${r.slotIndex + 1}`)).join('')
+      || '<div class="run-item-summary">No reviewer runs yet.</div>'
+    const finalRows = finalApplier.map((f) => renderRun(f, 'final_applier', 'Final Applier')).join('')
+      || '<div class="run-item-summary">Final applier has not started yet.</div>'
+    const candidateRows = candidates.map((c) => `
+      <div class="candidate-item ${c.status === 'selected' ? 'selected' : ''}">
+        <div class="candidate-header">
+          <span class="candidate-id">${c.id}</span>
+          <span class="run-item-status ${c.status === 'selected' ? 'done' : 'pending'}">${c.status}</span>
+        </div>
+        ${c.summary ? `<div class="run-item-summary">${c.summary.substring(0, 300)}</div>` : '<div class="run-item-summary">No summary</div>'}
+        <div class="candidate-files">Files: ${(c.changedFilesJson || []).join(', ') || 'None'}</div>
+      </div>
+    `).join('') || '<div class="run-item-summary">No successful candidates yet.</div>'
+
+    let html = `
+      <div style="margin-bottom:16px;">
+        <strong>Task:</strong> ${task.name}<br>
+        <strong>Substage:</strong> ${task.bestOfNSubstage || 'idle'}<br>
+        <strong>Successful Workers:</strong> ${summary.successfulCandidateCount || 0} / ${summary.expandedWorkerCount || 0}
+      </div>
+      
+      <div class="modal-detail-tabs">
+        <button class="modal-detail-tab active" onclick="showBonTab('overview', '${taskId}')">Overview</button>
+        <button class="modal-detail-tab" onclick="showBonTab('workers', '${taskId}')">Workers (${workers.length})</button>
+        <button class="modal-detail-tab" onclick="showBonTab('reviewers', '${taskId}')">Reviewers (${reviewers.length})</button>
+        <button class="modal-detail-tab" onclick="showBonTab('final', '${taskId}')">Final Applier (${finalApplier.length})</button>
+      </div>
+      
+      <div id="bonTabContent">
+        <div id="bonTab-overview" style="display:block;">
+          <h4 style="margin-bottom:12px;">Execution Summary</h4>
+          <div class="run-item-summary" style="margin-bottom:12px;">
+            Workers completed: ${summary.workersDone || 0}/${summary.workersTotal || 0}<br>
+            Reviewers completed: ${summary.reviewersDone || 0}/${summary.reviewersTotal || 0}<br>
+            Final applier completed: ${summary.finalApplierDone ? 'yes' : 'no'}
+          </div>
+          <h4 style="margin-bottom:8px;">Candidates</h4>
+          <div class="candidate-list">${candidateRows}</div>
+        </div>
+
+        <div id="bonTab-workers" style="display:none;">
+          <h4 style="margin-bottom:12px;">Worker Runs</h4>
+          <div class="run-list">
+            ${workerRows}
+          </div>
+        </div>
+
+        <div id="bonTab-reviewers" style="display:none;">
+          <h4 style="margin-bottom:12px;">Reviewer Runs</h4>
+          <div class="run-list">
+            ${reviewerRows}
+          </div>
+        </div>
+
+        <div id="bonTab-final" style="display:none;">
+          <h4 style="margin-bottom:12px;">Final Applier</h4>
+          <div class="run-list">
+            ${finalRows}
+          </div>
+        </div>
+      </div>
+    `
+    
+    content.innerHTML = html
+  } catch (e) {
+    showToast('Failed to load best-of-n details: ' + e.message, 'error')
+    content.innerHTML = `<div style="color:var(--red);">Failed to load best-of-n details: ${e.message}</div>`
+  }
+}
+
+function showBonTab(tab, taskId) {
+  for (const t of ['overview', 'workers', 'reviewers', 'final']) {
+    const el = document.getElementById(`bonTab-${t}`)
+    if (el) el.style.display = t === tab ? 'block' : 'none'
+    const btn = document.querySelector(`.modal-detail-tab:nth-child(${['overview', 'workers', 'reviewers', 'final'].indexOf(t) + 1})`)
+    if (btn) btn.className = `modal-detail-tab ${t === tab ? 'active' : ''}`
+  }
+}
+
+// ---- Toasts ----
+function showToast(msg, variant = 'info') {
+  addLogEntry(msg, variant)
+  const container = document.getElementById('toasts')
+  const toast = document.createElement('div')
+  toast.className = `toast toast-${variant}`
+  toast.textContent = msg
+  container.appendChild(toast)
+  setTimeout(() => toast.remove(), 5000)
+}
+
+// ---- Keyboard Shortcuts ----
+function isEditableControlFocused() {
+  const active = document.activeElement
+  if (!active) return false
+  // Check standard editable elements
+  const tag = active.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
+  // Check contenteditable elements
+  if (active.isContentEditable) return true
+  // Check nested inputs inside web components (e.g., sl-input, sl-select)
+  if (active.shadowRoot) {
+    const inner = active.shadowRoot.activeElement
+    if (inner) {
+      const innerTag = inner.tagName
+      if (innerTag === 'INPUT' || innerTag === 'TEXTAREA' || innerTag === 'SELECT') return true
+      if (inner.isContentEditable) return true
+    }
+  }
+  return false
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    const closed = closeTopmostModal()
+    if (closed) e.preventDefault()
+    return
+  }
+  // Skip shortcuts when any modal is open or focus is inside an editable control
+  if (getOpenModalIds().length > 0) return
+  if (isEditableControlFocused()) return
+  if (e.metaKey || e.ctrlKey || e.altKey) return
+  const key = e.key.toUpperCase()
+  if (key === 'T') { e.preventDefault(); openTemplateTaskModal() }
+  else if (key === 'B') { e.preventDefault(); openTaskModal() }
+  else if (key === 'S') { e.preventDefault(); toggleExecution() }
+  else if (key === 'D') { e.preventDefault(); archiveAllDone() }
+})
+
+// ---- Init ----
+async function init() {
+  initLogPanel()
+  enhanceTooltips()
+  rebuildModelSearchIndex()
+  attachModalOverlayHandlers()
+  const showGraphCheckbox = document.getElementById('showGraphChk')
+  if (showGraphCheckbox) {
+    showGraphCheckbox.checked = true
+    showGraphCheckbox.addEventListener('sl-change', persistShowExecutionGraphPreference)
+  }
+  const telegramNotifyCheckbox = document.getElementById('telegramNotifyChk')
+  if (telegramNotifyCheckbox) {
+    telegramNotifyCheckbox.addEventListener('sl-change', persistTelegramNotificationPreference)
+  }
+  for (const inputId of MODEL_INPUT_IDS) {
+    resetModelInput(inputId, 'default')
+  }
+  await loadOptions()
+  await loadBranches()
+  await loadModels()
+  await loadRuns()
+  await loadTasks()
+  addLogEntry('Kanban UI ready')
+  connectWS()
+}
+init()
+</script>
+</body>
+</html>
