@@ -2,7 +2,7 @@ import { randomUUID } from "crypto"
 import { readFileSync } from "fs"
 import { dirname, join } from "path"
 import { fileURLToPath } from "url"
-import { buildExecutionGraph, getExecutableTasks, resolveDependencyChain } from "../execution-plan.ts"
+import { buildExecutionGraph, getExecutableTasks, getExecutionGraphTasks, resolveDependencyChain } from "../execution-plan.ts"
 import { discoverPiModels } from "../pi/model-discovery.ts"
 import { isTaskAwaitingPlanApproval } from "../task-state.ts"
 import type { BestOfNConfig, Task, TaskRun, ThinkingLevel, WSMessage } from "../types.ts"
@@ -474,10 +474,13 @@ export class PiKanbanServer {
     })
 
     this.router.get("/api/execution-graph", ({ json }) => {
-      const executable = getExecutableTasks(this.db.getTasks())
-      if (executable.length === 0) return json({ error: "No tasks in backlog" }, 400)
+      // Use getExecutionGraphTasks to get ALL tasks that will run,
+      // including those whose dependencies will be satisfied during this run
+      const allExecutable = getExecutionGraphTasks(this.db.getTasks())
+      if (allExecutable.length === 0) return json({ error: "No tasks in backlog" }, 400)
 
       const options = this.db.getOptions()
+      // Pass the full task set to buildExecutionGraph
       const graph = buildExecutionGraph(this.db.getTasks(), options.parallelTasks)
 
       for (const node of graph.nodes) {

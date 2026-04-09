@@ -220,7 +220,7 @@ export function resolveDependencyChain(targetTaskId: string, allTasks: Task[], a
   return resolveExecutionTasks(allTasks, targetTaskId, allowedTaskIds)
 }
 
-function getExecutionGraphTasks(tasks: Task[]): Task[] {
+export function getExecutionGraphTasks(tasks: Task[]): Task[] {
   const taskMap = new Map<string, Task>()
   for (const task of tasks) taskMap.set(task.id, task)
 

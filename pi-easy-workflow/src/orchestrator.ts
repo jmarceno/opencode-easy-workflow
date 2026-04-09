@@ -6,7 +6,7 @@ import { getLatestTaggedOutput, getPlanExecutionEligibility } from "./task-state
 import type { PiKanbanDB } from "./db.ts"
 import type { PiSessionKind, PiWorkflowSession } from "./db/types.ts"
 import type { Options, Task, WSMessage, WorkflowRun } from "./types.ts"
-import { resolveExecutionTasks } from "./execution-plan.ts"
+import { resolveExecutionTasks, getExecutionGraphTasks } from "./execution-plan.ts"
 import { PiSessionManager } from "./runtime/session-manager.ts"
 import { PiReviewSessionRunner } from "./runtime/review-session.ts"
 import { BestOfNRunner } from "./runtime/best-of-n.ts"
@@ -59,7 +59,11 @@ export class PiOrchestrator {
 
   async startAll(): Promise<WorkflowRun> {
     if (this.running) throw new Error("Already executing")
-    const tasks = resolveExecutionTasks(this.db.getTasks())
+
+    // Use getExecutionGraphTasks to get ALL tasks that will run,
+    // including those whose dependencies will be satisfied during this run
+    const tasks = getExecutionGraphTasks(this.db.getTasks())
+
     if (tasks.length === 0) throw new Error("No tasks in backlog")
 
     const run = this.db.createWorkflowRun({
@@ -120,11 +124,26 @@ export class PiOrchestrator {
   }
 
   private async runInBackground(runId: string, taskIds: string[]): Promise<void> {
+    const executedTaskIds = new Set<string>()
+
     try {
       for (let index = 0; index < taskIds.length; index++) {
         if (this.shouldStop) break
-        const task = this.db.getTask(taskIds[index])
+
+        const taskId = taskIds[index]
+        const task = this.db.getTask(taskId)
         if (!task) continue
+
+        // Validate dependencies are satisfied (either already done or executed in this run)
+        for (const depId of task.requirements) {
+          const dep = this.db.getTask(depId)
+          if (dep && dep.status !== "done" && !executedTaskIds.has(depId)) {
+            const msg = `Dependency "${dep.name}" is not done (status: ${dep.status})`
+            this.db.updateTask(task.id, { status: "failed", errorMessage: msg })
+            this.broadcastTask(task.id)
+            throw new Error(msg)
+          }
+        }
 
         const updatedRun = this.db.updateWorkflowRun(runId, {
           currentTaskId: task.id,
@@ -133,6 +152,7 @@ export class PiOrchestrator {
         if (updatedRun) this.broadcast({ type: "run_updated", payload: updatedRun })
 
         await this.executeTask(task, this.db.getOptions())
+        executedTaskIds.add(taskId)
       }
 
       const finalRun = this.db.updateWorkflowRun(runId, {
