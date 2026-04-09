@@ -5,7 +5,7 @@ import { fileURLToPath } from "url"
 import { buildExecutionGraph, getExecutableTasks, resolveDependencyChain } from "../execution-plan.ts"
 import { discoverPiModels } from "../pi/model-discovery.ts"
 import { chooseDeterministicRepairAction, hasCapturedPlanOutput, isTaskAwaitingPlanApproval } from "../task-state.ts"
-import type { BestOfNConfig, Task, ThinkingLevel, WSMessage } from "../types.ts"
+import type { BestOfNConfig, Task, TaskRun, ThinkingLevel, WSMessage } from "../types.ts"
 import { PiKanbanDB } from "../db.ts"
 import { Router } from "./router.ts"
 import type { RequestContext } from "./types.ts"
@@ -91,6 +91,14 @@ function normalizeTaskForClient(task: Task, sessionUrlFor: (sessionId: string) =
   return task
 }
 
+function normalizeTaskRunForClient(run: TaskRun, sessionUrlFor: (sessionId: string) => string): TaskRun {
+  if (!run.sessionId) return run
+  if (!run.sessionUrl || run.sessionUrl.includes("opencode") || !run.sessionUrl.includes("#session/")) {
+    return { ...run, sessionUrl: sessionUrlFor(run.sessionId) }
+  }
+  return run
+}
+
 export class PiKanbanServer {
   private readonly db: PiKanbanDB
   private readonly router = new Router()
@@ -145,8 +153,7 @@ export class PiKanbanServer {
   }
 
   private sessionUrlFor(sessionId: string): string {
-    const port = this.server?.port ?? this.defaultPort
-    return `http://localhost:${port}/#session/${encodeURIComponent(sessionId)}`
+    return `/#session/${encodeURIComponent(sessionId)}`
   }
 
   private baseContext(req: Request): Omit<RequestContext, "params"> {
@@ -512,9 +519,9 @@ export class PiKanbanServer {
       return json(graph)
     })
 
-    this.router.get("/api/tasks/:id/runs", ({ params, json }) => {
+    this.router.get("/api/tasks/:id/runs", ({ params, json, sessionUrlFor }) => {
       if (!this.db.getTask(params.id)) return json({ error: "Task not found" }, 404)
-      return json(this.db.getTaskRuns(params.id))
+      return json(this.db.getTaskRuns(params.id).map((run) => normalizeTaskRunForClient(run, sessionUrlFor)))
     })
 
     this.router.get("/api/tasks/:id/candidates", ({ params, json }) => {

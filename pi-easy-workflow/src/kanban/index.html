@@ -368,6 +368,119 @@ sl-dialog::part(footer) { padding: 12px 20px; border-top: 1px solid var(--border
 sl-dialog::part(close-button) { color: var(--text-dim); }
 sl-dialog::part(close-button):hover { color: var(--text); background: var(--surface2); }
 
+/* Session viewer */
+.session-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.session-meta .badge { font-size: 11px; }
+.session-empty,
+.session-loading,
+.session-error {
+  font-size: 13px;
+  color: var(--text-dim);
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.session-error {
+  color: #ff7b72;
+  border-color: rgba(218, 54, 51, 0.45);
+  background: rgba(218, 54, 51, 0.1);
+}
+.session-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 56vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.session-entry {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  padding: 10px;
+}
+.session-entry.thinking { opacity: 0.9; }
+.session-entry.error { border-color: rgba(218, 54, 51, 0.5); background: rgba(218, 54, 51, 0.08); }
+.session-entry-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.session-time {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-right: auto;
+}
+.session-role {
+  font-size: 10px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+}
+.session-role.assistant { color: #79c0ff; border-color: rgba(121,192,255,.45); }
+.session-role.user { color: #7ee787; border-color: rgba(126,231,135,.45); }
+.session-role.system { color: #f2cc60; border-color: rgba(242,204,96,.45); }
+.session-role.tool { color: #c4b5fd; border-color: rgba(196,181,253,.45); }
+.session-type {
+  font-size: 10px;
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+}
+.session-tool-name {
+  font-size: 10px;
+  color: var(--orange);
+  border-radius: 999px;
+  padding: 2px 8px;
+  border: 1px solid rgba(219,109,40,.45);
+}
+.session-content {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.session-content.thinking {
+  color: var(--text-dim);
+  font-style: italic;
+}
+.session-content.error {
+  color: #ff7b72;
+}
+.session-more-btn {
+  margin-top: 6px;
+  border: none;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0;
+}
+.session-details {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.session-details summary { cursor: pointer; }
+.session-details pre {
+  margin-top: 6px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-dim);
+}
+
 /* Form */
 .form-group { margin-bottom: 14px; }
 .form-group { position: relative; z-index: 0; }
@@ -1091,6 +1204,22 @@ sl-tooltip {
   </div>
 </div>
 
+<div class="modal-overlay hidden" id="sessionModal" data-close-on-overlay="true">
+  <div class="modal" style="width:min(980px,calc(100vw - 40px));max-height:min(900px,calc(100vh - 40px));">
+    <div class="modal-header">
+      <h2 id="sessionModalTitle">Session Viewer</h2>
+      <sl-icon-button class="modal-close" onclick="closeSessionModal()" name="x"></sl-icon-button>
+    </div>
+    <div class="modal-body">
+      <div class="session-meta" id="sessionMeta"></div>
+      <div class="session-timeline" id="sessionTimeline"></div>
+    </div>
+    <div class="modal-footer">
+      <sl-button onclick="closeSessionModal()">Close</sl-button>
+    </div>
+  </div>
+</div>
+
 <div class="log-panel collapsed" id="logPanel">
   <div class="log-header">
     <span>Event Log</span>
@@ -1122,6 +1251,10 @@ let taskModalCreateStatus = 'backlog'
 let modelCatalog = { providers: [] }
 let modelSearchIndex = []
 let modelFuse = null
+let activeSessionId = null
+let activeSession = null
+let activeSessionMessages = []
+let activeSessionTaskRunContext = null
 const MODEL_INPUT_IDS = [
   'taskPlanModel',
   'taskExecModel',
@@ -1698,6 +1831,7 @@ const MODAL_CLOSE_HANDLERS = {
   approveModal: closeApproveModal,
   revisionModal: closeRevisionModal,
   startSingleModal: closeStartSingleModal,
+  sessionModal: closeSessionModal,
   bonDetailModal: closeBonDetailModal,
 }
 
@@ -1723,6 +1857,280 @@ function attachModalOverlayHandlers() {
       const close = MODAL_CLOSE_HANDLERS[overlay.id]
       if (typeof close === 'function') close()
     })
+  }
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+}
+
+function getSessionIdFromHash() {
+  const match = (location.hash || '').match(/^#session\/(.+)$/)
+  return match ? decodeURIComponent(match[1]) : null
+}
+
+function getSessionLabel(session) {
+  if (!session) return 'Session Viewer'
+  const taskName = session.taskId ? allTasks.find((t) => t.id === session.taskId)?.name : null
+  if (taskName) return `${taskName} • Session ${session.id}`
+  return `Session ${session.id}`
+}
+
+function normalizeSessionMessageText(message) {
+  const content = message?.contentJson
+  if (!content || typeof content !== 'object') return ''
+  if (typeof content.text === 'string' && content.text.trim()) return content.text
+  if (typeof content.message === 'string' && content.message.trim()) return content.message
+  if (typeof content.output === 'string' && content.output.trim()) return content.output
+  if (typeof content.content === 'string' && content.content.trim()) return content.content
+  if (typeof content.summary === 'string' && content.summary.trim()) return content.summary
+  return ''
+}
+
+function formatJsonForDisplay(value) {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function isNearBottom(el, threshold = 24) {
+  if (!el) return true
+  return el.scrollTop + el.clientHeight >= el.scrollHeight - threshold
+}
+
+function scrollToBottom(el) {
+  if (!el) return
+  el.scrollTop = el.scrollHeight
+}
+
+let sessionLoadToken = 0
+
+function renderSessionModal() {
+  const title = document.getElementById('sessionModalTitle')
+  const meta = document.getElementById('sessionMeta')
+  const timeline = document.getElementById('sessionTimeline')
+  if (!title || !meta || !timeline) return
+
+  title.textContent = getSessionLabel(activeSession)
+  meta.innerHTML = ''
+
+  if (activeSession) {
+    const chips = []
+    chips.push(`<span class="badge">id: ${escapeHtml(activeSession.id)}</span>`)
+    chips.push(`<span class="badge">${escapeHtml(activeSession.sessionKind || 'session')}</span>`)
+    chips.push(`<span class="badge">status: ${escapeHtml(activeSession.status || 'unknown')}</span>`)
+    chips.push(`<span class="badge">model: ${escapeHtml(activeSession.model || 'default')}</span>`)
+    if (activeSession.thinkingLevel && activeSession.thinkingLevel !== 'default') {
+      chips.push(`<span class="badge">thinking: ${escapeHtml(activeSession.thinkingLevel)}</span>`)
+    }
+    if (activeSession.taskId) {
+      const taskName = allTasks.find((t) => t.id === activeSession.taskId)?.name || activeSession.taskId
+      chips.push(`<span class="badge">task: ${escapeHtml(taskName)}</span>`)
+    }
+    if (activeSession.taskRunId) {
+      chips.push(`<span class="badge">task run: ${escapeHtml(activeSession.taskRunId)}</span>`)
+    }
+    if (activeSessionTaskRunContext?.phase) {
+      chips.push(`<span class="badge">phase: ${escapeHtml(activeSessionTaskRunContext.phase)}</span>`)
+    }
+    if (typeof activeSessionTaskRunContext?.slotIndex === 'number') {
+      chips.push(`<span class="badge">slot: ${activeSessionTaskRunContext.slotIndex + 1}</span>`)
+    }
+    if (typeof activeSessionTaskRunContext?.attemptIndex === 'number') {
+      chips.push(`<span class="badge">attempt: ${activeSessionTaskRunContext.attemptIndex + 1}</span>`)
+    }
+    meta.innerHTML = chips.join('')
+  }
+
+  if (!activeSessionId) {
+    timeline.innerHTML = '<div class="session-empty">Select a session to view.</div>'
+    return
+  }
+
+  if (!activeSession && activeSessionMessages.length === 0) {
+    timeline.innerHTML = '<div class="session-loading">Loading session…</div>'
+    return
+  }
+
+  if (activeSession && activeSession.errorMessage && activeSessionMessages.length === 0) {
+    timeline.innerHTML = `<div class="session-error">${escapeHtml(activeSession.errorMessage)}</div>`
+    return
+  }
+
+  if (activeSessionMessages.length === 0) {
+    timeline.innerHTML = '<div class="session-empty">No session messages yet.</div>'
+    return
+  }
+
+  timeline.innerHTML = ''
+  for (const message of activeSessionMessages) {
+    const entry = document.createElement('div')
+    const isError = message.messageType === 'error' || message.messageType === 'session_error'
+    const isThinking = message.messageType === 'thinking'
+    entry.className = `session-entry${isError ? ' error' : ''}${isThinking ? ' thinking' : ''}`
+
+    const header = document.createElement('div')
+    header.className = 'session-entry-header'
+
+    const time = document.createElement('span')
+    time.className = 'session-time'
+    const ts = Number(message.timestamp || 0)
+    time.textContent = ts > 0 ? new Date(ts * 1000).toLocaleTimeString() : '—'
+    header.appendChild(time)
+
+    const role = document.createElement('span')
+    role.className = `session-role ${message.role || 'assistant'}`
+    role.textContent = message.role || 'assistant'
+    header.appendChild(role)
+
+    const type = document.createElement('span')
+    type.className = 'session-type'
+    type.textContent = message.messageType || 'text'
+    header.appendChild(type)
+
+    if (message.toolName) {
+      const tool = document.createElement('span')
+      tool.className = 'session-tool-name'
+      tool.textContent = message.toolName
+      header.appendChild(tool)
+    }
+
+    entry.appendChild(header)
+
+    const content = document.createElement('div')
+    content.className = `session-content${isThinking ? ' thinking' : ''}${isError ? ' error' : ''}`
+
+    const normalizedText = normalizeSessionMessageText(message)
+    const fallbackText = !normalizedText ? formatJsonForDisplay(message.contentJson) : ''
+    const fullText = normalizedText || fallbackText || '(no text content)'
+    const truncated = fullText.length > 1400
+
+    if (truncated) {
+      const truncatedText = `${fullText.slice(0, 1400)}…`
+      content.textContent = truncatedText
+      const toggle = document.createElement('button')
+      toggle.className = 'session-more-btn'
+      toggle.textContent = 'Show more'
+      let expanded = false
+      toggle.onclick = () => {
+        expanded = !expanded
+        content.textContent = expanded ? fullText : truncatedText
+        toggle.textContent = expanded ? 'Show less' : 'Show more'
+      }
+      entry.appendChild(content)
+      entry.appendChild(toggle)
+    } else {
+      content.textContent = fullText
+      entry.appendChild(content)
+    }
+
+    if (message.toolArgsJson || message.toolResultJson) {
+      const details = document.createElement('details')
+      details.className = 'session-details'
+      const summary = document.createElement('summary')
+      summary.textContent = 'Tool payload'
+      details.appendChild(summary)
+      if (message.toolArgsJson) {
+        const args = document.createElement('pre')
+        args.textContent = `args:\n${formatJsonForDisplay(message.toolArgsJson)}`
+        details.appendChild(args)
+      }
+      if (message.toolResultJson) {
+        const result = document.createElement('pre')
+        result.textContent = `result:\n${formatJsonForDisplay(message.toolResultJson)}`
+        details.appendChild(result)
+      }
+      entry.appendChild(details)
+    }
+
+    timeline.appendChild(entry)
+  }
+}
+
+function closeSessionModal(options = {}) {
+  const fromHash = options.fromHash === true
+  const modal = document.getElementById('sessionModal')
+  if (modal) modal.classList.add('hidden')
+  activeSessionId = null
+  activeSession = null
+  activeSessionMessages = []
+  activeSessionTaskRunContext = null
+
+  if (!fromHash && getSessionIdFromHash()) {
+    location.hash = ''
+  }
+}
+
+async function openSessionModal(sessionId, options = {}) {
+  const fromHash = options.fromHash === true
+  const taskRunContext = options.taskRunContext || null
+  if (!sessionId) return
+
+  const modal = document.getElementById('sessionModal')
+  if (modal) modal.classList.remove('hidden')
+
+  if (!fromHash && location.hash !== `#session/${encodeURIComponent(sessionId)}`) {
+    location.hash = `#session/${encodeURIComponent(sessionId)}`
+  }
+
+  activeSessionId = sessionId
+  activeSessionTaskRunContext = taskRunContext
+  activeSession = null
+  activeSessionMessages = []
+  renderSessionModal()
+
+  const token = ++sessionLoadToken
+
+  try {
+    const [session, messages] = await Promise.all([
+      api(`/api/sessions/${encodeURIComponent(sessionId)}`),
+      api(`/api/sessions/${encodeURIComponent(sessionId)}/messages?limit=1000`),
+    ])
+
+    if (token !== sessionLoadToken || activeSessionId !== sessionId) return
+
+    activeSession = session
+    activeSessionMessages = Array.isArray(messages)
+      ? messages.slice().sort((a, b) => {
+        const ta = Number(a.timestamp || 0)
+        const tb = Number(b.timestamp || 0)
+        if (ta !== tb) return ta - tb
+        return Number(a.id || 0) - Number(b.id || 0)
+      })
+      : []
+    renderSessionModal()
+    scrollToBottom(document.getElementById('sessionTimeline'))
+  } catch (e) {
+    if (token !== sessionLoadToken || activeSessionId !== sessionId) return
+    activeSession = {
+      id: sessionId,
+      status: 'failed',
+      errorMessage: e?.message || 'Failed to load session',
+    }
+    activeSessionMessages = []
+    renderSessionModal()
+  }
+}
+
+function syncSessionModalWithHash() {
+  const sessionId = getSessionIdFromHash()
+  if (sessionId) {
+    if (activeSessionId === sessionId && !document.getElementById('sessionModal')?.classList.contains('hidden')) return
+    openSessionModal(sessionId, { fromHash: true })
+    return
+  }
+
+  if (!document.getElementById('sessionModal')?.classList.contains('hidden')) {
+    closeSessionModal({ fromHash: true })
   }
 }
 
@@ -1809,6 +2217,53 @@ function connectWS() {
           refreshBonSummaries([msg.payload.taskId]).finally(() => renderBoard())
         }
         break
+      case 'session_started': {
+        const payload = msg.payload || {}
+        if (payload.taskId && payload.id) {
+          const taskIndex = allTasks.findIndex((t) => t.id === payload.taskId)
+          if (taskIndex >= 0) {
+            allTasks[taskIndex] = {
+              ...allTasks[taskIndex],
+              sessionId: payload.id,
+              sessionUrl: `/#session/${encodeURIComponent(payload.id)}`,
+            }
+            renderBoard()
+          }
+        }
+        if (activeSessionId && payload.id === activeSessionId) {
+          activeSession = payload
+          renderSessionModal()
+        }
+        break
+      }
+      case 'session_message_created': {
+        const payload = msg.payload || {}
+        if (payload.sessionId === activeSessionId) {
+          const timeline = document.getElementById('sessionTimeline')
+          const stickToBottom = isNearBottom(timeline)
+          const existingIdx = activeSessionMessages.findIndex((item) => item.id === payload.id)
+          if (existingIdx >= 0) activeSessionMessages[existingIdx] = payload
+          else activeSessionMessages.push(payload)
+          activeSessionMessages.sort((a, b) => {
+            const ta = Number(a.timestamp || 0)
+            const tb = Number(b.timestamp || 0)
+            if (ta !== tb) return ta - tb
+            return Number(a.id || 0) - Number(b.id || 0)
+          })
+          renderSessionModal()
+          if (stickToBottom) scrollToBottom(document.getElementById('sessionTimeline'))
+        }
+        break
+      }
+      case 'session_status_changed':
+      case 'session_completed': {
+        const payload = msg.payload || {}
+        if (payload.id === activeSessionId) {
+          activeSession = payload
+          renderSessionModal()
+        }
+        break
+      }
     }
   }
 }
@@ -1933,17 +2388,25 @@ function renderCard(task, colStatus) {
   const header = document.createElement('div')
   header.className = 'card-header'
 
-  const title = task.sessionUrl && colStatus !== 'backlog' && colStatus !== 'template'
-    ? document.createElement('a')
-    : document.createElement('span')
+  const hasLocalSession = !!task.sessionId && colStatus !== 'backlog' && colStatus !== 'template'
+  const title = document.createElement('span')
   title.className = 'card-title'
   title.textContent = task.name
   title.dataset.tooltip = task.name
-  if (task.sessionUrl && colStatus !== 'backlog' && colStatus !== 'template') {
-    title.href = task.sessionUrl
-    title.target = '_blank'
-    title.rel = 'noopener noreferrer'
+  if (hasLocalSession) {
     title.classList.add('has-session')
+    title.tabIndex = 0
+    title.setAttribute('role', 'button')
+    title.onclick = (event) => {
+      event.preventDefault()
+      openSessionModal(task.sessionId)
+    }
+    title.onkeydown = (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault()
+        openSessionModal(task.sessionId)
+      }
+    }
   }
   header.appendChild(title)
 
@@ -3283,7 +3746,7 @@ async function refreshBonDetailModal(taskId) {
         ${run.summary ? `<div class="run-item-summary">${run.summary.substring(0, 300)}</div>` : ''}
         ${run.errorMessage ? `<div class="run-item-summary" style="color:var(--red);">Error: ${run.errorMessage}</div>` : ''}
         ${run.worktreeDir ? `<div class="run-item-summary">Worktree: ${run.worktreeDir}</div>` : ''}
-        ${run.sessionUrl ? `<div class="run-item-actions"><a href="${run.sessionUrl}" target="_blank" class="btn btn-sm">Open Session</a></div>` : ''}
+        ${run.sessionId ? `<div class="run-item-actions"><button type="button" class="btn btn-sm" data-open-session-id="${run.sessionId}" data-task-id="${taskId}" data-phase="${run.phase}" data-slot-index="${run.slotIndex}" data-attempt-index="${run.attemptIndex}">View Session</button></div>` : ''}
       </div>
     `
 
@@ -3354,6 +3817,20 @@ async function refreshBonDetailModal(taskId) {
     `
     
     content.innerHTML = html
+    for (const btn of content.querySelectorAll('[data-open-session-id]')) {
+      btn.addEventListener('click', () => {
+        const sessionId = btn.getAttribute('data-open-session-id')
+        if (!sessionId) return
+        openSessionModal(sessionId, {
+          taskRunContext: {
+            taskId: btn.getAttribute('data-task-id') || null,
+            phase: btn.getAttribute('data-phase') || null,
+            slotIndex: Number(btn.getAttribute('data-slot-index')),
+            attemptIndex: Number(btn.getAttribute('data-attempt-index')),
+          },
+        })
+      })
+    }
   } catch (e) {
     showToast('Failed to load best-of-n details: ' + e.message, 'error')
     content.innerHTML = `<div style="color:var(--red);">Failed to load best-of-n details: ${e.message}</div>`
@@ -3418,6 +3895,10 @@ document.addEventListener('keydown', (e) => {
   else if (key === 'D') { e.preventDefault(); archiveAllDone() }
 })
 
+window.addEventListener('hashchange', () => {
+  syncSessionModalWithHash()
+})
+
 // ---- Init ----
 async function init() {
   initLogPanel()
@@ -3441,6 +3922,7 @@ async function init() {
   await loadModels()
   await loadRuns()
   await loadTasks()
+  syncSessionModalWithHash()
   addLogEntry('Kanban UI ready')
   connectWS()
 }
