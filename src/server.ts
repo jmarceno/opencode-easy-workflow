@@ -1676,11 +1676,7 @@ export class KanbanServer {
   private async handleBridgeEvent(body: any): Promise<void> {
     const { type, payload } = body
 
-    if (type === "chat.message") {
-      await this.handleWorkflowActivation(payload)
-    } else if (type === "event") {
-      await this.handleOpencodeEvent(payload.event)
-    } else if (type === "message.updated") {
+    if (type === "message.updated") {
       await this.handleMessageEvent(payload)
     } else if (type === "tool.execute.after") {
       await this.handleToolExecuteEvent(payload)
@@ -1705,101 +1701,6 @@ export class KanbanServer {
     }
   }
 
-  private async handleWorkflowActivation(payload: any): Promise<void> {
-    const { cleanedPrompt, normalizedPrompt, directory, agent, model } = payload
-
-    console.log("[bridge] Workflow activation requested:", normalizedPrompt.substring(0, 50) + "...")
-
-    // This is a placeholder - the full workflow run logic would need to be ported
-    // from the original plugin. For now, we just log it.
-    // TODO: Port workflow run creation logic from easy-workflow.ts
-
-    // Create a simple workflow run file
-    const { createHash } = await import("crypto")
-    const { appendFileSync, existsSync, mkdirSync, writeFileSync } = await import("fs")
-    const { join } = await import("path")
-
-    const WORKFLOW_ROOT = join(OPENCODE_DIR, "easy-workflow")
-    const RUNS_DIR = join(directory, ".opencode", "easy-workflow", "runs")
-    const TEMPLATE_PATH = join(WORKFLOW_ROOT, "workflow.md")
-
-    // Ensure directories exist
-    mkdirSync(RUNS_DIR, { recursive: true })
-
-    // Check if template exists
-    if (!existsSync(TEMPLATE_PATH)) {
-      console.error("[bridge] Workflow template not found:", TEMPLATE_PATH)
-      return
-    }
-
-    // Create run file
-    const createdAt = new Date().toISOString()
-    const promptHash = createHash("md5").update(normalizedPrompt + createdAt).digest("hex")
-    const runPath = join(RUNS_DIR, `${promptHash}.md`)
-
-    // Read template
-    const template = readFileSync(TEMPLATE_PATH, "utf-8")
-
-    // Extract review agent from template
-    const frontmatterMatch = template.match(/^---\n([\s\S]*?)\n---/)
-    let reviewAgent = "workflow-review"
-    if (frontmatterMatch) {
-      const modelMatch = frontmatterMatch[1].match(/reviewAgent:\s*(\S+)/)
-      if (modelMatch) {
-        reviewAgent = modelMatch[1]
-      }
-    }
-
-    // Create initial state
-    const state = {
-      reviewAgent,
-      runreview: true,
-      running: false,
-      status: "pending",
-      reviewCount: 0,
-      maxReviewRuns: this.db.getOptions().maxReviews,
-      createdAt,
-      updatedAt: createdAt,
-      sessionId: null,
-      promptHash,
-      lastReviewedAt: null,
-      lastReviewFingerprint: null,
-      version: 1,
-    }
-
-    // Write run file
-    const frontmatter = Object.entries(state)
-      .map(([k, v]) => `${k}: ${v === null ? "null" : typeof v === "string" ? JSON.stringify(v) : v}`)
-      .join("\n")
-
-    const body = template.replace(/^---[\s\S]*?---\n?/, "")
-    const runContent = `---\n${frontmatter}\n---\n${body}`
-
-    writeFileSync(runPath, runContent, "utf-8")
-    console.log("[bridge] Created workflow run:", runPath)
-
-    // Append to per-project debug log
-    const DEBUG_LOG_PATH = join(directory, ".opencode", "easy-workflow", "debug.log")
-    mkdirSync(join(directory, ".opencode", "easy-workflow"), { recursive: true })
-    appendFileSync(DEBUG_LOG_PATH, `[${new Date().toISOString()}] info: Workflow run created via bridge: ${runPath}\n`, "utf-8")
-
-    // Note: Goal extraction and full workflow orchestration would need to be
-    // fully ported from the original plugin. This is a minimal implementation
-    // to demonstrate the bridge pattern.
-  }
-
-  private async handleOpencodeEvent(event: any): Promise<void> {
-    if (event?.type === "session.idle") {
-      // Handle session idle - trigger reviews
-      const sessionId = this.extractSessionIdFromEvent(event)
-      if (sessionId) {
-        await this.handleSessionIdle(sessionId)
-      }
-    }
-    // permission.asked is handled via the /api/workflow-session endpoint
-    // which the bridge queries before auto-replying
-  }
-
   private extractSessionIdFromEvent(event: any): string | null {
     const candidates = [
       event?.properties?.sessionId,
@@ -1812,16 +1713,6 @@ export class KanbanServer {
       event?.part?.sessionID,
     ]
     return candidates.find((c) => typeof c === "string" && c.trim().length > 0) || null
-  }
-
-  private async handleSessionIdle(sessionId: string): Promise<void> {
-    // Find active workflow runs for this session
-    const { readdirSync } = await import("fs")
-    const { join } = await import("path")
-
-    // This would check workflow runs directory for runs associated with this session
-    // and trigger reviews. For now, this is a placeholder.
-    console.log("[bridge] Session idle:", sessionId)
   }
 
   // ---- Message Logging Handlers ----

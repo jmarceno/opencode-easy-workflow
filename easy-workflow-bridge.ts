@@ -1,95 +1,21 @@
 /**
  * Easy Workflow Bridge Plugin
  * 
- * This is a minimal bridge plugin that forwards events from OpenCode
- * to the standalone Easy Workflow server.
- * 
- * The standalone server must be running separately. This plugin does NOT
- * start the server - it only forwards events.
+ * This bridge plugin forwards OpenCode session/tool events to the standalone
+ * Easy Workflow server and handles permission auto-replies for workflow-owned
+ * sessions.
  */
 
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from "fs"
 import { join, resolve } from "path"
-import { createHash } from "crypto"
 import { spawn } from "child_process"
 
 // ---- Constants ----
 
-const WORKFLOW_MARKER = "#workflow"
-const GOALS_PLACEHOLDER = "[REPLACE THIS WITH THE TASK GOALS]"
-const REVIEW_SECTION_MARKER = "## Persisted Review Result"
-const REVIEW_COOLDOWN_MS = 30_000
 const TELEGRAM_POLLING_LOCK = "telegram-polling.lock"
 const TELEGRAM_CONFLICT_COOLDOWN_MS = 3600000 // 1 hour
 
 // ---- Types ----
-
-type WorkflowStatus = "pending" | "running" | "completed" | "blocked"
-type ReviewStatus = "pass" | "gaps_found" | "blocked"
-
-interface WorkflowRunState {
-  reviewAgent?: string | null
-  runreview: boolean
-  running: boolean
-  status: WorkflowStatus
-  reviewCount: number
-  maxReviewRuns: number
-  createdAt: string | null
-  updatedAt: string | null
-  sessionId: string | null
-  promptHash: string | null
-  lastReviewedAt: string | null
-  lastReviewFingerprint: string | null
-  lastReviewStatus?: ReviewStatus
-  lastRecommendedPrompt?: string
-  lastGapCount?: number
-  version: number
-}
-
-interface ExtractedGoals {
-  summary: string
-  goals: string[]
-}
-
-interface ReviewResult {
-  status: ReviewStatus
-  summary: string
-  gaps: string[]
-  recommendedPrompt: string
-}
-
-interface PromptParseResult {
-  valid: boolean
-  cleanedPrompt: string
-  normalizedPrompt: string
-}
-
-interface RunFile {
-  state: WorkflowRunState
-  body: string
-}
-
-interface TemplateConfig {
-  reviewAgent: string | null
-}
-
-interface AgentConfig {
-  name: string
-  path: string
-  mode: string | null
-  model: string | null
-}
-
-interface SessionPromptContext {
-  agent?: string
-  model?: { providerID: string; modelID: string }
-}
-
-interface WorkflowSessionOwner {
-  taskId: string
-  sessionKind: string
-  skipPermissionAsking: boolean
-}
 
 // ---- Config loading ----
 
@@ -279,172 +205,6 @@ function extractSessionId(...sources: any[]): string | null {
     }
   }
   return null
-}
-
-function getUserTextPart(output: any): any | null {
-  if (!Array.isArray(output?.parts)) {
-    return null
-  }
-  return output.parts.find((part: any) => part?.type === "text" && typeof part.text === "string") ?? null
-}
-
-function parseWorkflowPrompt(input: string): PromptParseResult {
-  const trimmed = input.trim()
-
-  if (!trimmed) {
-    return { valid: false, cleanedPrompt: "", normalizedPrompt: "" }
-  }
-
-  const tokens = trimmed.split(/\s+/)
-  const firstToken = tokens[0]
-  const lastToken = tokens[tokens.length - 1]
-
-  if (firstToken === WORKFLOW_MARKER) {
-    const cleanedPrompt = trimmed.replace(/^#workflow(?=\s|$)\s*/, "")
-    return {
-      valid: true,
-      cleanedPrompt,
-      normalizedPrompt: cleanedPrompt.trim(),
-    }
-  }
-
-  if (lastToken === WORKFLOW_MARKER) {
-    const cleanedPrompt = trimmed.replace(/\s*#workflow$/, "")
-    return {
-      valid: true,
-      cleanedPrompt,
-      normalizedPrompt: cleanedPrompt.trim(),
-    }
-  }
-
-  return {
-    valid: false,
-    cleanedPrompt: trimmed,
-    normalizedPrompt: trimmed,
-  }
-}
-
-function parseFrontmatter(content: string): { frontmatter: Record<string, unknown>; body: string } {
-  const match = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/)
-
-  if (!match) {
-    return { frontmatter: {}, body: content }
-  }
-
-  const [, frontmatterText, body] = match
-  const frontmatter: Record<string, unknown> = {}
-
-  for (const line of frontmatterText.split("\n")) {
-    const separatorIndex = line.indexOf(":")
-    if (separatorIndex === -1) {
-      continue
-    }
-
-    const key = line.slice(0, separatorIndex).trim()
-    const rawValue = line.slice(separatorIndex + 1).trim()
-    
-    // Parse scalar values
-    if (rawValue === "null") {
-      frontmatter[key] = null
-    } else if (rawValue === "true") {
-      frontmatter[key] = true
-    } else if (rawValue === "false") {
-      frontmatter[key] = false
-    } else if (/^-?\d+(?:\.\d+)?$/.test(rawValue)) {
-      frontmatter[key] = Number(rawValue)
-    } else if ((rawValue.startsWith('"') && rawValue.endsWith('"')) || (rawValue.startsWith("[") && rawValue.endsWith("]"))) {
-      try {
-        frontmatter[key] = JSON.parse(rawValue)
-      } catch {
-        frontmatter[key] = rawValue
-      }
-    } else {
-      frontmatter[key] = rawValue
-    }
-  }
-
-  return { frontmatter, body }
-}
-
-function normalizeAgentName(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null
-  }
-  const trimmed = value.trim()
-  return trimmed.length > 0 ? trimmed : null
-}
-
-function parseScalar(rawValue: string): unknown {
-  if (rawValue === "null") return null
-  if (rawValue === "true") return true
-  if (rawValue === "false") return false
-  if (/^-?\d+(?:\.\d+)?$/.test(rawValue)) return Number(rawValue)
-  return rawValue
-}
-
-function parseModelSelection(value: string): { providerID: string; modelID: string } | null {
-  const trimmed = value.trim()
-  const separatorIndex = trimmed.indexOf("/")
-
-  if (separatorIndex <= 0 || separatorIndex === trimmed.length - 1) {
-    return null
-  }
-
-  const providerID = trimmed.slice(0, separatorIndex).trim()
-  const modelID = trimmed.slice(separatorIndex + 1).trim()
-  return providerID && modelID ? { providerID, modelID } : null
-}
-
-function inspectTemplateConfig(template: string): TemplateConfig {
-  const { frontmatter } = parseFrontmatter(template)
-  return {
-    reviewAgent: normalizeAgentName(frontmatter.reviewAgent),
-  }
-}
-
-function loadReviewAgentConfig(agentName: string, agentsDir: string): AgentConfig {
-  const path = join(agentsDir, `${agentName}.md`)
-
-  if (!existsSync(path)) {
-    throw new Error(`Workflow review agent file is missing: ${path}`)
-  }
-
-  const content = readFileSync(path, "utf-8")
-  const { frontmatter } = parseFrontmatter(content)
-  const mode = typeof frontmatter.mode === "string" ? frontmatter.mode.trim() : null
-  const model = typeof frontmatter.model === "string" ? frontmatter.model.trim() : null
-
-  if (mode !== "subagent") {
-    throw new Error(`Workflow review agent must declare mode: subagent in ${path}`)
-  }
-
-  // Model is now database-driven, not required in agent file
-  if (model && !parseModelSelection(model)) {
-    throw new Error(`Workflow review agent model is invalid in ${path}: ${model}`)
-  }
-
-  return { name: agentName, path, mode, model }
-}
-
-function buildRunState(frontmatter: Record<string, unknown>): WorkflowRunState {
-  return {
-    reviewAgent: normalizeAgentName(frontmatter.reviewAgent),
-    runreview: frontmatter.runreview === true,
-    running: frontmatter.running === true,
-    status: (frontmatter.status as WorkflowStatus) ?? "pending",
-    reviewCount: typeof frontmatter.reviewCount === "number" ? frontmatter.reviewCount : 0,
-    maxReviewRuns: typeof frontmatter.maxReviewRuns === "number" ? frontmatter.maxReviewRuns : undefined as undefined,
-    createdAt: typeof frontmatter.createdAt === "string" ? frontmatter.createdAt : null,
-    updatedAt: typeof frontmatter.updatedAt === "string" ? frontmatter.updatedAt : null,
-    sessionId: typeof frontmatter.sessionId === "string" ? frontmatter.sessionId : null,
-    promptHash: typeof frontmatter.promptHash === "string" ? frontmatter.promptHash : null,
-    lastReviewedAt: typeof frontmatter.lastReviewedAt === "string" ? frontmatter.lastReviewedAt : null,
-    lastReviewFingerprint: typeof frontmatter.lastReviewFingerprint === "string" ? frontmatter.lastReviewFingerprint : null,
-    lastReviewStatus: typeof frontmatter.lastReviewStatus === "string" ? (frontmatter.lastReviewStatus as ReviewStatus) : undefined,
-    lastRecommendedPrompt: typeof frontmatter.lastRecommendedPrompt === "string" ? frontmatter.lastRecommendedPrompt : undefined,
-    lastGapCount: typeof frontmatter.lastGapCount === "number" ? frontmatter.lastGapCount : undefined,
-    version: typeof frontmatter.version === "number" ? frontmatter.version : 1,
-  }
 }
 
 // ---- Server Auto-Start Management ----
@@ -1011,32 +771,6 @@ export const EasyWorkflowBridgePlugin = async (input: any) => {
   }
 
   return {
-    "chat.message": async (input: any, output: any) => {
-      const textPart = getUserTextPart(output)
-      const promptText = textPart?.text ?? ""
-      const { valid, cleanedPrompt, normalizedPrompt } = parseWorkflowPrompt(promptText)
-
-      if (!valid || !normalizedPrompt) {
-        return
-      }
-
-      // Strip the workflow marker from the output
-      textPart.text = cleanedPrompt
-
-      // Forward to standalone server
-      await forwardEvent("chat.message", {
-        input,
-        output,
-        cleanedPrompt,
-        normalizedPrompt,
-        directory: config!.projectDirectory,
-        agent: typeof input?.agent === "string" ? input.agent : undefined,
-        model: input?.model && typeof input.model.providerID === "string" && typeof input.model.modelID === "string"
-          ? input.model
-          : undefined,
-      })
-    },
-
     "message.updated": async (input: any, output: any) => {
       // Forward message events to standalone server for logging
       const sessionId = extractSessionId(input, output)
@@ -1080,9 +814,6 @@ export const EasyWorkflowBridgePlugin = async (input: any) => {
     },
 
     event: async ({ event }: any) => {
-      // Forward all events to standalone server
-      await forwardEvent("event", { event })
-
       if (FORWARDED_EVENT_TYPES.has(event?.type)) {
         const sessionId = event?.type?.startsWith("permission.")
           ? extractPermissionSessionId(event)

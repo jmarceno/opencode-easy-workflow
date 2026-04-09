@@ -1,9 +1,6 @@
 # Easy Workflow Plugin
 
-A plugin for [OpenCode](https://opencode.ai) that provides two modes of operation:
-
-1. **Workflow Review Mode** - Review-driven workflow triggered by `#workflow` tag
-2. **Kanban Orchestrator Mode** - Full task orchestration with dependency management
+A plugin and standalone server for [OpenCode](https://opencode.ai) that provides kanban-style task orchestration with dependencies, run tracking, automated review, and worktree-based execution.
 
 It also includes a project-local skill for agents that need to translate user-provided planning material into kanban tasks.
 
@@ -87,36 +84,7 @@ The bridge plugin will automatically start the standalone server and create the 
 
 Open `http://localhost:3789` locally, or `http://<machine-ip>:3789` from other devices on your network (e.g. `http://192.168.1.100:3789`)
 
-## Mode 1: Workflow Review
-
-Review-driven workflow that integrates with any OpenCode session.
-
-### Usage
-
-Add `#workflow` to the start or the end any prompt to trigger the review workflow:
-
-```
-Implement the new feature and add tests #workflow
-```
-
-### How It Works
-
-1. Your prompt is processed by OpenCode as normal
-2. When the session goes idle, the workflow review agent evaluates the changes
-3. If gaps are found, you receive recommendations
-4. You can continue the session or start a new one
-
-### Configuration
-
-Edit `.opencode/easy-workflow/workflow.md`:
-
-```yaml
----
-reviewAgent: workflow-review
----
-```
-
-## Mode 2: Kanban Orchestrator
+## Kanban Orchestrator
 
 Full task orchestration with dependency management, parallel execution, and automated review.
 
@@ -265,9 +233,8 @@ curl -X POST http://localhost:3789/api/start
 │  └─────────────────┘  └──────────────────────┘  └─────────────────┘    │
 │                                                                         │
 │  Events forwarded:                                                      │
-│  - chat.message (detects #workflow)                                    │
+│  - message/session/tool events for timeline logging                    │
 │  - permission.asked (auto-reply for workflow sessions)                 │
-│  - session.idle (trigger reviews)                                      │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -291,18 +258,6 @@ The standalone server uses `.opencode/easy-workflow/config.json`:
 ```
 
 To reconfigure, delete this file and restart the server.
-
-## Workflow vs Kanban Comparison
-
-| Feature | Workflow | Kanban |
-|---------|----------|--------|
-| Trigger | `#workflow` tag | Manual start |
-| Scope   | Single task | Multiple tasks |
-| Dependencies | No | Yes |
-| Parallel execution | No | Yes |
-| Review iterations | Configurable | Configurable |
-| Git worktree | No | Yes |
-| Auto-commit | No | Yes |
 
 ## Files
 

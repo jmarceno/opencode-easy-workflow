@@ -2464,9 +2464,9 @@ ${aggregatedReview.recurringGaps.map(g => `- ${g}`).join("\n")}
 
           const reviewAgentName = task.skipPermissionAsking ? "workflow-review-autonomous" : config.reviewAgent
           const promptText = [
-            `Review the workflow run file at: ${reviewFilePath}`,
+            `Review the task review file at: ${reviewFilePath}`,
             "",
-            "Use the run file as the source of truth for review.",
+            "Use the review file as the source of truth for review.",
             "Do not rely on prior session history.",
             "Inspect the current codebase and branch state.",
             "Lack of commit in this phase is not an issue",

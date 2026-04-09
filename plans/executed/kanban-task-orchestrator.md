@@ -15,7 +15,7 @@ Expand the Easy Workflow plugin into a full kanban-board task management system 
 │  │  event hooks)    │    │                               │  │
 │  │                  │    │  ┌─────────┐  ┌────────────┐  │  │
 │  │  Still handles   │    │  │Static UI│  │WebSocket   │  │  │
-│  │  #workflow msgs  │    │  │HTML/CSS │  │/ws channel │  │  │
+│  │  bridge events   │    │  │HTML/CSS │  │/ws channel │  │  │
 │  └────────┬─────────┘    │  └─────────┘  └─────┬──────┘  │  │
 │           │              └─────────────────────┼─────────┘  │
 │           │                                    │            │
@@ -653,7 +653,7 @@ Parsed to: { providerID: "opencode-go", modelID: "kimi-k2.5" }
 
 ## Backward Compatibility
 
-- The existing `#workflow` message flow is **fully preserved**
+- Legacy prompt-triggered workflow activation was later removed in favor of kanban/run-based execution
 - The review agent (`workflow-review.md`) is **unchanged**
 - The workflow template (`workflow.md`) is **unchanged** (review config still read from it)
 - Existing run files in `runs/` are unaffected
