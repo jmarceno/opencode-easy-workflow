@@ -1,0 +1,15 @@
+{
+  "name": "pi-easy-workflow",
+  "version": "1.0.0",
+  "description": "Pi-based Easy Workflow scaffolding",
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun run --watch src/index.ts",
+    "build": "bun build --target=bun src/index.ts --outdir dist",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
