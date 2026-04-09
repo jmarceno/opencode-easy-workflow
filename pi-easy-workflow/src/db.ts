@@ -19,6 +19,8 @@ import {
   type WorkflowRunKind,
   type WorkflowRunStatus,
 } from "./types.ts"
+
+export type TaskStatusChangeListener = (taskId: string, oldStatus: TaskStatus, newStatus: TaskStatus) => void
 import { runMigrations, type Migration } from "./db/migrations.ts"
 import type {
   AppendSessionIOInput,
@@ -893,6 +895,7 @@ const MIGRATIONS: Migration[] = [
 
 export class PiKanbanDB {
   private readonly db: Database
+  private _taskStatusChangeListener: TaskStatusChangeListener | null = null
 
   constructor(dbPath: string) {
     mkdirSync(dirname(dbPath), { recursive: true })
@@ -909,6 +912,10 @@ export class PiKanbanDB {
 
   close(): void {
     this.db.close(false)
+  }
+
+  setTaskStatusChangeListener(listener: TaskStatusChangeListener | null): void {
+    this._taskStatusChangeListener = listener
   }
 
   // ---- tasks ----
@@ -972,6 +979,10 @@ export class PiKanbanDB {
   }
 
   updateTask(id: string, input: UpdateTaskInput): Task | null {
+    // Get current task before update to check for status change
+    const currentTask = this.getTask(id)
+    const oldStatus = currentTask?.status
+
     const sets: string[] = []
     const values: any[] = []
 
@@ -1114,7 +1125,14 @@ export class PiKanbanDB {
     values.push(id)
 
     this.db.prepare(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`).run(...values)
-    return this.getTask(id)
+    const updatedTask = this.getTask(id)
+
+    // Notify listener if status changed
+    if (updatedTask && oldStatus && input.status !== undefined && input.status !== oldStatus) {
+      this._taskStatusChangeListener?.(id, oldStatus, input.status)
+    }
+
+    return updatedTask
   }
 
   appendAgentOutput(taskId: string, chunk: string): Task | null {

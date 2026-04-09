@@ -9,6 +9,7 @@ import type { BestOfNConfig, Task, TaskRun, ThinkingLevel, WSMessage } from "../
 import { PiKanbanDB } from "../db.ts"
 import { runStartupRecovery } from "../recovery/startup-recovery.ts"
 import { SmartRepairService, type SmartRepairAction } from "../runtime/smart-repair.ts"
+import { sendTelegramNotification, type TelegramConfig } from "../telegram.ts"
 import { Router } from "./router.ts"
 import type { RequestContext } from "./types.ts"
 import { WebSocketHub } from "./websocket.ts"
@@ -136,6 +137,24 @@ export class PiKanbanServer {
     this.onPauseRun = opts.onPauseRun ?? null
     this.onResumeRun = opts.onResumeRun ?? null
     this.onStopRun = opts.onStopRun ?? null
+
+    // Register Telegram notification listener for task status changes
+    this.db.setTaskStatusChangeListener((taskId: string, oldStatus: string, newStatus: string) => {
+      const task = this.db.getTask(taskId)
+      if (!task) return
+      const opts = this.db.getOptions()
+      if (!opts.telegramNotificationsEnabled || !opts.telegramBotToken || !opts.telegramChatId) return
+
+      sendTelegramNotification(
+        { botToken: opts.telegramBotToken, chatId: opts.telegramChatId },
+        task.name,
+        oldStatus,
+        newStatus,
+        (msg: string) => console.debug(msg)
+      ).catch((err: unknown) => {
+        console.error("[telegram] notification failed:", err)
+      })
+    })
 
     this.registerRoutes()
   }
