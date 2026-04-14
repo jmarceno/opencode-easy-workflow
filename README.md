@@ -4,6 +4,9 @@ A plugin and standalone server for [OpenCode](https://opencode.ai) that provides
 
 It also includes a project-local skill for agents that need to translate user-provided planning material into kanban tasks.
 
+> [!IMPORTANT] No more feature releases
+> I am no longer adding features to OpenCode Easy Workflow (PRs are still welcome!), as I am now focusing on an improved version using Pi as the agent: https://github.com/jmarceno/tauroboros. I still intend to maintain compatibility with future OpenCode releases.
+
 ## Screenshots
 
 ![Kanban Board](images/screenhot1.png)
